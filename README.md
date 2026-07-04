@@ -1,7 +1,7 @@
-# maintainer-watcher-github-pr
+# github-pr-watcher
 
 Polls the GitHub Search API for open pull requests and publishes a `CreateTaskCommand` to Kafka
-for each new or force-pushed PR so the `agent/pr-reviewer` picks it up automatically.
+for each new or force-pushed PR so the [`github-pr-review-agent`](https://github.com/bborbe/github-pr-review-agent) picks it up automatically.
 
 ## Links
 
@@ -22,7 +22,7 @@ it compares the PR's current head SHA against the value stored in the cursor; if
 changed (force-push) the PR is re-submitted as a new task. The cursor is persisted to
 `/data/cursor.json` between polls so a restart does not re-trigger every known PR.
 
-Two independent decision chains run per PR — see [`docs/watcher-decision-chains.md`](../../docs/watcher-decision-chains.md):
+Two independent decision chains run per PR — see [`docs/watcher-decision-chains.md`](https://github.com/bborbe/maintainer/blob/master/docs/watcher-decision-chains.md):
 
 - **`TaskCreationFilter`** — should we create a task at all? (drafts, bots, WIP titles, age, allowlist)
 - **`TrustGate`** — given a task is created, auto-process or route to `human_review`? (trusted authors)
@@ -75,7 +75,6 @@ If a vault task already exists for the same `(PR, SHA)`, the controller's `creat
 ## Development
 
 ```bash
-cd watcher/github-pr
 make test          # run unit tests
 make generate      # regenerate counterfeiter mocks
 make precommit     # format + lint + test + security checks
@@ -93,13 +92,13 @@ A corrupt cursor refuses startup — see `pkg/cursor.go`.
 
 ## Relationship to pr-reviewer
 
-This service feeds tasks into the `agent/pr-reviewer` Pattern B Job via Kafka: for every new or
+This service feeds tasks into the [`github-pr-review-agent`](https://github.com/bborbe/github-pr-review-agent) Pattern B Job via Kafka: for every new or
 force-pushed PR it publishes a `CreateTaskCommand` that the agent task controller picks up and
 spawns into a per-task K8s Job. The agent runs `/coding:pr-review` and posts the verdict back to
 the PR.
 
-See [`docs/architecture.md`](../../docs/architecture.md) for the full pipeline.
+See [`docs/architecture.md`](https://github.com/bborbe/maintainer/blob/master/docs/architecture.md) for the full pipeline.
 
 ## License
 
-BSD 2-Clause License. See [LICENSE](../../LICENSE).
+BSD 2-Clause License. See [LICENSE](LICENSE).
