@@ -1,0 +1,8 @@
+/.update-logs/
+/.claude/
+/CLAUDE.md
+/.mcp-*
+/run-once
+/github-pr
+/vendor/
+/github-pr-watcher

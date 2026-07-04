@@ -1,0 +1,5 @@
+# maintainer-bot per-repo config (ben-s-pull-request-reviewer[bot]).
+release:
+  autoRelease: true
+prReviewer:
+  autoApprove: true
