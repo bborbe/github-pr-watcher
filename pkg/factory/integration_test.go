@@ -18,11 +18,10 @@ import (
 	"github.com/bborbe/github-pr-watcher/pkg/trust"
 	libkafkamocks "github.com/bborbe/kafka/mocks"
 	kvmocks "github.com/bborbe/kv/mocks"
+	lib "github.com/bborbe/maintainer"
 	libtime "github.com/bborbe/time"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
-
-	"github.com/bborbe/maintainer/lib"
 )
 
 const integrationPRURL = "https://github.com/bborbe/repo/pull/42"

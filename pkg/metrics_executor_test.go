@@ -15,12 +15,11 @@ import (
 	"github.com/bborbe/github-pr-watcher/pkg"
 	"github.com/bborbe/github-pr-watcher/pkg/command"
 	"github.com/bborbe/github-pr-watcher/pkg/trust"
+	lib "github.com/bborbe/maintainer"
 	libtime "github.com/bborbe/time"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"github.com/prometheus/client_golang/prometheus/testutil"
-
-	"github.com/bborbe/maintainer/lib"
 )
 
 const testPRURL = "https://github.com/bborbe/repo/pull/42"

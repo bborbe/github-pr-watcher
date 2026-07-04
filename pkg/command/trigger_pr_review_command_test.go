@@ -13,10 +13,9 @@ import (
 	cqrsiam "github.com/bborbe/cqrs/iam"
 	cqrsmocks "github.com/bborbe/cqrs/mocks"
 	"github.com/bborbe/github-pr-watcher/pkg/command"
+	lib "github.com/bborbe/maintainer"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
-
-	"github.com/bborbe/maintainer/lib"
 )
 
 var _ = Describe("TriggerPRReviewCommandOperation", func() {

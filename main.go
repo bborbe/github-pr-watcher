@@ -32,8 +32,8 @@ import (
 	"github.com/gorilla/mux"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
-	lib "github.com/bborbe/maintainer/lib"
-	repoallowlist "github.com/bborbe/maintainer/lib/repoallowlist"
+	lib "github.com/bborbe/maintainer"
+	repoallowlist "github.com/bborbe/maintainer/repoallowlist"
 )
 
 var repoScopePattern = regexp.MustCompile(`^[a-zA-Z0-9_.-]+$`)

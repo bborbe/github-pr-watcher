@@ -13,10 +13,9 @@ import (
 	cdbmocks "github.com/bborbe/cqrs/mocks"
 	"github.com/bborbe/errors"
 	"github.com/bborbe/github-pr-watcher/pkg/command"
+	lib "github.com/bborbe/maintainer"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
-
-	"github.com/bborbe/maintainer/lib"
 )
 
 // newTestCommandCreator returns a CommandCreator backed by a buffered channel

@@ -11,7 +11,7 @@ import (
 	"github.com/bborbe/errors"
 	"github.com/bborbe/validation"
 
-	"github.com/bborbe/maintainer/lib/prurl"
+	"github.com/bborbe/maintainer/prurl"
 )
 
 // TriggerPRReviewCommandOperation is the Kafka command operation for

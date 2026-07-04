@@ -19,7 +19,7 @@ import (
 	libtime "github.com/bborbe/time"
 	"github.com/golang/glog"
 
-	"github.com/bborbe/maintainer/lib/prurl"
+	"github.com/bborbe/maintainer/prurl"
 )
 
 // NewTriggerPRReviewCommandExecutor creates a cdb.CommandObjectExecutorTx that

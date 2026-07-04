@@ -15,7 +15,7 @@ import (
 	libparse "github.com/bborbe/parse"
 	"github.com/golang/glog"
 
-	"github.com/bborbe/maintainer/lib/prurl"
+	"github.com/bborbe/maintainer/prurl"
 )
 
 //counterfeiter:generate -o ../../mocks/single_pr_trigger_handler.go --fake-name SinglePRTriggerHandler . SinglePRTriggerHandler

@@ -23,8 +23,8 @@ import (
 	"github.com/bborbe/run"
 	libtime "github.com/bborbe/time"
 
-	lib "github.com/bborbe/maintainer/lib"
-	"github.com/bborbe/maintainer/lib/githubapp"
+	lib "github.com/bborbe/maintainer"
+	"github.com/bborbe/maintainer/githubapp"
 )
 
 // CreateGitHubAppClient creates an HTTP client authenticated as a GitHub App installation.
