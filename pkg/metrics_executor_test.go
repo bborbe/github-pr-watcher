@@ -15,11 +15,12 @@ import (
 	"github.com/bborbe/github-pr-watcher/pkg"
 	"github.com/bborbe/github-pr-watcher/pkg/command"
 	"github.com/bborbe/github-pr-watcher/pkg/trust"
-	lib "github.com/bborbe/maintainer"
 	libtime "github.com/bborbe/time"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"github.com/prometheus/client_golang/prometheus/testutil"
+
+	lib "github.com/bborbe/maintainer"
 )
 
 const testPRURL = "https://github.com/bborbe/repo/pull/42"
@@ -84,7 +85,7 @@ var _ = Describe("github_pr_published metric (spec 066 AC 12)", func() {
 			createSender,
 			taskCreationFilter,
 			trustDecision,
-			"dev", 80, 200, "",
+			"dev", 80, 200, "", "",
 			metrics,
 			libtime.NewCurrentDateTime(),
 		)

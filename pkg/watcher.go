@@ -30,6 +30,11 @@ type TaskConfig struct {
 	MaxSlugLen  int
 	MaxTitleLen int
 	TaskSuffix  string
+	// TargetVault routes the CreateTaskCommand to a specific vault controller
+	// (matched verbatim against the controller's VAULT_NAME). Empty leaves
+	// TargetVault unset, so the controller's legacy default-vault fallback
+	// applies — preserving pre-TARGET_VAULT behaviour.
+	TargetVault string
 }
 
 //counterfeiter:generate -o ../mocks/task_publisher.go --fake-name TaskPublisher . TaskPublisher
@@ -87,6 +92,7 @@ func (p *taskPublisher) PublishCreate(
 		p.cfg.MaxSlugLen,
 		p.cfg.MaxTitleLen,
 		p.cfg.TaskSuffix,
+		p.cfg.TargetVault,
 		trustResult,
 	)
 
@@ -316,6 +322,7 @@ func BuildCreateCommand(
 	maxSlugLen int,
 	maxTitleLen int,
 	taskSuffix string,
+	targetVault string,
 	trustResult trust.Result,
 ) task.CreateCommand {
 	if trustResult.Success() {
@@ -331,6 +338,7 @@ func BuildCreateCommand(
 				maxTitleLen,
 				taskSuffix,
 			),
+			TargetVault:    targetVault,
 			TaskIdentifier: agentlib.TaskIdentifier(taskIDStr),
 			Frontmatter:    buildFrontmatter(pr, taskIDStr, stage, details),
 			Body:           buildTaskBody(pr),
@@ -352,6 +360,7 @@ func BuildCreateCommand(
 			maxTitleLen,
 			taskSuffix,
 		),
+		TargetVault:    targetVault,
 		TaskIdentifier: agentlib.TaskIdentifier(taskIDStr),
 		Frontmatter:    buildHumanReviewFrontmatter(pr, taskIDStr, stage, details),
 		Body:           buildUntrustedBody(author, trustResult.Description()),

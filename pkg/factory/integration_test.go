@@ -18,10 +18,11 @@ import (
 	"github.com/bborbe/github-pr-watcher/pkg/trust"
 	libkafkamocks "github.com/bborbe/kafka/mocks"
 	kvmocks "github.com/bborbe/kv/mocks"
-	lib "github.com/bborbe/maintainer"
 	libtime "github.com/bborbe/time"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+
+	lib "github.com/bborbe/maintainer"
 )
 
 const integrationPRURL = "https://github.com/bborbe/repo/pull/42"
@@ -107,7 +108,7 @@ var _ = Describe("end-to-end command flow through wired consumer (spec 066 AC 11
 			createSender,
 			taskCreationFilter,
 			trustDecision,
-			"dev", 80, 200, "",
+			"dev", 80, 200, "", "",
 			metrics,
 			libtime.NewCurrentDateTime(),
 		)
@@ -140,7 +141,7 @@ var _ = Describe("end-to-end command flow through wired consumer (spec 066 AC 11
 				createSender,
 				taskCreationFilter,
 				trustDecision,
-				"dev", 80, 200, "",
+				"dev", 80, 200, "", "",
 				metrics,
 				base.TopicPrefix("develop"),
 				libtime.NewCurrentDateTime(),

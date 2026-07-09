@@ -65,6 +65,7 @@ func CreateWatcher(
 	maxSlugLen int,
 	maxTitleLen int,
 	taskSuffix string,
+	targetVault string,
 ) pkg.Watcher {
 	publisher := pkg.NewTaskPublisher(
 		createSender,
@@ -75,6 +76,7 @@ func CreateWatcher(
 			MaxSlugLen:  maxSlugLen,
 			MaxTitleLen: maxTitleLen,
 			TaskSuffix:  taskSuffix,
+			TargetVault: targetVault,
 		},
 	)
 	return pkg.NewWatcher(
@@ -133,6 +135,7 @@ func CreateCommandConsumer(
 	maxSlugLen int,
 	maxTitleLen int,
 	taskSuffix string,
+	targetVault string,
 	metrics pkg.Metrics,
 	topicPrefix base.TopicPrefix,
 	currentDateTime libtime.CurrentDateTimeGetter,
@@ -147,6 +150,7 @@ func CreateCommandConsumer(
 			maxSlugLen,
 			maxTitleLen,
 			taskSuffix,
+			targetVault,
 			metrics,
 			currentDateTime,
 		),

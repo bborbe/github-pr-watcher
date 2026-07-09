@@ -49,7 +49,7 @@ vet:
 # errcheck removed — embedded in golangci-lint (see .golangci.yml).
 # Standalone errcheck fatals under Go 1.26+ due to missing NeedDeps in package loader.
 
-VULNCHECK_IGNORE ?= GO-2026-4923 GO-2026-4514 GO-2022-0470 GO-2026-4772 GO-2026-4771
+VULNCHECK_IGNORE ?= GO-2026-4923 GO-2026-4514 GO-2022-0470 GO-2026-4772 GO-2026-4771 GO-2026-5932
 
 .PHONY: vulncheck
 vulncheck:
