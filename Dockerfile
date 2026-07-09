@@ -1,5 +1,5 @@
 ARG DOCKER_REGISTRY=docker.io
-FROM ${DOCKER_REGISTRY}/golang:1.26.4 AS build
+FROM ${DOCKER_REGISTRY}/golang:1.26.5 AS build
 ARG BUILD_GIT_COMMIT=none
 ARG BUILD_DATE=unknown
 COPY . /workspace

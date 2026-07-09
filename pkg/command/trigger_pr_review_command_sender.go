@@ -11,8 +11,9 @@ import (
 	cdb "github.com/bborbe/cqrs/cdb"
 	cqrsiam "github.com/bborbe/cqrs/iam"
 	"github.com/bborbe/errors"
-	lib "github.com/bborbe/maintainer"
 	"github.com/golang/glog"
+
+	lib "github.com/bborbe/maintainer"
 )
 
 //counterfeiter:generate -o ../../mocks/trigger_pr_review_command_sender.go --fake-name TriggerPRReviewCommandSender . TriggerPRReviewCommandSender

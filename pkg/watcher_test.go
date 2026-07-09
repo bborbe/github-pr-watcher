@@ -1171,9 +1171,11 @@ var _ = Describe("BuildCreateCommand", func() {
 				80,
 				60,
 				"pr-reviewer",
+				"agent",
 				trustResult,
 			)
 
+			Expect(cmd.TargetVault).To(Equal("agent"))
 			Expect(cmd.Title).NotTo(BeEmpty())
 			Expect(cmd.Frontmatter["phase"]).To(Equal("planning"))
 			Expect(cmd.Frontmatter["status"]).To(Equal("in_progress"))
@@ -1196,9 +1198,11 @@ var _ = Describe("BuildCreateCommand", func() {
 			80,
 			60,
 			"pr-reviewer",
+			"agent",
 			trustResult,
 		)
 
+		Expect(cmd.TargetVault).To(Equal("agent"))
 		Expect(cmd.Title).NotTo(BeEmpty())
 		Expect(cmd.Frontmatter["phase"]).To(Equal("human_review"))
 		Expect(cmd.Frontmatter["status"]).To(Equal("todo"))
@@ -1222,6 +1226,7 @@ var _ = Describe("BuildCreateCommand", func() {
 			80,
 			60,
 			"pr-reviewer",
+			"",
 			trustResult,
 		)
 
@@ -1243,6 +1248,7 @@ var _ = Describe("BuildCreateCommand", func() {
 			80,
 			60,
 			"pr-reviewer",
+			"",
 			trustResult,
 		)
 
@@ -1266,6 +1272,7 @@ var _ = Describe("BuildCreateCommand", func() {
 			80,
 			30,
 			"pr-reviewer",
+			"",
 			trustResult,
 		) // maxTitleLen=30
 
