@@ -28,6 +28,9 @@ type PullRequest struct {
 	AuthorLogin string
 	IsDraft     bool
 	UpdatedAt   libtime.DateTime
+	// Labels holds the PR's label names (e.g. `override-review`). Populated
+	// from the Search API's issue labels.
+	Labels []string
 }
 
 // SearchResult is the result of a single paginated search call.
@@ -67,6 +70,10 @@ type PRDetails struct {
 
 	// UpdatedAt is the PR last-updated timestamp; required for AgeFilter.
 	UpdatedAt libtime.DateTime
+
+	// Labels holds the PR's label names (e.g. `override-review`). Used to
+	// route a labeled PR to the override task type.
+	Labels []string
 }
 
 //counterfeiter:generate -o ../mocks/github_client.go --fake-name GitHubClient . GitHubClient
@@ -140,6 +147,7 @@ func (c *githubClient) SearchPRs(
 			AuthorLogin: issue.GetUser().GetLogin(),
 			IsDraft:     issue.GetDraft(),
 			UpdatedAt:   libtime.DateTime(issue.GetUpdatedAt().Time),
+			Labels:      labelNames(issue.Labels),
 		})
 	}
 
@@ -176,7 +184,23 @@ func (c *githubClient) GetPRDetails(
 		Title:       pr.GetTitle(),
 		IsDraft:     pr.GetDraft(),
 		UpdatedAt:   libtime.DateTime(pr.GetUpdatedAt().Time),
+		Labels:      labelNames(pr.Labels),
 	}, nil
+}
+
+// labelNames maps GitHub label objects to their names, skipping any with an
+// empty name. Returns nil for an empty input so callers see no labels.
+func labelNames(labels []*gogithub.Label) []string {
+	if len(labels) == 0 {
+		return nil
+	}
+	names := make([]string, 0, len(labels))
+	for _, label := range labels {
+		if name := label.GetName(); name != "" {
+			names = append(names, name)
+		}
+	}
+	return names
 }
 
 // parseOwnerRepo extracts owner and repo from a GitHub API repository URL.
