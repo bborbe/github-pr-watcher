@@ -14,7 +14,7 @@ type Metrics interface {
 	// result: "success", "rate_limited", "github_error"
 	IncPollCycle(result string)
 	// IncPRPublished increments the PR-published counter with the given command label.
-	// command: "create", "update_frontmatter", "skipped", "error"
+	// command: "create", "update_frontmatter", "skipped", "error", "override", "override_skipped"
 	IncPRPublished(command string)
 }
 
@@ -35,7 +35,7 @@ func init() {
 	for _, result := range []string{"success", "rate_limited", "github_error"} {
 		pollCyclesTotal.WithLabelValues(result).Add(0)
 	}
-	for _, cmd := range []string{"create", "update_frontmatter", "skipped", "error", "trust_error", "kafka_error"} {
+	for _, cmd := range []string{"create", "update_frontmatter", "skipped", "error", "trust_error", "kafka_error", "override", "override_skipped"} {
 		prPublishedTotal.WithLabelValues(cmd).Add(0)
 	}
 }

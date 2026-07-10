@@ -66,6 +66,7 @@ func CreateWatcher(
 	maxTitleLen int,
 	taskSuffix string,
 	targetVault string,
+	overrideLabel string,
 ) pkg.Watcher {
 	publisher := pkg.NewTaskPublisher(
 		createSender,
@@ -87,6 +88,7 @@ func CreateWatcher(
 		startTime,
 		scope,
 		taskCreationFilter,
+		overrideLabel,
 	)
 }
 

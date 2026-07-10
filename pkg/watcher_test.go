@@ -53,6 +53,42 @@ func newTestWatcher(
 			filter.NewDraftFilter(),
 			filter.NewBotAuthorFilter([]string{"dependabot[bot]"}),
 		},
+		"",
+	)
+}
+
+func newTestWatcherWithOverride(
+	ghClient pkg.GitHubClient,
+	createSender task.CreateCommandSender,
+	cursorPath string,
+	startTime libtime.DateTime,
+	fakeMetrics *mocks.Metrics,
+	trustDecision trust.Trust,
+	overrideLabel string,
+) pkg.Watcher {
+	publisher := pkg.NewTaskPublisher(
+		createSender,
+		trustDecision,
+		fakeMetrics,
+		pkg.TaskConfig{
+			Stage:       "dev",
+			MaxSlugLen:  pkg.DefaultMaxSlugLen,
+			MaxTitleLen: pkg.DefaultMaxTitleLen,
+			TaskSuffix:  "",
+		},
+	)
+	return pkg.NewWatcher(
+		ghClient,
+		publisher,
+		fakeMetrics,
+		cursorPath,
+		startTime,
+		"bborbe",
+		filter.TaskCreationFilters{
+			filter.NewDraftFilter(),
+			filter.NewBotAuthorFilter([]string{"dependabot[bot]"}),
+		},
+		overrideLabel,
 	)
 }
 
@@ -1116,6 +1152,7 @@ var _ = Describe("pkg.Watcher", func() {
 					filter.NewDraftFilter(),
 					filter.NewBotAuthorFilter([]string{"dependabot[bot]"}),
 				},
+				"",
 			)
 			err := w.Poll(ctx)
 			Expect(err).NotTo(HaveOccurred())
@@ -1129,6 +1166,158 @@ var _ = Describe("pkg.Watcher", func() {
 			Expect(taskIDStrArg).To(Equal(
 				pkg.DeriveTaskID(pr.Owner, pr.Repo, pr.Number, "abc123").String()))
 			Expect(detailsArg.HeadSHA).To(Equal("abc123"))
+		})
+	})
+
+	Describe("override label", func() {
+		prWith := func(labels []string, author string) pkg.PullRequest {
+			return pkg.PullRequest{
+				Number:      7,
+				Owner:       "bborbe",
+				Repo:        "repo",
+				Title:       "fix bug",
+				HTMLURL:     "https://github.com/bborbe/repo/pull/7",
+				AuthorLogin: author,
+				IsDraft:     false,
+				UpdatedAt:   libtime.DateTime(time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC)),
+				Labels:      labels,
+			}
+		}
+		trustAlice := trust.NewAuthorAllowlist([]string{"alice"})
+
+		BeforeEach(func() {
+			ghClient.GetPRDetailsReturns(pkg.PRDetails{
+				HeadSHA:  "deadbeef",
+				CloneURL: "https://github.com/bborbe/repo.git",
+				BaseRef:  "master",
+			}, nil)
+			createSender.SendCommandReturns(nil)
+		})
+
+		It("emits a pr-override task for a trusted author carrying the label", func() {
+			ghClient.SearchPRsReturns(pkg.SearchResult{
+				PullRequests:  []pkg.PullRequest{prWith([]string{"override-review"}, "alice")},
+				RateRemaining: 100,
+			}, nil)
+			w := newTestWatcherWithOverride(
+				ghClient,
+				createSender,
+				cursorPath,
+				startTime,
+				fakeMetrics,
+				trustAlice,
+				"override-review",
+			)
+			Expect(w.Poll(ctx)).NotTo(HaveOccurred())
+			Expect(createSender.SendCommandCallCount()).To(Equal(1))
+			_, cmd := createSender.SendCommandArgsForCall(0)
+			Expect(cmd.Frontmatter["task_type"]).To(Equal("pr-override"))
+			Expect(cmd.Frontmatter["phase"]).To(Equal("execution"))
+			Expect(cmd.Frontmatter["assignee"]).To(Equal("pr-reviewer-agent"))
+			Expect(cmd.Title).To(HavePrefix("PR Override github - bborbe-repo - 7 - deadbeef"))
+			Expect(cmd.Frontmatter["task_identifier"]).To(Equal(
+				pkg.DeriveTaskIDOverride("bborbe", "repo", 7, "deadbeef").String()))
+			// override task-id must not collide with the review task-id
+			Expect(cmd.Frontmatter["task_identifier"]).NotTo(Equal(
+				pkg.DeriveTaskID("bborbe", "repo", 7, "deadbeef").String()))
+		})
+
+		It("skips override for an untrusted author and falls through to review", func() {
+			ghClient.SearchPRsReturns(pkg.SearchResult{
+				PullRequests:  []pkg.PullRequest{prWith([]string{"override-review"}, "mallory")},
+				RateRemaining: 100,
+			}, nil)
+			w := newTestWatcherWithOverride(
+				ghClient,
+				createSender,
+				cursorPath,
+				startTime,
+				fakeMetrics,
+				trustAlice,
+				"override-review",
+			)
+			Expect(w.Poll(ctx)).NotTo(HaveOccurred())
+			Expect(createSender.SendCommandCallCount()).To(Equal(1))
+			_, cmd := createSender.SendCommandArgsForCall(0)
+			Expect(cmd.Frontmatter["task_type"]).To(Equal("pr-review"))
+			Expect(cmd.Frontmatter["phase"]).To(Equal("human_review"))
+		})
+
+		It("emits a normal review when the label is absent", func() {
+			ghClient.SearchPRsReturns(pkg.SearchResult{
+				PullRequests:  []pkg.PullRequest{prWith(nil, "alice")},
+				RateRemaining: 100,
+			}, nil)
+			w := newTestWatcherWithOverride(
+				ghClient,
+				createSender,
+				cursorPath,
+				startTime,
+				fakeMetrics,
+				trustAlice,
+				"override-review",
+			)
+			Expect(w.Poll(ctx)).NotTo(HaveOccurred())
+			Expect(createSender.SendCommandCallCount()).To(Equal(1))
+			_, cmd := createSender.SendCommandArgsForCall(0)
+			Expect(cmd.Frontmatter["task_type"]).To(Equal("pr-review"))
+			Expect(cmd.Frontmatter["phase"]).To(Equal("planning"))
+		})
+
+		It("ignores the label when the override path is disabled (empty config)", func() {
+			ghClient.SearchPRsReturns(pkg.SearchResult{
+				PullRequests:  []pkg.PullRequest{prWith([]string{"override-review"}, "alice")},
+				RateRemaining: 100,
+			}, nil)
+			w := newTestWatcherWithOverride(
+				ghClient, createSender, cursorPath, startTime, fakeMetrics, trustAlice, "")
+			Expect(w.Poll(ctx)).NotTo(HaveOccurred())
+			Expect(createSender.SendCommandCallCount()).To(Equal(1))
+			_, cmd := createSender.SendCommandArgsForCall(0)
+			Expect(cmd.Frontmatter["task_type"]).To(Equal("pr-review"))
+		})
+
+		It("does not fall through to a review when a trusted override send fails", func() {
+			ghClient.SearchPRsReturns(pkg.SearchResult{
+				PullRequests:  []pkg.PullRequest{prWith([]string{"override-review"}, "alice")},
+				RateRemaining: 100,
+			}, nil)
+			createSender.SendCommandReturns(errors.New("kafka down"))
+			w := newTestWatcherWithOverride(
+				ghClient,
+				createSender,
+				cursorPath,
+				startTime,
+				fakeMetrics,
+				trustAlice,
+				"override-review",
+			)
+			Expect(w.Poll(ctx)).NotTo(HaveOccurred())
+			// Only the (failed) override send is attempted — no review task is
+			// emitted as a fallback, so a later successful override can't race a
+			// review at the same head SHA.
+			Expect(createSender.SendCommandCallCount()).To(Equal(1))
+			_, cmd := createSender.SendCommandArgsForCall(0)
+			Expect(cmd.Frontmatter["task_type"]).To(Equal("pr-override"))
+		})
+
+		It("does not re-emit the override for the same head SHA", func() {
+			ghClient.SearchPRsReturns(pkg.SearchResult{
+				PullRequests:  []pkg.PullRequest{prWith([]string{"override-review"}, "alice")},
+				RateRemaining: 100,
+			}, nil)
+			w := newTestWatcherWithOverride(
+				ghClient,
+				createSender,
+				cursorPath,
+				startTime,
+				fakeMetrics,
+				trustAlice,
+				"override-review",
+			)
+			Expect(w.Poll(ctx)).NotTo(HaveOccurred())
+			Expect(w.Poll(ctx)).NotTo(HaveOccurred())
+			Expect(createSender.SendCommandCallCount()).To(Equal(1))
 		})
 	})
 })

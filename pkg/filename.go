@@ -35,11 +35,36 @@ func computePRTitle(
 	maxSlug, maxTitle int,
 	taskSuffix string,
 ) string {
+	return computeTaskTitle(
+		"Review",
+		provider,
+		owner,
+		repo,
+		number,
+		sha,
+		title,
+		maxSlug,
+		maxTitle,
+		taskSuffix,
+	)
+}
+
+// computeTaskTitle is the shared title builder. kind is the task-kind word
+// after "PR " ("Review" for review tasks, "Override" for override tasks) —
+// it keeps the two task kinds on distinct filenames for the same (PR, SHA),
+// so an override task never overwrites the review task's vault file.
+func computeTaskTitle(
+	kind, provider, owner, repo string,
+	number int,
+	sha, title string,
+	maxSlug, maxTitle int,
+	taskSuffix string,
+) string {
 	shortSHA := sha
 	if len(shortSHA) > 8 {
 		shortSHA = shortSHA[:8]
 	}
-	base := fmt.Sprintf("PR Review %s - %s-%s - %d - %s", provider, owner, repo, number, shortSHA)
+	base := fmt.Sprintf("PR %s %s - %s-%s - %d - %s", kind, provider, owner, repo, number, shortSHA)
 	slug := slugifyTitle(title, maxSlug)
 	var t string
 	if slug == "" {
