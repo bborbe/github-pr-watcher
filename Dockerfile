@@ -7,7 +7,7 @@ WORKDIR /workspace
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -mod=vendor -ldflags "-s" -a -installsuffix cgo -o /main
 CMD ["/bin/bash"]
 
-FROM ${DOCKER_REGISTRY}/alpine:3.23 AS alpine
+FROM ${DOCKER_REGISTRY}/alpine:3.24 AS alpine
 RUN apk --no-cache add ca-certificates curl bash \
  && rm -rf /tmp/*
 

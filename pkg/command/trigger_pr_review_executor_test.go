@@ -518,6 +518,7 @@ var _ = Describe("force-true branch (spec 067)", func() {
 			canonicalID,
 			"dev", 80, 200, "", "",
 			trust.NewResult(true, "trusted"),
+			false,
 		)
 
 		// Field-by-field equality on every field except TaskIdentifier

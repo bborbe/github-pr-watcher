@@ -112,6 +112,7 @@ func (p *taskPublisher) PublishCreate(
 		p.cfg.TaskSuffix,
 		p.cfg.TargetVault,
 		trustResult,
+		false, // poll path is never a forced re-review
 	)
 
 	if err := p.createSender.SendCommand(ctx, cmd); err != nil {
@@ -437,6 +438,12 @@ func (w *watcher) tryOverride(
 
 // BuildCreateCommand builds a CreateTaskCommand for a PR given its details and trust result.
 // It is used by both the poll path (via PublishCreate) and the single-PR trigger handler.
+//
+// forced marks an operator-requested re-review (trigger with force=true). The caller has
+// already salted taskIDStr via DeriveTaskIDForce; forced makes the TITLE differ too, which
+// is what actually matters — the agent controller dedupes on title path, so a salted
+// task_identifier alone lands on the existing review task's filename and is silently
+// rejected with ErrTaskAlreadyExists (confirmed in prod, bborbe/coding#90, 2026-08-09).
 func BuildCreateCommand(
 	pr PullRequest,
 	details PRDetails,
@@ -447,7 +454,9 @@ func BuildCreateCommand(
 	taskSuffix string,
 	targetVault string,
 	trustResult trust.Result,
+	forced bool,
 ) task.CreateCommand {
+	retryToken := retryTokenFor(taskIDStr, forced)
 	if trustResult.Success() {
 		return task.CreateCommand{
 			Title: computePRTitle(
@@ -460,6 +469,7 @@ func BuildCreateCommand(
 				maxSlugLen,
 				maxTitleLen,
 				taskSuffix,
+				retryToken,
 			),
 			TargetVault:    targetVault,
 			TaskIdentifier: agentlib.TaskIdentifier(taskIDStr),
@@ -482,12 +492,28 @@ func BuildCreateCommand(
 			maxSlugLen,
 			maxTitleLen,
 			taskSuffix,
+			retryToken,
 		),
 		TargetVault:    targetVault,
 		TaskIdentifier: agentlib.TaskIdentifier(taskIDStr),
 		Frontmatter:    buildHumanReviewFrontmatter(pr, taskIDStr, stage, details),
 		Body:           buildUntrustedBody(author, trustResult.Description()),
 	}
+}
+
+// retryTokenFor derives the title-level retry marker for a forced re-review.
+// It reuses the first 8 characters of the already-salted taskIDStr so the vault
+// filename points straight at its own task_identifier, and matches the 8-char
+// short-SHA segment already in the title. Returns "" when not forced, keeping
+// every non-forced title byte-identical to what shipped before.
+func retryTokenFor(taskIDStr string, forced bool) string {
+	if !forced {
+		return ""
+	}
+	if len(taskIDStr) > 8 {
+		return taskIDStr[:8]
+	}
+	return taskIDStr
 }
 
 // BuildOverrideCommand builds a `pr-override` CreateTaskCommand for a labeled,

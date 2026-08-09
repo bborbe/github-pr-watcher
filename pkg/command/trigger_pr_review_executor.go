@@ -203,9 +203,9 @@ func applyTrust(
 	trustResult, err := trustDecision.IsTrusted(ctx, trust.PR{AuthorLogin: details.AuthorLogin})
 	if err != nil {
 		// Transient: trust infrastructure error (e.g. allowlist lookup).
-		// Framework emits Failure, Kafka redelivers.
+		// Framework emits Failure and logs at the boundary, Kafka redelivers —
+		// so wrap and return rather than logging here too (no-log-and-return-error).
 		metrics.IncPRPublished("trust_error")
-		glog.Errorf("trigger executor: trust check failed pr=%s err=%v", cmd.URL, err)
 		return nil, errors.Wrapf(ctx, err, "check trust for %s", cmd.URL)
 	}
 	if trustResult.Success() {
@@ -230,10 +230,14 @@ func applyTrust(
 // Kafka send failure and (nil, nil) on success.
 //
 // When cmd.Force is true, the published TaskIdentifier is derived from
-// DeriveTaskIDForce with a time-derived nonce so the agent controller's
-// vault-file dedup does not skip the publish. The nonce is intentionally
-// not logged — it leaks no security-sensitive data and adds noise without
-// operator benefit.
+// DeriveTaskIDForce with a time-derived nonce, AND cmd.Force is passed to
+// BuildCreateCommand so the vault TITLE carries a retry marker too. Both are
+// required: the agent controller dedupes on title path (checkTitlePathFree),
+// not on task_identifier, so salting the identifier alone left every forced
+// re-review of an unchanged head SHA silently rejected with
+// ErrTaskAlreadyExists (confirmed in prod, bborbe/coding#90, 2026-08-09).
+// The nonce is intentionally not logged — it leaks no security-sensitive data
+// and adds noise without operator benefit.
 func publishCreateCommand(
 	ctx context.Context,
 	prInfo *prurl.PRInfo,
@@ -274,13 +278,14 @@ func publishCreateCommand(
 
 	createCmd := pkg.BuildCreateCommand(
 		pr, details, taskIDStr, stage, maxSlugLen, maxTitleLen, taskSuffix,
-		targetVault, trustResult,
+		targetVault, trustResult, cmd.Force,
 	)
 	if err := createSender.SendCommand(ctx, createCmd); err != nil {
-		// Transient: downstream Kafka send error. Framework emits Failure,
-		// Kafka redelivers. Downstream is idempotent via derived task_id.
+		// Transient: downstream Kafka send error. Framework emits Failure and
+		// logs at the boundary, Kafka redelivers — so wrap and return rather
+		// than logging here too (no-log-and-return-error). Downstream is
+		// idempotent via derived task_id.
 		metrics.IncPRPublished("kafka_error")
-		glog.Errorf("trigger executor: send create-task failed pr=%s err=%v", cmd.URL, err)
 		return nil, nil, errors.Wrapf(
 			ctx, err, "send create task command for %s", cmd.URL,
 		)
