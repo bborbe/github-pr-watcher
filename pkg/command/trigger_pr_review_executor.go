@@ -203,9 +203,9 @@ func applyTrust(
 	trustResult, err := trustDecision.IsTrusted(ctx, trust.PR{AuthorLogin: details.AuthorLogin})
 	if err != nil {
 		// Transient: trust infrastructure error (e.g. allowlist lookup).
-		// Framework emits Failure, Kafka redelivers.
+		// Framework emits Failure and logs at the boundary, Kafka redelivers —
+		// so wrap and return rather than logging here too (no-log-and-return-error).
 		metrics.IncPRPublished("trust_error")
-		glog.Errorf("trigger executor: trust check failed pr=%s err=%v", cmd.URL, err)
 		return nil, errors.Wrapf(ctx, err, "check trust for %s", cmd.URL)
 	}
 	if trustResult.Success() {
@@ -281,10 +281,11 @@ func publishCreateCommand(
 		targetVault, trustResult, cmd.Force,
 	)
 	if err := createSender.SendCommand(ctx, createCmd); err != nil {
-		// Transient: downstream Kafka send error. Framework emits Failure,
-		// Kafka redelivers. Downstream is idempotent via derived task_id.
+		// Transient: downstream Kafka send error. Framework emits Failure and
+		// logs at the boundary, Kafka redelivers — so wrap and return rather
+		// than logging here too (no-log-and-return-error). Downstream is
+		// idempotent via derived task_id.
 		metrics.IncPRPublished("kafka_error")
-		glog.Errorf("trigger executor: send create-task failed pr=%s err=%v", cmd.URL, err)
 		return nil, nil, errors.Wrapf(
 			ctx, err, "send create task command for %s", cmd.URL,
 		)
