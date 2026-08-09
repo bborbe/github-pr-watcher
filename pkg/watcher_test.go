@@ -1362,6 +1362,7 @@ var _ = Describe("BuildCreateCommand", func() {
 				"pr-reviewer",
 				"agent",
 				trustResult,
+				false,
 			)
 
 			Expect(cmd.TargetVault).To(Equal("agent"))
@@ -1389,6 +1390,7 @@ var _ = Describe("BuildCreateCommand", func() {
 			"pr-reviewer",
 			"agent",
 			trustResult,
+			false,
 		)
 
 		Expect(cmd.TargetVault).To(Equal("agent"))
@@ -1417,6 +1419,7 @@ var _ = Describe("BuildCreateCommand", func() {
 			"pr-reviewer",
 			"",
 			trustResult,
+			false,
 		)
 
 		Expect(cmd.Body).To(ContainSubstring("(unknown)"))
@@ -1439,6 +1442,7 @@ var _ = Describe("BuildCreateCommand", func() {
 			"pr-reviewer",
 			"",
 			trustResult,
+			false,
 		)
 
 		// Title must not contain slashes or colons that could break filename
@@ -1463,8 +1467,56 @@ var _ = Describe("BuildCreateCommand", func() {
 			"pr-reviewer",
 			"",
 			trustResult,
+			false,
 		) // maxTitleLen=30
 
 		Expect(len(cmd.Title)).To(BeNumerically("<=", 30+len("-github-owner-repo-1-abc123")))
+	})
+})
+
+var _ = Describe("BuildCreateCommand forced re-review", func() {
+	pr := pkg.PullRequest{
+		Number:      90,
+		Owner:       "bborbe",
+		Repo:        "coding",
+		Title:       "bench: golden-set scoring",
+		HTMLURL:     "https://github.com/bborbe/coding/pull/90",
+		AuthorLogin: "bborbe",
+		UpdatedAt:   libtime.DateTime(time.Date(2026, 8, 9, 12, 0, 0, 0, time.UTC)),
+	}
+	details := pkg.PRDetails{
+		HeadSHA:  "6a219477e5af7c9d8300b908832cc7fe7ce2b9c7",
+		CloneURL: "https://github.com/bborbe/coding.git",
+		BaseRef:  "master",
+	}
+	trusted := trust.NewResult(true, "author allowlist")
+
+	build := func(taskIDStr string, forced bool) task.CreateCommand {
+		return pkg.BuildCreateCommand(
+			pr, details, taskIDStr, "prod", 80, 200, "", "", trusted, forced,
+		)
+	}
+
+	It(
+		"gives a forced re-review a different title than the original for the same head SHA",
+		func() {
+			// The agent controller dedupes on TITLE PATH, not task_identifier: an
+			// identical title makes the forced publish a silent ErrTaskAlreadyExists.
+			original := build("3d5ac4e2-1b5c-52ec-8697-a1de0c9d4e13", false)
+			forced := build("a25d2b9a-c548-50b5-83c5-fdc6f2fe8927", true)
+			Expect(forced.Title).NotTo(Equal(original.Title))
+			Expect(forced.Title).To(HaveSuffix(" - retry-a25d2b9a"))
+		},
+	)
+
+	It("leaves the non-forced title untouched", func() {
+		Expect(build("3d5ac4e2-1b5c-52ec-8697-a1de0c9d4e13", false).Title).To(Equal(
+			"PR Review github - bborbe-coding - 90 - 6a219477 - bench-golden-set-scoring",
+		))
+	})
+
+	It("still carries the salted identifier onto the command", func() {
+		forced := build("a25d2b9a-c548-50b5-83c5-fdc6f2fe8927", true)
+		Expect(string(forced.TaskIdentifier)).To(Equal("a25d2b9a-c548-50b5-83c5-fdc6f2fe8927"))
 	})
 })

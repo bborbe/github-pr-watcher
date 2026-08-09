@@ -86,6 +86,7 @@ var _ = Describe("computePRTitle", func() {
 					maxSlug,
 					maxTitle,
 					taskSuffix,
+					"",
 				),
 			).To(Equal(want))
 		},
@@ -236,6 +237,7 @@ var _ = Describe("task.CreateCommand wire format", func() {
 				DefaultMaxSlugLen,
 				DefaultMaxTitleLen,
 				"",
+				"",
 			)
 			cmd := task.CreateCommand{
 				TaskIdentifier: agentlib.TaskIdentifier("00000000-0000-0000-0000-000000000000"),
@@ -307,5 +309,55 @@ var _ = Describe("buildTaskBody", func() {
 		body := buildTaskBody(pr)
 		Expect(body).To(ContainSubstring("https://github.com/bborbe/foo/pull/1"))
 		Expect(body).To(ContainSubstring("**Repo:** [bborbe/foo](https://github.com/bborbe/foo)"))
+	})
+})
+
+var _ = Describe("computePRTitle retry token", func() {
+	const (
+		provider = "github"
+		owner    = "bborbe"
+		repo     = "coding"
+		number   = 90
+		sha      = "6a219477e5af7c9d8300b908832cc7fe7ce2b9c7"
+		prTitle  = "bench: golden-set scoring"
+	)
+
+	title := func(taskSuffix, retryToken string) string {
+		return computePRTitle(
+			provider, owner, repo, number, sha, prTitle,
+			DefaultMaxSlugLen, DefaultMaxTitleLen, taskSuffix, retryToken,
+		)
+	}
+
+	It("leaves the title unchanged when the token is empty", func() {
+		Expect(title("", "")).To(Equal(
+			"PR Review github - bborbe-coding - 90 - 6a219477 - bench-golden-set-scoring",
+		))
+	})
+
+	It("appends the token as a trailing retry segment", func() {
+		Expect(title("", "a25d2b9a")).To(Equal(
+			"PR Review github - bborbe-coding - 90 - 6a219477 - bench-golden-set-scoring - retry-a25d2b9a",
+		))
+	})
+
+	It("keeps both the task suffix and the retry segment", func() {
+		Expect(title("prod", "a25d2b9a")).To(Equal(
+			"PR Review github - bborbe-coding - 90 - 6a219477 - bench-golden-set-scoring - prod - retry-a25d2b9a",
+		))
+	})
+
+	It("produces a title distinct from the non-forced one for the same PR and SHA", func() {
+		// The regression this guards: the agent controller dedupes on title path,
+		// so an identical title makes a forced re-review a silent no-op.
+		Expect(title("prod", "a25d2b9a")).NotTo(Equal(title("prod", "")))
+	})
+
+	It("preserves the retry segment when the title must be truncated", func() {
+		long := computePRTitle(
+			provider, owner, repo, number, sha, prTitle,
+			DefaultMaxSlugLen, 60, "prod", "a25d2b9a",
+		)
+		Expect(long).To(HaveSuffix(" - prod - retry-a25d2b9a"))
 	})
 })

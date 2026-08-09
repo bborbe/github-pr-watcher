@@ -28,12 +28,20 @@ const DefaultMaxSlugLen = 80
 // taskSuffix, when non-empty, is appended as " - <suffix>" after the slug (before maxTitle cap).
 // When truncation is needed and a suffix is present, the slug shrinks to preserve the suffix —
 // losing the suffix would defeat its purpose as a per-stage disambiguator.
+//
+// retryToken, when non-empty, is appended as a final " - retry-<token>" segment. It exists
+// because the agent controller dedupes on the TITLE PATH (checkTitlePathFree), not on
+// task_identifier: a forced re-review salts only the task_identifier, so without a title-level
+// marker it resolves to the same filename as the existing review task and the controller
+// silently rejects it with ErrTaskAlreadyExists. The token rides the suffix budget so
+// truncation preserves it, exactly like taskSuffix.
 func computePRTitle(
 	provider, owner, repo string,
 	number int,
 	sha, title string,
 	maxSlug, maxTitle int,
 	taskSuffix string,
+	retryToken string,
 ) string {
 	return computeTaskTitle(
 		"Review",
@@ -45,8 +53,21 @@ func computePRTitle(
 		title,
 		maxSlug,
 		maxTitle,
-		taskSuffix,
+		appendRetryToken(taskSuffix, retryToken),
 	)
+}
+
+// appendRetryToken folds a retry token into the task-suffix segment so it inherits
+// computeTaskTitle's truncation protection. Empty token returns taskSuffix unchanged,
+// keeping the non-forced title byte-identical to what shipped before.
+func appendRetryToken(taskSuffix, retryToken string) string {
+	if retryToken == "" {
+		return taskSuffix
+	}
+	if taskSuffix == "" {
+		return "retry-" + retryToken
+	}
+	return taskSuffix + " - retry-" + retryToken
 }
 
 // computeTaskTitle is the shared title builder. kind is the task-kind word
