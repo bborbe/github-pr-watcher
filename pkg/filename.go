@@ -99,7 +99,7 @@ func computeTaskTitle(
 	}
 	if len(t)+len(suffixPart) > maxTitle {
 		glog.Warningf(
-			"PR title exceeds max length: len=%d max=%d suffix=%q — truncating slug to preserve suffix",
+			"pr title exceeds max length: len=%d max=%d suffix=%q — truncating slug to preserve suffix",
 			len(t)+len(suffixPart),
 			maxTitle,
 			taskSuffix,
