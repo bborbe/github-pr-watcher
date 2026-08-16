@@ -5,6 +5,10 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+- chore: bump Go 1.26.5 → 1.26.6 and update dependencies; fixes GO-2026-6179 and GO-2026-6180 (golang.org/x/mod)
+
 ## v0.3.1
 
 - fix: make a forced re-review (`trigger-pr-review` with `force: true`) actually land. `DeriveTaskIDForce` salted only the `task_identifier`, but the agent controller dedupes on the **title path** (`checkTitlePathFree`), which is SHA-scoped and nonce-free — so every forced re-review of an unchanged head SHA resolved to the existing review task's filename and was silently rejected with `ErrTaskAlreadyExists`, while the watcher had already counted it as `github_pr_published{result="create"}` and the gateway had returned a valid `requestID` and exit 0. `BuildCreateCommand` now takes a `forced` flag and appends a ` - retry-<taskid[:8]>` segment to the title, riding the existing task-suffix truncation budget. Non-forced titles are byte-identical to before. Confirmed against prod on `bborbe/coding#90` (2026-08-09)
