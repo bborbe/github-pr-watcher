@@ -54,7 +54,7 @@ var _ = Describe("TriggerHandler", func() {
 	)
 
 	Context("happy path: valid GitHub PR URL", func() {
-		It("returns 202 with {status,url} body", func() {
+		It("returns 202 with {status,url} body, force omitted when not forced", func() {
 			req := httptest.NewRequest(
 				"POST",
 				"/trigger?url=https://github.com/bborbe/repo/pull/42",
@@ -68,6 +68,8 @@ var _ = Describe("TriggerHandler", func() {
 			Expect(json.Unmarshal(resp.Body.Bytes(), &body)).To(Succeed())
 			Expect(body["status"]).To(Equal("accepted"))
 			Expect(body["url"]).To(Equal("https://github.com/bborbe/repo/pull/42"))
+			_, hasForce := body["force"]
+			Expect(hasForce).To(BeFalse(), "force must be omitted when false (omitempty)")
 		})
 
 		It("publishes exactly one TriggerPRReviewCommand with the raw URL and Force=false", func() {
@@ -83,6 +85,43 @@ var _ = Describe("TriggerHandler", func() {
 			_, sentCmd := sender.SendCommandArgsForCall(0)
 			Expect(sentCmd.URL).To(Equal("https://github.com/bborbe/repo/pull/42"))
 			Expect(sentCmd.Force).To(BeFalse())
+		})
+
+		It("returns 202 with force:true when &force=true, and publishes Force=true", func() {
+			req := httptest.NewRequest(
+				"POST",
+				"/trigger?url=https://github.com/bborbe/repo/pull/42&force=true",
+				nil,
+			)
+			resp := httptest.NewRecorder()
+			h.ServeHTTP(resp, req)
+
+			Expect(resp.Code).To(Equal(http.StatusAccepted))
+			var body map[string]interface{}
+			Expect(json.Unmarshal(resp.Body.Bytes(), &body)).To(Succeed())
+			Expect(body["status"]).To(Equal("accepted"))
+			Expect(body["url"]).To(Equal("https://github.com/bborbe/repo/pull/42"))
+			Expect(body["force"]).To(Equal(true))
+
+			Expect(sender.SendCommandCallCount()).To(Equal(1))
+			_, sentCmd := sender.SendCommandArgsForCall(0)
+			Expect(sentCmd.Force).To(BeTrue())
+		})
+
+		It("treats garbage force values as false (lenient, no 400)", func() {
+			req := httptest.NewRequest(
+				"POST",
+				"/trigger?url=https://github.com/bborbe/repo/pull/42&force=notabool",
+				nil,
+			)
+			resp := httptest.NewRecorder()
+			h.ServeHTTP(resp, req)
+
+			Expect(resp.Code).To(Equal(http.StatusAccepted))
+			var body map[string]interface{}
+			Expect(json.Unmarshal(resp.Body.Bytes(), &body)).To(Succeed())
+			_, hasForce := body["force"]
+			Expect(hasForce).To(BeFalse(), "garbage force resolves to false, so force is omitted")
 		})
 	})
 
