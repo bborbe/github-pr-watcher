@@ -67,6 +67,7 @@ func CreateWatcher(
 	taskSuffix string,
 	targetVault string,
 	overrideLabel string,
+	autoMergeLabel string,
 ) pkg.Watcher {
 	publisher := pkg.NewTaskPublisher(
 		createSender,
@@ -89,6 +90,8 @@ func CreateWatcher(
 		scope,
 		taskCreationFilter,
 		overrideLabel,
+		autoMergeLabel,
+		trustDecision,
 	)
 }
 

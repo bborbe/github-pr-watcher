@@ -13,6 +13,20 @@ import (
 )
 
 type GitHubClient struct {
+	EnableAutoMergeStub        func(context.Context, string, string, int) error
+	enableAutoMergeMutex       sync.RWMutex
+	enableAutoMergeArgsForCall []struct {
+		arg1 context.Context
+		arg2 string
+		arg3 string
+		arg4 int
+	}
+	enableAutoMergeReturns struct {
+		result1 error
+	}
+	enableAutoMergeReturnsOnCall map[int]struct {
+		result1 error
+	}
 	GetPRDetailsStub        func(context.Context, string, string, int) (pkg.PRDetails, error)
 	getPRDetailsMutex       sync.RWMutex
 	getPRDetailsArgsForCall []struct {
@@ -47,6 +61,70 @@ type GitHubClient struct {
 	}
 	invocations      map[string][][]interface{}
 	invocationsMutex sync.RWMutex
+}
+
+func (fake *GitHubClient) EnableAutoMerge(arg1 context.Context, arg2 string, arg3 string, arg4 int) error {
+	fake.enableAutoMergeMutex.Lock()
+	ret, specificReturn := fake.enableAutoMergeReturnsOnCall[len(fake.enableAutoMergeArgsForCall)]
+	fake.enableAutoMergeArgsForCall = append(fake.enableAutoMergeArgsForCall, struct {
+		arg1 context.Context
+		arg2 string
+		arg3 string
+		arg4 int
+	}{arg1, arg2, arg3, arg4})
+	stub := fake.EnableAutoMergeStub
+	fakeReturns := fake.enableAutoMergeReturns
+	fake.recordInvocation("EnableAutoMerge", []interface{}{arg1, arg2, arg3, arg4})
+	fake.enableAutoMergeMutex.Unlock()
+	if stub != nil {
+		return stub(arg1, arg2, arg3, arg4)
+	}
+	if specificReturn {
+		return ret.result1
+	}
+	return fakeReturns.result1
+}
+
+func (fake *GitHubClient) EnableAutoMergeCallCount() int {
+	fake.enableAutoMergeMutex.RLock()
+	defer fake.enableAutoMergeMutex.RUnlock()
+	return len(fake.enableAutoMergeArgsForCall)
+}
+
+func (fake *GitHubClient) EnableAutoMergeCalls(stub func(context.Context, string, string, int) error) {
+	fake.enableAutoMergeMutex.Lock()
+	defer fake.enableAutoMergeMutex.Unlock()
+	fake.EnableAutoMergeStub = stub
+}
+
+func (fake *GitHubClient) EnableAutoMergeArgsForCall(i int) (context.Context, string, string, int) {
+	fake.enableAutoMergeMutex.RLock()
+	defer fake.enableAutoMergeMutex.RUnlock()
+	argsForCall := fake.enableAutoMergeArgsForCall[i]
+	return argsForCall.arg1, argsForCall.arg2, argsForCall.arg3, argsForCall.arg4
+}
+
+func (fake *GitHubClient) EnableAutoMergeReturns(result1 error) {
+	fake.enableAutoMergeMutex.Lock()
+	defer fake.enableAutoMergeMutex.Unlock()
+	fake.EnableAutoMergeStub = nil
+	fake.enableAutoMergeReturns = struct {
+		result1 error
+	}{result1}
+}
+
+func (fake *GitHubClient) EnableAutoMergeReturnsOnCall(i int, result1 error) {
+	fake.enableAutoMergeMutex.Lock()
+	defer fake.enableAutoMergeMutex.Unlock()
+	fake.EnableAutoMergeStub = nil
+	if fake.enableAutoMergeReturnsOnCall == nil {
+		fake.enableAutoMergeReturnsOnCall = make(map[int]struct {
+			result1 error
+		})
+	}
+	fake.enableAutoMergeReturnsOnCall[i] = struct {
+		result1 error
+	}{result1}
 }
 
 func (fake *GitHubClient) GetPRDetails(arg1 context.Context, arg2 string, arg3 string, arg4 int) (pkg.PRDetails, error) {

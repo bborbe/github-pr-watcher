@@ -136,6 +136,7 @@ type application struct {
 	TaskSuffix       string           `required:"false" arg:"task-suffix"       env:"TASK_SUFFIX"           usage:"Optional suffix appended to PR task filenames as ' - suffix'; empty = no suffix. Use distinct values per stage to prevent task-file collisions when both watchers poll the same repo into the same vault."`
 	TargetVault      string           `required:"false" arg:"target-vault"      env:"TARGET_VAULT"          usage:"Vault slug stamped on every CreateTaskCommand (matched verbatim against the controller's VAULT_NAME). Empty leaves it unset so the controller's legacy default-vault fallback applies — set this when the target vault is not the controller's legacy default (e.g. 'agent')."`
 	OverrideLabel    string           `required:"false" arg:"override-label"    env:"OVERRIDE_REVIEW_LABEL" usage:"PR label that triggers a pr-override task for trusted authors (bot posts APPROVE at head SHA so a false-positive review no longer blocks merge). Empty disables the override path."                                                                                            default:"override-review"`
+	AutoMergeLabel   string           `required:"false" arg:"auto-merge-label"  env:"AUTO_MERGE_LABEL"      usage:"PR label that opts the PR into GitHub-native auto-merge for trusted authors (watcher arms EnableAutoMerge; GitHub merges once checks + required reviews are green). Empty disables the auto-merge path. Requires the watcher GitHub App to hold Pull requests: Write."         default:"auto-merge"`
 
 	// TopicPrefix selects the Kafka topic prefix used for CQRS topic construction
 	// (e.g. "develop" / "master"); independent of Stage, which remains the
@@ -298,6 +299,7 @@ func (a *application) Run(ctx context.Context, _ libsentry.Client) error {
 		a.TaskSuffix,
 		a.TargetVault,
 		a.OverrideLabel,
+		a.AutoMergeLabel,
 	)
 
 	// HTTP-side sender backs the /trigger handler.

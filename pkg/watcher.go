@@ -186,6 +186,8 @@ func NewWatcher(
 	scope string,
 	taskCreationFilter filter.TaskCreationFilter,
 	overrideLabel string,
+	autoMergeLabel string,
+	trustDecision trust.Trust,
 ) Watcher {
 	return &watcher{
 		ghClient:           ghClient,
@@ -196,6 +198,8 @@ func NewWatcher(
 		scope:              scope,
 		taskCreationFilter: taskCreationFilter,
 		overrideLabel:      overrideLabel,
+		autoMergeLabel:     autoMergeLabel,
+		trustDecision:      trustDecision,
 	}
 }
 
@@ -210,6 +214,15 @@ type watcher struct {
 	// overrideLabel is the PR label that triggers an override task. Empty
 	// disables the override path entirely.
 	overrideLabel string
+	// autoMergeLabel is the PR label that opts the PR into GitHub-native
+	// auto-merge. When present on a trusted author's PR, the watcher arms
+	// auto-merge (EnableAutoMerge) so GitHub merges once checks + required
+	// reviews are green. Empty disables the auto-merge path entirely.
+	autoMergeLabel string
+	// trustDecision gates auto-merge arming to trusted authors (the label
+	// alone is insufficient — an untrusted author must not be able to opt
+	// any PR into auto-merge).
+	trustDecision trust.Trust
 }
 
 func (w *watcher) Poll(ctx context.Context) error {
@@ -366,6 +379,12 @@ func (w *watcher) processPR(
 		return libtime.DateTime{}, false
 	}
 
+	// Auto-merge arming: a trusted author carrying the auto-merge label opts
+	// the PR into GitHub-native auto-merge. Side effect only — the review path
+	// continues unchanged below (the ruleset's required review must still
+	// approve before GitHub merges).
+	w.tryAutoMerge(ctx, pr)
+
 	// Override path: a trusted author carrying the override label gets a
 	// `pr-override` task INSTEAD of a review task for this SHA. Emitting both
 	// would race — the review could post CHANGES_REQUESTED after the override's
@@ -434,6 +453,48 @@ func (w *watcher) tryOverride(
 		newHeadSHAs[overrideID] = details.HeadSHA
 	}
 	return handled
+}
+
+// tryAutoMerge arms GitHub-native auto-merge for a labeled PR from a trusted
+// author. It returns true when the PR was armed (label present + trusted).
+// It returns false — leaving the caller to continue normally — when the
+// auto-merge path is disabled (empty label), the label is absent, the author
+// is untrusted, or arming failed.
+//
+// Arming is independent of the review path: it does NOT skip review. The PR
+// still flows through the normal review (the ruleset requires an approving
+// review before GitHub auto-merges), and GitHub's auto-merge fires only when
+// both required checks and required reviews are green. Arming is idempotent
+// at the GitHub API level, so re-arming an already-armed PR on a later poll
+// is a success no-op; EnableAutoMerge errors are logged and the review path
+// continues.
+func (w *watcher) tryAutoMerge(
+	ctx context.Context,
+	pr PullRequest,
+) bool {
+	if w.autoMergeLabel == "" || !slices.Contains(pr.Labels, w.autoMergeLabel) {
+		return false
+	}
+	trustResult, err := w.trustDecision.IsTrusted(ctx, trust.PR{AuthorLogin: pr.AuthorLogin})
+	if err != nil {
+		glog.Errorf("auto-merge trust check failed pr=%s err=%v", pr.HTMLURL, err)
+		w.metrics.IncPRPublished("error")
+		return false
+	}
+	if !trustResult.Success() {
+		glog.V(2).Infof("auto-merge skipped, untrusted author pr=%s", pr.HTMLURL)
+		w.metrics.IncPRPublished("auto_merge_skipped")
+		return false
+	}
+	if err := w.ghClient.EnableAutoMerge(ctx, pr.Owner, pr.Repo, pr.Number); err != nil {
+		glog.Errorf("enable auto-merge failed pr=%s/%s#%d err=%v",
+			pr.Owner, pr.Repo, pr.Number, err)
+		w.metrics.IncPRPublished("error")
+		return false
+	}
+	glog.V(2).Infof("armed auto-merge pr=%s/%s#%d", pr.Owner, pr.Repo, pr.Number)
+	w.metrics.IncPRPublished("auto_merge")
+	return true
 }
 
 // BuildCreateCommand builds a CreateTaskCommand for a PR given its details and trust result.
