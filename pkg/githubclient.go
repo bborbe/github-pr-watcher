@@ -94,6 +94,15 @@ type GitHubClient interface {
 	// The Search API does NOT return any of these, so the poll loop must call
 	// this for every PR before publishing a task command.
 	GetPRDetails(ctx context.Context, owner, repo string, number int) (PRDetails, error)
+
+	// EnableAutoMerge arms GitHub-native auto-merge on a PR: when all merge
+	// requirements (required status checks + required reviews per the repo
+	// ruleset) are met, GitHub merges the PR automatically. Arming is
+	// idempotent at the API level — re-arming an already-armed PR returns
+	// success. Requires the authenticating identity to hold Pull requests:
+	// Write on the repo (the watcher App must be bumped from Contents: Read
+	// only — see task SC #4).
+	EnableAutoMerge(ctx context.Context, owner, repo string, number int) error
 }
 
 // NewGitHubClient returns a GitHubClient backed by the real GitHub API.
@@ -186,6 +195,31 @@ func (c *githubClient) GetPRDetails(
 		UpdatedAt:   libtime.DateTime(pr.GetUpdatedAt().Time),
 		Labels:      labelNames(pr.Labels),
 	}, nil
+}
+
+// EnableAutoMerge arms GitHub-native auto-merge on a PR. The REST endpoint is
+// PUT /repos/{owner}/{repo}/pulls/{number}/auto-merge; go-github v62 has no
+// typed wrapper for it, so we call it through the client's generic
+// NewRequest/Do path. merge_method is pinned to "merge" to match the repo
+// convention (bborbe repos are merge-commit-only: allow_squash_merge=false,
+// allow_rebase_merge=false).
+func (c *githubClient) EnableAutoMerge(
+	ctx context.Context,
+	owner, repo string,
+	number int,
+) error {
+	body := struct {
+		MergeMethod string `json:"merge_method"`
+	}{MergeMethod: "merge"}
+	u := fmt.Sprintf("repos/%s/%s/pulls/%d/auto-merge", owner, repo, number)
+	req, err := c.client.NewRequest(http.MethodPut, u, body)
+	if err != nil {
+		return errors.Wrapf(ctx, err, "enable auto merge %s/%s#%d", owner, repo, number)
+	}
+	if _, err := c.client.Do(ctx, req, nil); err != nil {
+		return errors.Wrapf(ctx, err, "enable auto merge %s/%s#%d", owner, repo, number)
+	}
+	return nil
 }
 
 // labelNames maps GitHub label objects to their names, skipping any with an

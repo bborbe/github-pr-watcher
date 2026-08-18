@@ -54,6 +54,8 @@ func newTestWatcher(
 			filter.NewBotAuthorFilter([]string{"dependabot[bot]"}),
 		},
 		"",
+		"",
+		trustDecision,
 	)
 }
 
@@ -89,6 +91,45 @@ func newTestWatcherWithOverride(
 			filter.NewBotAuthorFilter([]string{"dependabot[bot]"}),
 		},
 		overrideLabel,
+		"",
+		trustDecision,
+	)
+}
+
+func newTestWatcherWithAutoMerge(
+	ghClient pkg.GitHubClient,
+	createSender task.CreateCommandSender,
+	cursorPath string,
+	startTime libtime.DateTime,
+	fakeMetrics *mocks.Metrics,
+	trustDecision trust.Trust,
+	autoMergeLabel string,
+) pkg.Watcher {
+	publisher := pkg.NewTaskPublisher(
+		createSender,
+		trustDecision,
+		fakeMetrics,
+		pkg.TaskConfig{
+			Stage:       "dev",
+			MaxSlugLen:  pkg.DefaultMaxSlugLen,
+			MaxTitleLen: pkg.DefaultMaxTitleLen,
+			TaskSuffix:  "",
+		},
+	)
+	return pkg.NewWatcher(
+		ghClient,
+		publisher,
+		fakeMetrics,
+		cursorPath,
+		startTime,
+		"bborbe",
+		filter.TaskCreationFilters{
+			filter.NewDraftFilter(),
+			filter.NewBotAuthorFilter([]string{"dependabot[bot]"}),
+		},
+		"",
+		autoMergeLabel,
+		trustDecision,
 	)
 }
 
@@ -1153,6 +1194,8 @@ var _ = Describe("pkg.Watcher", func() {
 					filter.NewBotAuthorFilter([]string{"dependabot[bot]"}),
 				},
 				"",
+				"",
+				trust.NewAuthorAllowlist(nil),
 			)
 			err := w.Poll(ctx)
 			Expect(err).NotTo(HaveOccurred())
@@ -1318,6 +1361,129 @@ var _ = Describe("pkg.Watcher", func() {
 			Expect(w.Poll(ctx)).NotTo(HaveOccurred())
 			Expect(w.Poll(ctx)).NotTo(HaveOccurred())
 			Expect(createSender.SendCommandCallCount()).To(Equal(1))
+		})
+	})
+
+	Describe("auto-merge label", func() {
+		prWith := func(labels []string, author string) pkg.PullRequest {
+			return pkg.PullRequest{
+				Number:      9,
+				Owner:       "bborbe",
+				Repo:        "repo",
+				Title:       "bump deps",
+				HTMLURL:     "https://github.com/bborbe/repo/pull/9",
+				AuthorLogin: author,
+				IsDraft:     false,
+				UpdatedAt:   libtime.DateTime(time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC)),
+				Labels:      labels,
+			}
+		}
+		trustAlice := trust.NewAuthorAllowlist([]string{"alice"})
+
+		BeforeEach(func() {
+			ghClient.GetPRDetailsReturns(pkg.PRDetails{
+				HeadSHA:  "deadbeef",
+				CloneURL: "https://github.com/bborbe/repo.git",
+				BaseRef:  "master",
+			}, nil)
+			ghClient.EnableAutoMergeReturns(nil)
+			createSender.SendCommandReturns(nil)
+		})
+
+		It("arms auto-merge for a trusted author carrying the label", func() {
+			ghClient.SearchPRsReturns(pkg.SearchResult{
+				PullRequests:  []pkg.PullRequest{prWith([]string{"auto-merge"}, "alice")},
+				RateRemaining: 100,
+			}, nil)
+			w := newTestWatcherWithAutoMerge(
+				ghClient,
+				createSender,
+				cursorPath,
+				startTime,
+				fakeMetrics,
+				trustAlice,
+				"auto-merge",
+			)
+			Expect(w.Poll(ctx)).NotTo(HaveOccurred())
+			Expect(ghClient.EnableAutoMergeCallCount()).To(Equal(1))
+			_, owner, repo, number := ghClient.EnableAutoMergeArgsForCall(0)
+			Expect(owner).To(Equal("bborbe"))
+			Expect(repo).To(Equal("repo"))
+			Expect(number).To(Equal(9))
+		})
+
+		It("does not arm auto-merge for an untrusted author", func() {
+			ghClient.SearchPRsReturns(pkg.SearchResult{
+				PullRequests:  []pkg.PullRequest{prWith([]string{"auto-merge"}, "mallory")},
+				RateRemaining: 100,
+			}, nil)
+			w := newTestWatcherWithAutoMerge(
+				ghClient,
+				createSender,
+				cursorPath,
+				startTime,
+				fakeMetrics,
+				trustAlice,
+				"auto-merge",
+			)
+			Expect(w.Poll(ctx)).NotTo(HaveOccurred())
+			Expect(ghClient.EnableAutoMergeCallCount()).To(Equal(0))
+		})
+
+		It("does not arm auto-merge without the label", func() {
+			ghClient.SearchPRsReturns(pkg.SearchResult{
+				PullRequests:  []pkg.PullRequest{prWith([]string{"other-label"}, "alice")},
+				RateRemaining: 100,
+			}, nil)
+			w := newTestWatcherWithAutoMerge(
+				ghClient,
+				createSender,
+				cursorPath,
+				startTime,
+				fakeMetrics,
+				trustAlice,
+				"auto-merge",
+			)
+			Expect(w.Poll(ctx)).NotTo(HaveOccurred())
+			Expect(ghClient.EnableAutoMergeCallCount()).To(Equal(0))
+		})
+
+		It("ignores the label when the auto-merge path is disabled (empty config)", func() {
+			ghClient.SearchPRsReturns(pkg.SearchResult{
+				PullRequests:  []pkg.PullRequest{prWith([]string{"auto-merge"}, "alice")},
+				RateRemaining: 100,
+			}, nil)
+			w := newTestWatcher(
+				ghClient,
+				createSender,
+				cursorPath,
+				startTime,
+				fakeMetrics,
+				trustAlice,
+			)
+			Expect(w.Poll(ctx)).NotTo(HaveOccurred())
+			Expect(ghClient.EnableAutoMergeCallCount()).To(Equal(0))
+		})
+
+		It("still emits the review task when auto-merge is armed (side effect only)", func() {
+			ghClient.SearchPRsReturns(pkg.SearchResult{
+				PullRequests:  []pkg.PullRequest{prWith([]string{"auto-merge"}, "alice")},
+				RateRemaining: 100,
+			}, nil)
+			w := newTestWatcherWithAutoMerge(
+				ghClient,
+				createSender,
+				cursorPath,
+				startTime,
+				fakeMetrics,
+				trustAlice,
+				"auto-merge",
+			)
+			Expect(w.Poll(ctx)).NotTo(HaveOccurred())
+			Expect(ghClient.EnableAutoMergeCallCount()).To(Equal(1))
+			Expect(createSender.SendCommandCallCount()).To(Equal(1))
+			_, cmd := createSender.SendCommandArgsForCall(0)
+			Expect(cmd.Frontmatter["task_type"]).To(Equal("pr-review"))
 		})
 	})
 })

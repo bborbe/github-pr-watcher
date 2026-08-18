@@ -31,7 +31,7 @@ Two independent decision chains run per PR — see [`docs/watcher-decision-chain
 
 | Variable | Required | Default | Description |
 |---|---|---|---|
-| `GH_TOKEN` | yes | — | GitHub personal access token (read scope sufficient) |
+| `GH_TOKEN` | yes | — | GitHub personal access token (read scope sufficient for search/review; **Pull requests: Write required for auto-merge arming** — the deployed App must be bumped, see `AUTO_MERGE_LABEL`) |
 | `KAFKA_BROKERS` | yes | — | Comma-separated Kafka broker list |
 | `STAGE` | yes | — | Deployment stage (`dev` or `prod`) |
 | `TRUSTED_AUTHORS` | yes | — | Comma-separated trusted GitHub logins; empty list refuses startup |
@@ -40,6 +40,7 @@ Two independent decision chains run per PR — see [`docs/watcher-decision-chain
 | `REPO_SCOPE` | no | `bborbe` | GitHub user or org to search for PRs |
 | `REPO_ALLOWLIST` | no | — | Comma-separated host-qualified repo allowlist (`host/owner/repo`); empty means allow-all |
 | `BOT_ALLOWLIST` | no | `dependabot[bot],renovate[bot]` | Comma-separated bot author logins to skip |
+| `AUTO_MERGE_LABEL` | no | `auto-merge` | PR label that opts the PR into GitHub-native auto-merge for trusted authors (watcher arms `EnableAutoMerge`; GitHub merges once checks + required reviews are green). Empty disables the auto-merge path. Requires the watcher GitHub App to hold Pull requests: Write |
 | `MAX_PR_AGE` | no | `2160h` (90d) | Skip PRs older than this; empty disables |
 | `BACKFILL_DURATION` | no | `720h` (30d) | On cold start, backdate the initial cursor by this; empty disables |
 | `SENTRY_DSN` | no | — | Sentry DSN for error tracking |
