@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## Unreleased
+## v0.5.0
 
 - feat: arm GitHub-native auto-merge (`auto-merge` label, `AUTO_MERGE_LABEL`) for trusted authors so PRs merge once checks + required reviews are green; add `EnableAutoMerge` to the GitHub client; requires the watcher App to hold Pull requests: Write
 
