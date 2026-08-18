@@ -66,8 +66,17 @@ func (h *singlePRTriggerHandler) ServeHTTP(
 		)
 	}
 
-	glog.V(2).Infof("trigger accepted url=%s", rawURL)
-	return writeAccepted(resp, rawURL)
+	glog.V(2).Infof("trigger accepted url=%s force=%t", rawURL, force)
+	return writeAccepted(resp, rawURL, force)
+}
+
+// triggerAcceptedResponse is the 202 body. Force uses omitempty so it appears
+// only when true — the non-forced response stays byte-identical to the old
+// {"status","url"} shape, and a forced one is self-verifying for the operator.
+type triggerAcceptedResponse struct {
+	Status string `json:"status"`
+	URL    string `json:"url"`
+	Force  bool   `json:"force,omitempty"`
 }
 
 // validateTriggerURL rejects empty URLs, unparseable URLs, and
@@ -96,12 +105,14 @@ func validateTriggerURL(ctx context.Context, rawURL string) error {
 	return nil
 }
 
-// writeAccepted emits the 202 response with body {"status":"accepted","url":<raw>}.
-func writeAccepted(resp http.ResponseWriter, rawURL string) error {
+// writeAccepted emits the 202 response with body {"status":"accepted","url":<raw>}
+// (plus "force":true only when the trigger was forced).
+func writeAccepted(resp http.ResponseWriter, rawURL string, force bool) error {
 	resp.Header().Set("Content-Type", "application/json")
 	resp.WriteHeader(http.StatusAccepted)
-	return json.NewEncoder(resp).Encode(map[string]interface{}{
-		"status": "accepted",
-		"url":    rawURL,
+	return json.NewEncoder(resp).Encode(triggerAcceptedResponse{
+		Status: "accepted",
+		URL:    rawURL,
+		Force:  force,
 	})
 }
