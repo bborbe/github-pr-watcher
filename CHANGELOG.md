@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+- fix: `EnableAutoMerge` calls the GraphQL `enablePullRequestAutoMerge` mutation instead of a REST route that does not exist. `PUT /repos/{owner}/{repo}/pulls/{number}/auto-merge` returns 404 Not Found — GitHub exposes auto-merge only via GraphQL, which is why go-github has no typed wrapper for it. Every arming attempt since the feature shipped failed with that 404. The mutation needs the PR's GraphQL node id, so the PR is fetched first, and because GitHub answers a failed mutation with HTTP 200 plus a non-empty `errors` array, the response body is now inspected rather than trusting a nil transport error.
+- fix: document that arming requires the PR to still be blocked. GraphQL rejects an already-mergeable PR with UNPROCESSABLE "Pull request is in clean status", so a PR that has gone green and approved before the watcher's poll reaches it can no longer be armed.
+
 ## v0.5.1
 
 - fix: `make build` refuses to stamp a version onto a tree that is not that version's tag (`check-version-tag`, escape hatch `ALLOW_UNTAGGED_BUILD=1`). `VERSION` defaults to the newest tag in the repo regardless of what is checked out, so an operator-run build from master silently stamps the newest tag's number onto whatever tree is present. This shipped a bad `v0.5.0` image: the tag contains `AutoMergeLabel` + `tryAutoMerge`, but the published image was built from a pre-merge tree, so the deployed watcher had no auto-merge code at all — its startup argument dump printed `OverrideLabel` and no `AutoMergeLabel`. Nothing surfaced it: the tag, the changelog and the image name all agreed, and the arming path failed silently because the label check logs nothing when it misses.
