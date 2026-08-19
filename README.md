@@ -40,7 +40,7 @@ Two independent decision chains run per PR — see [`docs/watcher-decision-chain
 | `REPO_SCOPE` | no | `bborbe` | GitHub user or org to search for PRs |
 | `REPO_ALLOWLIST` | no | — | Comma-separated host-qualified repo allowlist (`host/owner/repo`); empty means allow-all |
 | `BOT_ALLOWLIST` | no | `dependabot[bot],renovate[bot]` | Comma-separated bot author logins to skip |
-| `AUTO_MERGE_LABEL` | no | `auto-merge` | PR label that opts the PR into GitHub-native auto-merge for trusted authors (watcher arms `EnableAutoMerge`; GitHub merges once checks + required reviews are green). Empty disables the auto-merge path. Requires the watcher GitHub App to hold Pull requests: Write |
+| `AUTO_MERGE_LABEL` | no | `auto-merge` | PR label that opts the PR into GitHub-native auto-merge for trusted authors (watcher arms `EnableAutoMerge`; GitHub merges once checks + required reviews are green). Empty disables the auto-merge path. Requires the watcher GitHub App to hold Pull requests: Write. **Arming only works while the PR is still blocked** — see below |
 | `MAX_PR_AGE` | no | `2160h` (90d) | Skip PRs older than this; empty disables |
 | `BACKFILL_DURATION` | no | `720h` (30d) | On cold start, backdate the initial cursor by this; empty disables |
 | `SENTRY_DSN` | no | — | Sentry DSN for error tracking |
@@ -103,3 +103,30 @@ See [`docs/architecture.md`](https://github.com/bborbe/maintainer/blob/master/do
 ## License
 
 BSD 2-Clause License. See [LICENSE](LICENSE).
+
+## Auto-merge arming window
+
+Arming is not the same as merging, and it cannot be done at any time.
+
+GitHub exposes auto-merge only through the GraphQL `enablePullRequestAutoMerge`
+mutation. There is no REST endpoint — `PUT /repos/{owner}/{repo}/pulls/{number}/auto-merge`
+returns 404 Not Found, which is why go-github ships no typed wrapper for it.
+
+The mutation rejects a pull request that is **already mergeable**:
+
+```
+UNPROCESSABLE: Pull request Pull request is in clean status
+```
+
+Auto-merge is a promise to merge once the remaining requirements are met, so
+there must be a remaining requirement. A pull request that has already gone
+green and collected its approvals cannot be armed — at that point it can only
+be merged outright.
+
+This matters because the watcher's search is cursor-based: a pull request is
+processed on the poll following its last update, so arming gets roughly one
+attempt per update. In the normal agent flow that attempt lands within one poll
+interval of PR creation, while CI is still running and no review exists yet, so
+the pull request is blocked and arming succeeds. A pull request that becomes
+mergeable faster than the poll interval will not be armed, and the watcher logs
+the refusal at error level rather than failing silently.
