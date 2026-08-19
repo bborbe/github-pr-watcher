@@ -14,6 +14,7 @@ build: check-version-tag check-go-mod
 	--rm=true \
 	--platform=linux/amd64 \
 	--build-arg DOCKER_REGISTRY=$(DOCKER_REGISTRY) \
+	--build-arg BUILD_GIT_VERSION=$$(git describe --tags --always --dirty) \
 	--build-arg BUILD_GIT_COMMIT=$$(git rev-parse --short HEAD) \
 	--build-arg BUILD_DATE=$$(date -u +%Y-%m-%dT%H:%M:%SZ) \
 	-t $(DOCKER_REGISTRY)/bborbe/$(SERVICE):$(VERSION) \
