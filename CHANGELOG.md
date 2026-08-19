@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## Unreleased
+## v0.5.1
 
 - fix: `make build` refuses to stamp a version onto a tree that is not that version's tag (`check-version-tag`, escape hatch `ALLOW_UNTAGGED_BUILD=1`). `VERSION` defaults to the newest tag in the repo regardless of what is checked out, so an operator-run build from master silently stamps the newest tag's number onto whatever tree is present. This shipped a bad `v0.5.0` image: the tag contains `AutoMergeLabel` + `tryAutoMerge`, but the published image was built from a pre-merge tree, so the deployed watcher had no auto-merge code at all — its startup argument dump printed `OverrideLabel` and no `AutoMergeLabel`. Nothing surfaced it: the tag, the changelog and the image name all agreed, and the arming path failed silently because the label check logs nothing when it misses.
 - fix: stamp `BUILD_GIT_VERSION` (`git describe --tags --always --dirty`) into the image as a build arg and `ENV`, alongside the existing `BUILD_GIT_COMMIT` / `BUILD_DATE`. Makes a published image self-identifying, so the stale-image drift above is detectable by inspecting the image instead of diffing a running pod's startup config against the source tree.
