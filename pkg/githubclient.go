@@ -97,11 +97,11 @@ type GitHubClient interface {
 
 	// EnableAutoMerge arms GitHub-native auto-merge on a PR: when all merge
 	// requirements (required status checks + required reviews per the repo
-	// ruleset) are met, GitHub merges the PR automatically. Arming is
-	// idempotent at the API level — re-arming an already-armed PR returns
-	// success. Requires the authenticating identity to hold Pull requests:
-	// Write on the repo (the watcher App must be bumped from Contents: Read
-	// only — see task SC #4).
+	// ruleset) are met, GitHub merges the PR automatically. Re-arming an
+	// already-armed PR succeeds. Arming a PR that is ALREADY mergeable fails
+	// with UNPROCESSABLE "Pull request is in clean status" — auto-merge only
+	// applies while something still blocks the merge. Requires the
+	// authenticating identity to hold Pull requests: Write on the repo.
 	EnableAutoMerge(ctx context.Context, owner, repo string, number int) error
 }
 
@@ -197,27 +197,66 @@ func (c *githubClient) GetPRDetails(
 	}, nil
 }
 
-// EnableAutoMerge arms GitHub-native auto-merge on a PR. The REST endpoint is
-// PUT /repos/{owner}/{repo}/pulls/{number}/auto-merge; go-github v62 has no
-// typed wrapper for it, so we call it through the client's generic
-// NewRequest/Do path. merge_method is pinned to "merge" to match the repo
-// convention (bborbe repos are merge-commit-only: allow_squash_merge=false,
-// allow_rebase_merge=false).
+// EnableAutoMerge arms GitHub-native auto-merge on a PR.
+//
+// There is NO REST endpoint for this. GitHub exposes auto-merge only through
+// the GraphQL `enablePullRequestAutoMerge` mutation; the plausible-looking
+// PUT /repos/{owner}/{repo}/pulls/{number}/auto-merge returns 404 Not Found.
+// go-github has no typed wrapper because there is no REST route to wrap.
+//
+// The mutation needs the PR's GraphQL node id, so this fetches the PR first.
+// mergeMethod is pinned to MERGE to match the repo convention (bborbe repos
+// are merge-commit-only: allow_squash_merge=false, allow_rebase_merge=false).
+//
+// GitHub answers a failed mutation with HTTP 200 and a non-empty `errors`
+// array, so the response body must be inspected — a nil error from Do is not
+// success. The common failure is UNPROCESSABLE "Pull request is in clean
+// status": auto-merge can only be armed while something still blocks the
+// merge. An already-mergeable PR cannot be armed, it can only be merged.
 func (c *githubClient) EnableAutoMerge(
 	ctx context.Context,
 	owner, repo string,
 	number int,
 ) error {
+	pr, _, err := c.client.PullRequests.Get(ctx, owner, repo, number)
+	if err != nil {
+		return errors.Wrapf(ctx, err, "get pull request %s/%s#%d", owner, repo, number)
+	}
+	nodeID := pr.GetNodeID()
+	if nodeID == "" {
+		return errors.Errorf(ctx, "missing node id for %s/%s#%d", owner, repo, number)
+	}
+
 	body := struct {
-		MergeMethod string `json:"merge_method"`
-	}{MergeMethod: "merge"}
-	u := fmt.Sprintf("repos/%s/%s/pulls/%d/auto-merge", owner, repo, number)
-	req, err := c.client.NewRequest(http.MethodPut, u, body)
+		Query     string         `json:"query"`
+		Variables map[string]any `json:"variables"`
+	}{
+		Query: `mutation($id:ID!){enablePullRequestAutoMerge(input:{pullRequestId:$id,mergeMethod:MERGE}){pullRequest{number}}}`,
+		Variables: map[string]any{
+			"id": nodeID,
+		},
+	}
+	req, err := c.client.NewRequest(http.MethodPost, "graphql", body)
 	if err != nil {
 		return errors.Wrapf(ctx, err, "enable auto merge %s/%s#%d", owner, repo, number)
 	}
-	if _, err := c.client.Do(ctx, req, nil); err != nil {
+	var result struct {
+		Errors []struct {
+			Type    string `json:"type"`
+			Message string `json:"message"`
+		} `json:"errors"`
+	}
+	if _, err := c.client.Do(ctx, req, &result); err != nil {
 		return errors.Wrapf(ctx, err, "enable auto merge %s/%s#%d", owner, repo, number)
+	}
+	if len(result.Errors) > 0 {
+		return errors.Errorf(
+			ctx,
+			"enable auto merge %s/%s#%d: %s %s",
+			owner, repo, number,
+			result.Errors[0].Type,
+			result.Errors[0].Message,
+		)
 	}
 	return nil
 }
