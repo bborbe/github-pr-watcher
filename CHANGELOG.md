@@ -5,6 +5,9 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+- chore: Bump errcheck to v1.20.0 and golangci-lint to v2.13.1 for Go 1.27 support
 ## v0.5.3
 
 - docs: document the auto-merge arming window in the README — arming uses the GraphQL `enablePullRequestAutoMerge` mutation (no REST route exists), and it is rejected with `UNPROCESSABLE: Pull request is in clean status` on a pull request that is already mergeable. Explains why a fast-turnaround pull request can go unarmed, and why that is expected rather than a fault.
