@@ -153,6 +153,28 @@ var _ = Describe("WebhookHandler", func() {
 			Expect(metrics.ObserveWebhookDispatchLatencyCallCount()).To(Equal(1))
 		})
 
+		It("returns 202 and publishes on synchronize", func() {
+			req := webhookRequest("pull_request", pullRequestPayload("synchronize"))
+			resp := httptest.NewRecorder()
+			h.ServeHTTP(resp, req)
+
+			Expect(resp.Code).To(Equal(http.StatusAccepted))
+			Expect(sender.SendCommandCallCount()).To(Equal(1))
+			_, sentCmd := sender.SendCommandArgsForCall(0)
+			Expect(sentCmd.URL).To(Equal("https://github.com/bborbe/repo/pull/42"))
+		})
+
+		It("returns 202 and publishes on ready_for_review", func() {
+			req := webhookRequest("pull_request", pullRequestPayload("ready_for_review"))
+			resp := httptest.NewRecorder()
+			h.ServeHTTP(resp, req)
+
+			Expect(resp.Code).To(Equal(http.StatusAccepted))
+			Expect(sender.SendCommandCallCount()).To(Equal(1))
+			_, sentCmd := sender.SendCommandArgsForCall(0)
+			Expect(sentCmd.URL).To(Equal("https://github.com/bborbe/repo/pull/42"))
+		})
+
 		It("acks a non-dispatch action with 200, no publish, counts skip", func() {
 			req := webhookRequest("pull_request", pullRequestPayload("closed"))
 			resp := httptest.NewRecorder()

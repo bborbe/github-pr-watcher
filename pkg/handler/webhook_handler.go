@@ -21,10 +21,17 @@ import (
 	"github.com/golang/glog"
 )
 
+// WebhookHeader is a typed GitHub webhook header name, so header-name typos
+// are caught by the type system.
+type WebhookHeader string
+
 const (
-	webhookSignatureHeader = "X-Hub-Signature-256"
-	webhookEventHeader     = "X-GitHub-Event"
+	WebhookSignatureHeader WebhookHeader = "X-Hub-Signature-256"
+	WebhookEventHeader     WebhookHeader = "X-GitHub-Event"
 )
+
+// AvailableWebhookHeaders lists the webhook header names the handler reads.
+var AvailableWebhookHeaders = []WebhookHeader{WebhookSignatureHeader, WebhookEventHeader}
 
 //counterfeiter:generate -o ../../mocks/webhook_metrics.go --fake-name WebhookMetrics . WebhookMetrics
 
@@ -95,14 +102,14 @@ func (h *webhookHandler) ServeHTTP(
 	if err := verifyWebhookSignature(
 		ctx,
 		h.secret,
-		req.Header.Get(webhookSignatureHeader),
+		req.Header.Get(string(WebhookSignatureHeader)),
 		body,
 	); err != nil {
 		h.metrics.IncWebhookSignatureRejected()
 		return libhttp.WrapWithStatusCode(err, http.StatusUnauthorized)
 	}
 
-	event := req.Header.Get(webhookEventHeader)
+	event := req.Header.Get(string(WebhookEventHeader))
 	if event == "ping" {
 		return writeWebhookAck(resp)
 	}
