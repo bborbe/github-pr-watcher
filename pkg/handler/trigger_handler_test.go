@@ -162,7 +162,7 @@ var _ = Describe("TriggerHandler", func() {
 			t := reflect.TypeOf(concrete)
 			// The returned value is the interface; get its dynamic type via Elem
 			// (it's a pointer to a struct).
-			if t.Kind() == reflect.Ptr {
+			if t.Kind() == reflect.Pointer {
 				t = t.Elem()
 			}
 			for i := 0; i < t.NumField(); i++ {
