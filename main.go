@@ -145,7 +145,7 @@ type application struct {
 	TopicPrefix base.TopicPrefix `required:"false" arg:"topic-prefix" env:"TOPIC_PREFIX" usage:"Kafka topic prefix for CQRS topic construction"`
 
 	TriggerHandler http.Handler
-	WebhookSecret  string `required:"false" arg:"webhook-secret" env:"WEBHOOK_SECRET" usage:"GitHub webhook secret for HMAC verification of /webhook/github-pr"`
+	WebhookSecret  string `required:"false" arg:"webhook-secret" env:"WEBHOOK_SECRET" usage:"GitHub webhook secret for HMAC verification of /webhook/github-pr" display:"length"`
 	WebhookHandler http.Handler
 }
 
