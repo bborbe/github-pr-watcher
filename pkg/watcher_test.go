@@ -55,6 +55,7 @@ func newTestWatcher(
 		},
 		"",
 		"",
+		false,
 		trustDecision,
 	)
 }
@@ -92,6 +93,7 @@ func newTestWatcherWithOverride(
 		},
 		overrideLabel,
 		"",
+		false,
 		trustDecision,
 	)
 }
@@ -129,6 +131,7 @@ func newTestWatcherWithAutoMerge(
 		},
 		"",
 		autoMergeLabel,
+		false,
 		trustDecision,
 	)
 }
@@ -1195,6 +1198,7 @@ var _ = Describe("pkg.Watcher", func() {
 				},
 				"",
 				"",
+				false,
 				trust.NewAuthorAllowlist(nil),
 			)
 			err := w.Poll(ctx)

@@ -9,10 +9,26 @@ import (
 	"sync"
 
 	"github.com/bborbe/github-pr-watcher/pkg"
+	"github.com/bborbe/maintainer/maintainerconfig"
 	"github.com/bborbe/time"
 )
 
 type GitHubClient struct {
+	AddLabelStub        func(context.Context, string, string, int, string) error
+	addLabelMutex       sync.RWMutex
+	addLabelArgsForCall []struct {
+		arg1 context.Context
+		arg2 string
+		arg3 string
+		arg4 int
+		arg5 string
+	}
+	addLabelReturns struct {
+		result1 error
+	}
+	addLabelReturnsOnCall map[int]struct {
+		result1 error
+	}
 	EnableAutoMergeStub        func(context.Context, string, string, int) error
 	enableAutoMergeMutex       sync.RWMutex
 	enableAutoMergeArgsForCall []struct {
@@ -26,6 +42,21 @@ type GitHubClient struct {
 	}
 	enableAutoMergeReturnsOnCall map[int]struct {
 		result1 error
+	}
+	GetMaintainerConfigStub        func(context.Context, string, string) (maintainerconfig.MaintainerConfig, error)
+	getMaintainerConfigMutex       sync.RWMutex
+	getMaintainerConfigArgsForCall []struct {
+		arg1 context.Context
+		arg2 string
+		arg3 string
+	}
+	getMaintainerConfigReturns struct {
+		result1 maintainerconfig.MaintainerConfig
+		result2 error
+	}
+	getMaintainerConfigReturnsOnCall map[int]struct {
+		result1 maintainerconfig.MaintainerConfig
+		result2 error
 	}
 	GetPRDetailsStub        func(context.Context, string, string, int) (pkg.PRDetails, error)
 	getPRDetailsMutex       sync.RWMutex
@@ -41,6 +72,22 @@ type GitHubClient struct {
 	}
 	getPRDetailsReturnsOnCall map[int]struct {
 		result1 pkg.PRDetails
+		result2 error
+	}
+	ListPRFilesStub        func(context.Context, string, string, int) ([]pkg.PRFile, error)
+	listPRFilesMutex       sync.RWMutex
+	listPRFilesArgsForCall []struct {
+		arg1 context.Context
+		arg2 string
+		arg3 string
+		arg4 int
+	}
+	listPRFilesReturns struct {
+		result1 []pkg.PRFile
+		result2 error
+	}
+	listPRFilesReturnsOnCall map[int]struct {
+		result1 []pkg.PRFile
 		result2 error
 	}
 	SearchPRsStub        func(context.Context, string, time.DateTime, int) (pkg.SearchResult, error)
@@ -61,6 +108,71 @@ type GitHubClient struct {
 	}
 	invocations      map[string][][]interface{}
 	invocationsMutex sync.RWMutex
+}
+
+func (fake *GitHubClient) AddLabel(arg1 context.Context, arg2 string, arg3 string, arg4 int, arg5 string) error {
+	fake.addLabelMutex.Lock()
+	ret, specificReturn := fake.addLabelReturnsOnCall[len(fake.addLabelArgsForCall)]
+	fake.addLabelArgsForCall = append(fake.addLabelArgsForCall, struct {
+		arg1 context.Context
+		arg2 string
+		arg3 string
+		arg4 int
+		arg5 string
+	}{arg1, arg2, arg3, arg4, arg5})
+	stub := fake.AddLabelStub
+	fakeReturns := fake.addLabelReturns
+	fake.recordInvocation("AddLabel", []interface{}{arg1, arg2, arg3, arg4, arg5})
+	fake.addLabelMutex.Unlock()
+	if stub != nil {
+		return stub(arg1, arg2, arg3, arg4, arg5)
+	}
+	if specificReturn {
+		return ret.result1
+	}
+	return fakeReturns.result1
+}
+
+func (fake *GitHubClient) AddLabelCallCount() int {
+	fake.addLabelMutex.RLock()
+	defer fake.addLabelMutex.RUnlock()
+	return len(fake.addLabelArgsForCall)
+}
+
+func (fake *GitHubClient) AddLabelCalls(stub func(context.Context, string, string, int, string) error) {
+	fake.addLabelMutex.Lock()
+	defer fake.addLabelMutex.Unlock()
+	fake.AddLabelStub = stub
+}
+
+func (fake *GitHubClient) AddLabelArgsForCall(i int) (context.Context, string, string, int, string) {
+	fake.addLabelMutex.RLock()
+	defer fake.addLabelMutex.RUnlock()
+	argsForCall := fake.addLabelArgsForCall[i]
+	return argsForCall.arg1, argsForCall.arg2, argsForCall.arg3, argsForCall.arg4, argsForCall.arg5
+}
+
+func (fake *GitHubClient) AddLabelReturns(result1 error) {
+	fake.addLabelMutex.Lock()
+	defer fake.addLabelMutex.Unlock()
+	fake.AddLabelStub = nil
+	fake.addLabelReturns = struct {
+		result1 error
+	}{result1}
+}
+
+func (fake *GitHubClient) AddLabelReturnsOnCall(i int, result1 error) {
+	fake.addLabelMutex.Lock()
+	defer fake.addLabelMutex.Unlock()
+	fake.AddLabelStub = nil
+	if fake.addLabelReturnsOnCall == nil {
+		fake.addLabelReturnsOnCall = make(map[int]struct {
+			result1 error
+		})
+	}
+	fake.addLabelReturnsOnCall[i] = struct {
+		result1 error
+	}{result1}
 }
 
 func (fake *GitHubClient) EnableAutoMerge(arg1 context.Context, arg2 string, arg3 string, arg4 int) error {
@@ -127,6 +239,72 @@ func (fake *GitHubClient) EnableAutoMergeReturnsOnCall(i int, result1 error) {
 	}{result1}
 }
 
+func (fake *GitHubClient) GetMaintainerConfig(arg1 context.Context, arg2 string, arg3 string) (maintainerconfig.MaintainerConfig, error) {
+	fake.getMaintainerConfigMutex.Lock()
+	ret, specificReturn := fake.getMaintainerConfigReturnsOnCall[len(fake.getMaintainerConfigArgsForCall)]
+	fake.getMaintainerConfigArgsForCall = append(fake.getMaintainerConfigArgsForCall, struct {
+		arg1 context.Context
+		arg2 string
+		arg3 string
+	}{arg1, arg2, arg3})
+	stub := fake.GetMaintainerConfigStub
+	fakeReturns := fake.getMaintainerConfigReturns
+	fake.recordInvocation("GetMaintainerConfig", []interface{}{arg1, arg2, arg3})
+	fake.getMaintainerConfigMutex.Unlock()
+	if stub != nil {
+		return stub(arg1, arg2, arg3)
+	}
+	if specificReturn {
+		return ret.result1, ret.result2
+	}
+	return fakeReturns.result1, fakeReturns.result2
+}
+
+func (fake *GitHubClient) GetMaintainerConfigCallCount() int {
+	fake.getMaintainerConfigMutex.RLock()
+	defer fake.getMaintainerConfigMutex.RUnlock()
+	return len(fake.getMaintainerConfigArgsForCall)
+}
+
+func (fake *GitHubClient) GetMaintainerConfigCalls(stub func(context.Context, string, string) (maintainerconfig.MaintainerConfig, error)) {
+	fake.getMaintainerConfigMutex.Lock()
+	defer fake.getMaintainerConfigMutex.Unlock()
+	fake.GetMaintainerConfigStub = stub
+}
+
+func (fake *GitHubClient) GetMaintainerConfigArgsForCall(i int) (context.Context, string, string) {
+	fake.getMaintainerConfigMutex.RLock()
+	defer fake.getMaintainerConfigMutex.RUnlock()
+	argsForCall := fake.getMaintainerConfigArgsForCall[i]
+	return argsForCall.arg1, argsForCall.arg2, argsForCall.arg3
+}
+
+func (fake *GitHubClient) GetMaintainerConfigReturns(result1 maintainerconfig.MaintainerConfig, result2 error) {
+	fake.getMaintainerConfigMutex.Lock()
+	defer fake.getMaintainerConfigMutex.Unlock()
+	fake.GetMaintainerConfigStub = nil
+	fake.getMaintainerConfigReturns = struct {
+		result1 maintainerconfig.MaintainerConfig
+		result2 error
+	}{result1, result2}
+}
+
+func (fake *GitHubClient) GetMaintainerConfigReturnsOnCall(i int, result1 maintainerconfig.MaintainerConfig, result2 error) {
+	fake.getMaintainerConfigMutex.Lock()
+	defer fake.getMaintainerConfigMutex.Unlock()
+	fake.GetMaintainerConfigStub = nil
+	if fake.getMaintainerConfigReturnsOnCall == nil {
+		fake.getMaintainerConfigReturnsOnCall = make(map[int]struct {
+			result1 maintainerconfig.MaintainerConfig
+			result2 error
+		})
+	}
+	fake.getMaintainerConfigReturnsOnCall[i] = struct {
+		result1 maintainerconfig.MaintainerConfig
+		result2 error
+	}{result1, result2}
+}
+
 func (fake *GitHubClient) GetPRDetails(arg1 context.Context, arg2 string, arg3 string, arg4 int) (pkg.PRDetails, error) {
 	fake.getPRDetailsMutex.Lock()
 	ret, specificReturn := fake.getPRDetailsReturnsOnCall[len(fake.getPRDetailsArgsForCall)]
@@ -190,6 +368,73 @@ func (fake *GitHubClient) GetPRDetailsReturnsOnCall(i int, result1 pkg.PRDetails
 	}
 	fake.getPRDetailsReturnsOnCall[i] = struct {
 		result1 pkg.PRDetails
+		result2 error
+	}{result1, result2}
+}
+
+func (fake *GitHubClient) ListPRFiles(arg1 context.Context, arg2 string, arg3 string, arg4 int) ([]pkg.PRFile, error) {
+	fake.listPRFilesMutex.Lock()
+	ret, specificReturn := fake.listPRFilesReturnsOnCall[len(fake.listPRFilesArgsForCall)]
+	fake.listPRFilesArgsForCall = append(fake.listPRFilesArgsForCall, struct {
+		arg1 context.Context
+		arg2 string
+		arg3 string
+		arg4 int
+	}{arg1, arg2, arg3, arg4})
+	stub := fake.ListPRFilesStub
+	fakeReturns := fake.listPRFilesReturns
+	fake.recordInvocation("ListPRFiles", []interface{}{arg1, arg2, arg3, arg4})
+	fake.listPRFilesMutex.Unlock()
+	if stub != nil {
+		return stub(arg1, arg2, arg3, arg4)
+	}
+	if specificReturn {
+		return ret.result1, ret.result2
+	}
+	return fakeReturns.result1, fakeReturns.result2
+}
+
+func (fake *GitHubClient) ListPRFilesCallCount() int {
+	fake.listPRFilesMutex.RLock()
+	defer fake.listPRFilesMutex.RUnlock()
+	return len(fake.listPRFilesArgsForCall)
+}
+
+func (fake *GitHubClient) ListPRFilesCalls(stub func(context.Context, string, string, int) ([]pkg.PRFile, error)) {
+	fake.listPRFilesMutex.Lock()
+	defer fake.listPRFilesMutex.Unlock()
+	fake.ListPRFilesStub = stub
+}
+
+func (fake *GitHubClient) ListPRFilesArgsForCall(i int) (context.Context, string, string, int) {
+	fake.listPRFilesMutex.RLock()
+	defer fake.listPRFilesMutex.RUnlock()
+	argsForCall := fake.listPRFilesArgsForCall[i]
+	return argsForCall.arg1, argsForCall.arg2, argsForCall.arg3, argsForCall.arg4
+}
+
+func (fake *GitHubClient) ListPRFilesReturns(result1 []pkg.PRFile, result2 error) {
+	fake.listPRFilesMutex.Lock()
+	defer fake.listPRFilesMutex.Unlock()
+	fake.ListPRFilesStub = nil
+	fake.listPRFilesReturns = struct {
+		result1 []pkg.PRFile
+		result2 error
+	}{result1, result2}
+}
+
+func (fake *GitHubClient) ListPRFilesReturnsOnCall(i int, result1 []pkg.PRFile, result2 error) {
+	fake.listPRFilesMutex.Lock()
+	defer fake.listPRFilesMutex.Unlock()
+	fake.ListPRFilesStub = nil
+	if fake.listPRFilesReturnsOnCall == nil {
+		fake.listPRFilesReturnsOnCall = make(map[int]struct {
+			result1 []pkg.PRFile
+			result2 error
+		})
+	}
+	fake.listPRFilesReturnsOnCall[i] = struct {
+		result1 []pkg.PRFile
 		result2 error
 	}{result1, result2}
 }

@@ -68,6 +68,7 @@ func CreateWatcher(
 	targetVault string,
 	overrideLabel string,
 	autoMergeLabel string,
+	trivialAutoMergeEnabled bool,
 ) pkg.Watcher {
 	publisher := pkg.NewTaskPublisher(
 		createSender,
@@ -91,6 +92,7 @@ func CreateWatcher(
 		taskCreationFilter,
 		overrideLabel,
 		autoMergeLabel,
+		trivialAutoMergeEnabled,
 		trustDecision,
 	)
 }

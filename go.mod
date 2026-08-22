@@ -10,7 +10,7 @@ require (
 	github.com/bborbe/kafka v1.25.9
 	github.com/bborbe/kv v1.21.11
 	github.com/bborbe/log v1.6.23
-	github.com/bborbe/maintainer v0.49.2
+	github.com/bborbe/maintainer v0.50.0
 	github.com/bborbe/parse v1.10.21
 	github.com/bborbe/run v1.9.37
 	github.com/bborbe/sentry v1.9.26
