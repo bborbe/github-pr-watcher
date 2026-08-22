@@ -278,17 +278,18 @@ func (c *githubClient) EnableAutoMerge(
 			Message string `json:"message"`
 		} `json:"errors"`
 	}
-	start := time.Now()
 	resp, err := c.client.Do(ctx, req, &result)
 	if err != nil {
 		return errors.Wrapf(ctx, err, "enable auto merge %s/%s#%d", owner, repo, number)
 	}
 	// GitHub answers a failed mutation with HTTP 200 + a non-empty `errors`
 	// array, so success is NOT resp.StatusCode — it is len(result.Errors) == 0.
+	// No latency field: measuring it would require a direct time.Now() call,
+	// which the go-time rule forbids in business code.
 	failed := len(result.Errors) > 0
 	glog.V(2).Infof(
-		"enable auto merge %s/%s#%d status=%d success=%t latency=%s",
-		owner, repo, number, resp.StatusCode, !failed, time.Since(start),
+		"enable auto merge %s/%s#%d status=%d success=%t",
+		owner, repo, number, resp.StatusCode, !failed,
 	)
 	if failed {
 		return errors.Errorf(
