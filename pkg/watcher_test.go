@@ -21,6 +21,8 @@ import (
 	libtime "github.com/bborbe/time"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+
+	"github.com/bborbe/maintainer/maintainerconfig"
 )
 
 func newTestWatcher(
@@ -132,6 +134,44 @@ func newTestWatcherWithAutoMerge(
 		"",
 		autoMergeLabel,
 		false,
+		trustDecision,
+	)
+}
+
+func newTestWatcherWithTrivialAutoMerge(
+	ghClient pkg.GitHubClient,
+	createSender task.CreateCommandSender,
+	cursorPath string,
+	startTime libtime.DateTime,
+	fakeMetrics *mocks.Metrics,
+	trustDecision trust.Trust,
+	autoMergeLabel string,
+) pkg.Watcher {
+	publisher := pkg.NewTaskPublisher(
+		createSender,
+		trustDecision,
+		fakeMetrics,
+		pkg.TaskConfig{
+			Stage:       "dev",
+			MaxSlugLen:  pkg.DefaultMaxSlugLen,
+			MaxTitleLen: pkg.DefaultMaxTitleLen,
+			TaskSuffix:  "",
+		},
+	)
+	return pkg.NewWatcher(
+		ghClient,
+		publisher,
+		fakeMetrics,
+		cursorPath,
+		startTime,
+		"bborbe",
+		filter.TaskCreationFilters{
+			filter.NewDraftFilter(),
+			filter.NewBotAuthorFilter([]string{"dependabot[bot]"}),
+		},
+		"",
+		autoMergeLabel,
+		true,
 		trustDecision,
 	)
 }
@@ -1488,6 +1528,145 @@ var _ = Describe("pkg.Watcher", func() {
 			Expect(createSender.SendCommandCallCount()).To(Equal(1))
 			_, cmd := createSender.SendCommandArgsForCall(0)
 			Expect(cmd.Frontmatter["task_type"]).To(Equal("pr-review"))
+		})
+	})
+
+	Describe("trivial auto-merge label", func() {
+		prTrivial := func() pkg.PullRequest {
+			return pkg.PullRequest{
+				Number:      10,
+				Owner:       "bborbe",
+				Repo:        "repo",
+				Title:       "bump deps",
+				HTMLURL:     "https://github.com/bborbe/repo/pull/10",
+				AuthorLogin: "alice",
+				IsDraft:     false,
+				UpdatedAt:   libtime.DateTime(time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC)),
+			}
+		}
+		trustAlice := trust.NewAuthorAllowlist([]string{"alice"})
+		optedIn := maintainerconfig.MaintainerConfig{
+			AutoMerge: maintainerconfig.AutoMergeConfig{Trivial: true},
+		}
+		notOptedIn := maintainerconfig.MaintainerConfig{}
+		mechanical := []pkg.PRFile{
+			{
+				Filename: "go.mod",
+				Patch:    "--- a/go.mod\n+++ b/go.mod\n@@ -1,3 +1,3 @@\n-\tgo 1.26.5\n+\tgo 1.26.6\n",
+			},
+		}
+		nonMechanical := []pkg.PRFile{
+			{
+				Filename: "pkg/watcher.go",
+				Patch:    "--- a/pkg/watcher.go\n+++ b/pkg/watcher.go\n@@ -1,3 +1,3 @@\n-package pkg\n+package pkg2\n",
+			},
+		}
+
+		BeforeEach(func() {
+			ghClient.GetPRDetailsReturns(pkg.PRDetails{
+				HeadSHA:  "deadbeef",
+				CloneURL: "https://github.com/bborbe/repo.git",
+				BaseRef:  "master",
+			}, nil)
+			ghClient.EnableAutoMergeReturns(nil)
+			ghClient.AddLabelReturns(nil)
+			createSender.SendCommandReturns(nil)
+		})
+
+		It("applies the auto-merge label to a mechanically trivial PR on an opted-in repo", func() {
+			ghClient.SearchPRsReturns(pkg.SearchResult{
+				PullRequests:  []pkg.PullRequest{prTrivial()},
+				RateRemaining: 100,
+			}, nil)
+			ghClient.GetMaintainerConfigReturns(optedIn, nil)
+			ghClient.ListPRFilesReturns(mechanical, nil)
+
+			w := newTestWatcherWithTrivialAutoMerge(
+				ghClient,
+				createSender,
+				cursorPath,
+				startTime,
+				fakeMetrics,
+				trustAlice,
+				"auto-merge",
+			)
+			Expect(w.Poll(ctx)).NotTo(HaveOccurred())
+
+			Expect(ghClient.AddLabelCallCount()).To(Equal(1))
+			_, owner, repo, number, label := ghClient.AddLabelArgsForCall(0)
+			Expect(owner).To(Equal("bborbe"))
+			Expect(repo).To(Equal("repo"))
+			Expect(number).To(Equal(10))
+			Expect(label).To(Equal("auto-merge"))
+			// the freshly-applied label feeds arming this poll: EnableAutoMerge runs
+			Expect(ghClient.EnableAutoMergeCallCount()).To(Equal(1))
+		})
+
+		It("does not apply the label when the repo is not opted in", func() {
+			ghClient.SearchPRsReturns(pkg.SearchResult{
+				PullRequests:  []pkg.PullRequest{prTrivial()},
+				RateRemaining: 100,
+			}, nil)
+			ghClient.GetMaintainerConfigReturns(notOptedIn, nil)
+			ghClient.ListPRFilesReturns(mechanical, nil)
+
+			w := newTestWatcherWithTrivialAutoMerge(
+				ghClient,
+				createSender,
+				cursorPath,
+				startTime,
+				fakeMetrics,
+				trustAlice,
+				"auto-merge",
+			)
+			Expect(w.Poll(ctx)).NotTo(HaveOccurred())
+
+			Expect(ghClient.AddLabelCallCount()).To(Equal(0))
+			Expect(ghClient.EnableAutoMergeCallCount()).To(Equal(0))
+		})
+
+		It("does not apply the label to a non-trivial PR even when opted in", func() {
+			ghClient.SearchPRsReturns(pkg.SearchResult{
+				PullRequests:  []pkg.PullRequest{prTrivial()},
+				RateRemaining: 100,
+			}, nil)
+			ghClient.GetMaintainerConfigReturns(optedIn, nil)
+			ghClient.ListPRFilesReturns(nonMechanical, nil)
+
+			w := newTestWatcherWithTrivialAutoMerge(
+				ghClient,
+				createSender,
+				cursorPath,
+				startTime,
+				fakeMetrics,
+				trustAlice,
+				"auto-merge",
+			)
+			Expect(w.Poll(ctx)).NotTo(HaveOccurred())
+
+			Expect(ghClient.AddLabelCallCount()).To(Equal(0))
+		})
+
+		It("does not apply the label when the trivial flow is disabled", func() {
+			ghClient.SearchPRsReturns(pkg.SearchResult{
+				PullRequests:  []pkg.PullRequest{prTrivial()},
+				RateRemaining: 100,
+			}, nil)
+			ghClient.GetMaintainerConfigReturns(optedIn, nil)
+			ghClient.ListPRFilesReturns(mechanical, nil)
+
+			w := newTestWatcherWithAutoMerge(
+				ghClient,
+				createSender,
+				cursorPath,
+				startTime,
+				fakeMetrics,
+				trustAlice,
+				"auto-merge",
+			)
+			Expect(w.Poll(ctx)).NotTo(HaveOccurred())
+
+			Expect(ghClient.AddLabelCallCount()).To(Equal(0))
 		})
 	})
 })

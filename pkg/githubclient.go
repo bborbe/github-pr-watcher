@@ -13,6 +13,7 @@ import (
 
 	"github.com/bborbe/errors"
 	libtime "github.com/bborbe/time"
+	"github.com/golang/glog"
 	gogithub "github.com/google/go-github/v62/github"
 
 	"github.com/bborbe/maintainer/maintainerconfig"
@@ -169,6 +170,11 @@ func (c *githubClient) SearchPRs(
 
 	prs := make([]PullRequest, 0, len(result.Issues))
 	for _, issue := range result.Issues {
+		select {
+		case <-ctx.Done():
+			return SearchResult{}, errors.Wrapf(ctx, ctx.Err(), "search github prs scope=%s", scope)
+		default:
+		}
 		repoURL := issue.GetRepositoryURL()
 		owner, repo := parseOwnerRepo(repoURL)
 		prs = append(prs, PullRequest{
@@ -272,9 +278,15 @@ func (c *githubClient) EnableAutoMerge(
 			Message string `json:"message"`
 		} `json:"errors"`
 	}
-	if _, err := c.client.Do(ctx, req, &result); err != nil {
+	start := time.Now()
+	resp, err := c.client.Do(ctx, req, &result)
+	if err != nil {
 		return errors.Wrapf(ctx, err, "enable auto merge %s/%s#%d", owner, repo, number)
 	}
+	glog.V(2).Infof(
+		"enable auto merge %s/%s#%d status=%d latency=%s",
+		owner, repo, number, resp.StatusCode, time.Since(start),
+	)
 	if len(result.Errors) > 0 {
 		return errors.Errorf(
 			ctx,
@@ -346,6 +358,11 @@ func (c *githubClient) ListPRFiles(
 	var files []PRFile
 	opts := &gogithub.ListOptions{PerPage: 100}
 	for {
+		select {
+		case <-ctx.Done():
+			return nil, errors.Wrapf(ctx, ctx.Err(), "list pr files %s/%s#%d", owner, repo, number)
+		default:
+		}
 		page, resp, err := c.client.PullRequests.ListFiles(ctx, owner, repo, number, opts)
 		if err != nil {
 			return nil, errors.Wrapf(
