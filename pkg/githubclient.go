@@ -283,11 +283,14 @@ func (c *githubClient) EnableAutoMerge(
 	if err != nil {
 		return errors.Wrapf(ctx, err, "enable auto merge %s/%s#%d", owner, repo, number)
 	}
+	// GitHub answers a failed mutation with HTTP 200 + a non-empty `errors`
+	// array, so success is NOT resp.StatusCode — it is len(result.Errors) == 0.
+	failed := len(result.Errors) > 0
 	glog.V(2).Infof(
-		"enable auto merge %s/%s#%d status=%d latency=%s",
-		owner, repo, number, resp.StatusCode, time.Since(start),
+		"enable auto merge %s/%s#%d status=%d success=%t latency=%s",
+		owner, repo, number, resp.StatusCode, !failed, time.Since(start),
 	)
-	if len(result.Errors) > 0 {
+	if failed {
 		return errors.Errorf(
 			ctx,
 			"enable auto merge %s/%s#%d: %s %s",
