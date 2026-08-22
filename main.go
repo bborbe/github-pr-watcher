@@ -145,6 +145,8 @@ type application struct {
 	TopicPrefix base.TopicPrefix `required:"false" arg:"topic-prefix" env:"TOPIC_PREFIX" usage:"Kafka topic prefix for CQRS topic construction"`
 
 	TriggerHandler http.Handler
+	WebhookSecret  string `required:"false" arg:"webhook-secret" env:"WEBHOOK_SECRET" usage:"GitHub webhook secret for HMAC verification of /webhook/github-pr"`
+	WebhookHandler http.Handler
 }
 
 // resolveAuth determines the GitHub auth mode from environment variables and returns
@@ -311,6 +313,16 @@ func (a *application) Run(ctx context.Context, _ libsentry.Client) error {
 	triggerHandler := factory.CreateSinglePRTriggerHandler(triggerPRReviewSender)
 	a.TriggerHandler = libhttp.NewJSONErrorHandler(triggerHandler)
 
+	// Webhook receiver reuses the same sender: every signature-verified
+	// pull_request delivery publishes a TriggerPRReviewCommand, so the in-pod
+	// consumer (fetch → filter → trust → CreateTaskCommand) applies unchanged.
+	webhookHandler := factory.CreateWebhookHandler(
+		triggerPRReviewSender,
+		a.WebhookSecret,
+		metrics,
+	)
+	a.WebhookHandler = libhttp.NewJSONErrorHandler(webhookHandler)
+
 	// In-pod command consumer: third run.Func alongside poll + HTTP.
 	// session-scoped offset store — replays the request topic from OffsetOldest
 	// on pod restart; safe because the downstream CreateTaskCommand is idempotent
@@ -383,6 +395,7 @@ func (a *application) createHTTPServer(poll run.Func) run.Func {
 			Handler(log.NewSetLoglevelHandler(ctx, log.NewLogLevelSetter(2, 5*time.Minute)))
 		router.Path("/check").Handler(libhttp.NewBackgroundRunHandler(ctx, poll))
 		router.Path("/trigger").Handler(a.TriggerHandler)
+		router.Path("/webhook/github-pr").Handler(a.WebhookHandler)
 		glog.V(2).Infof("http server listening on %s", a.Listen)
 		return libhttp.NewServer(a.Listen, router).Run(ctx)
 	}
