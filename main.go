@@ -396,6 +396,7 @@ func (a *application) createHTTPServer(poll run.Func) run.Func {
 		router.Path("/metrics").Handler(promhttp.Handler())
 		router.Path("/setloglevel/{level}").
 			Handler(log.NewSetLoglevelHandler(ctx, log.NewLogLevelSetter(2, 5*time.Minute)))
+		router.Path("/gc").Handler(libhttp.NewGarbageCollectorHandler())
 		router.Path("/check").Handler(libhttp.NewBackgroundRunHandler(ctx, poll))
 		router.Path("/trigger").Handler(a.TriggerHandler)
 		router.Path("/webhook/github-pr").Handler(a.WebhookHandler)
