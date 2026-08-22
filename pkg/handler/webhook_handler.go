@@ -13,11 +13,11 @@ import (
 	"io"
 	"net/http"
 	"strings"
-	"time"
 
 	"github.com/bborbe/errors"
 	"github.com/bborbe/github-pr-watcher/pkg/command"
 	libhttp "github.com/bborbe/http"
+	libtime "github.com/bborbe/time"
 	"github.com/golang/glog"
 )
 
@@ -25,6 +25,8 @@ const (
 	webhookSignatureHeader = "X-Hub-Signature-256"
 	webhookEventHeader     = "X-GitHub-Event"
 )
+
+//counterfeiter:generate -o ../../mocks/webhook_metrics.go --fake-name WebhookMetrics . WebhookMetrics
 
 // WebhookMetrics is the narrow slice of watcher metrics the webhook handler
 // records. pkg.Metrics satisfies it structurally, keeping this handler free
@@ -50,11 +52,13 @@ func NewWebhookHandler(
 	sender command.TriggerPRReviewCommandSender,
 	secret string,
 	metrics WebhookMetrics,
+	clock libtime.CurrentDateTimeGetter,
 ) WebhookHandler {
 	return &webhookHandler{
 		sender:  sender,
 		secret:  secret,
 		metrics: metrics,
+		clock:   clock,
 	}
 }
 
@@ -62,6 +66,7 @@ type webhookHandler struct {
 	sender  command.TriggerPRReviewCommandSender
 	secret  string
 	metrics WebhookMetrics
+	clock   libtime.CurrentDateTimeGetter
 }
 
 // dispatchActions are the pull_request actions worth triggering a review for.
@@ -79,7 +84,7 @@ func (h *webhookHandler) ServeHTTP(
 	resp http.ResponseWriter,
 	req *http.Request,
 ) error {
-	start := time.Now()
+	start := h.clock.Now()
 	body, err := io.ReadAll(req.Body)
 	if err != nil {
 		return libhttp.WrapWithStatusCode(
@@ -135,7 +140,7 @@ func (h *webhookHandler) ServeHTTP(
 	}
 
 	h.metrics.IncWebhookDelivery("success")
-	h.metrics.ObserveWebhookDispatchLatency(time.Since(start).Seconds())
+	h.metrics.ObserveWebhookDispatchLatency(h.clock.Now().Sub(start).Duration().Seconds())
 	glog.V(2).Infof(
 		"webhook accepted url=%s action=%s",
 		payload.PullRequest.HTMLURL,

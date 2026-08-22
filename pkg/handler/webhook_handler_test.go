@@ -17,6 +17,7 @@ import (
 	"github.com/bborbe/github-pr-watcher/mocks"
 	"github.com/bborbe/github-pr-watcher/pkg/handler"
 	libhttp "github.com/bborbe/http"
+	libtime "github.com/bborbe/time"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
@@ -42,7 +43,14 @@ var _ = Describe("WebhookHandler", func() {
 		ctx = context.Background()
 		sender = new(mocks.TriggerPRReviewCommandSender)
 		metrics = new(mocks.Metrics)
-		h = libhttp.NewErrorHandler(handler.NewWebhookHandler(sender, webhookTestSecret, metrics))
+		h = libhttp.NewErrorHandler(
+			handler.NewWebhookHandler(
+				sender,
+				webhookTestSecret,
+				metrics,
+				libtime.NewCurrentDateTime(),
+			),
+		)
 	})
 
 	// webhookRequest builds a signed POST /webhook/github-pr with the given
@@ -97,7 +105,9 @@ var _ = Describe("WebhookHandler", func() {
 		)
 
 		It("rejects everything when the secret is not configured (fail closed)", func() {
-			closed := libhttp.NewErrorHandler(handler.NewWebhookHandler(sender, "", metrics))
+			closed := libhttp.NewErrorHandler(
+				handler.NewWebhookHandler(sender, "", metrics, libtime.NewCurrentDateTime()),
+			)
 			req := webhookRequest("pull_request", pullRequestPayload("opened"))
 			resp := httptest.NewRecorder()
 			closed.ServeHTTP(resp, req)

@@ -320,6 +320,7 @@ func (a *application) Run(ctx context.Context, _ libsentry.Client) error {
 		triggerPRReviewSender,
 		a.WebhookSecret,
 		metrics,
+		currentDateTime,
 	)
 	a.WebhookHandler = libhttp.NewJSONErrorHandler(webhookHandler)
 
