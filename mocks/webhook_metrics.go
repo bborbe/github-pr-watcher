@@ -7,20 +7,10 @@ package mocks
 import (
 	"sync"
 
-	"github.com/bborbe/github-pr-watcher/pkg"
+	"github.com/bborbe/github-pr-watcher/pkg/handler"
 )
 
-type Metrics struct {
-	IncPRPublishedStub        func(string)
-	incPRPublishedMutex       sync.RWMutex
-	incPRPublishedArgsForCall []struct {
-		arg1 string
-	}
-	IncPollCycleStub        func(string)
-	incPollCycleMutex       sync.RWMutex
-	incPollCycleArgsForCall []struct {
-		arg1 string
-	}
+type WebhookMetrics struct {
 	IncWebhookDeliveryStub        func(string)
 	incWebhookDeliveryMutex       sync.RWMutex
 	incWebhookDeliveryArgsForCall []struct {
@@ -39,71 +29,7 @@ type Metrics struct {
 	invocationsMutex sync.RWMutex
 }
 
-func (fake *Metrics) IncPRPublished(arg1 string) {
-	fake.incPRPublishedMutex.Lock()
-	fake.incPRPublishedArgsForCall = append(fake.incPRPublishedArgsForCall, struct {
-		arg1 string
-	}{arg1})
-	stub := fake.IncPRPublishedStub
-	fake.recordInvocation("IncPRPublished", []interface{}{arg1})
-	fake.incPRPublishedMutex.Unlock()
-	if stub != nil {
-		fake.IncPRPublishedStub(arg1)
-	}
-}
-
-func (fake *Metrics) IncPRPublishedCallCount() int {
-	fake.incPRPublishedMutex.RLock()
-	defer fake.incPRPublishedMutex.RUnlock()
-	return len(fake.incPRPublishedArgsForCall)
-}
-
-func (fake *Metrics) IncPRPublishedCalls(stub func(string)) {
-	fake.incPRPublishedMutex.Lock()
-	defer fake.incPRPublishedMutex.Unlock()
-	fake.IncPRPublishedStub = stub
-}
-
-func (fake *Metrics) IncPRPublishedArgsForCall(i int) string {
-	fake.incPRPublishedMutex.RLock()
-	defer fake.incPRPublishedMutex.RUnlock()
-	argsForCall := fake.incPRPublishedArgsForCall[i]
-	return argsForCall.arg1
-}
-
-func (fake *Metrics) IncPollCycle(arg1 string) {
-	fake.incPollCycleMutex.Lock()
-	fake.incPollCycleArgsForCall = append(fake.incPollCycleArgsForCall, struct {
-		arg1 string
-	}{arg1})
-	stub := fake.IncPollCycleStub
-	fake.recordInvocation("IncPollCycle", []interface{}{arg1})
-	fake.incPollCycleMutex.Unlock()
-	if stub != nil {
-		fake.IncPollCycleStub(arg1)
-	}
-}
-
-func (fake *Metrics) IncPollCycleCallCount() int {
-	fake.incPollCycleMutex.RLock()
-	defer fake.incPollCycleMutex.RUnlock()
-	return len(fake.incPollCycleArgsForCall)
-}
-
-func (fake *Metrics) IncPollCycleCalls(stub func(string)) {
-	fake.incPollCycleMutex.Lock()
-	defer fake.incPollCycleMutex.Unlock()
-	fake.IncPollCycleStub = stub
-}
-
-func (fake *Metrics) IncPollCycleArgsForCall(i int) string {
-	fake.incPollCycleMutex.RLock()
-	defer fake.incPollCycleMutex.RUnlock()
-	argsForCall := fake.incPollCycleArgsForCall[i]
-	return argsForCall.arg1
-}
-
-func (fake *Metrics) IncWebhookDelivery(arg1 string) {
+func (fake *WebhookMetrics) IncWebhookDelivery(arg1 string) {
 	fake.incWebhookDeliveryMutex.Lock()
 	fake.incWebhookDeliveryArgsForCall = append(fake.incWebhookDeliveryArgsForCall, struct {
 		arg1 string
@@ -116,26 +42,26 @@ func (fake *Metrics) IncWebhookDelivery(arg1 string) {
 	}
 }
 
-func (fake *Metrics) IncWebhookDeliveryCallCount() int {
+func (fake *WebhookMetrics) IncWebhookDeliveryCallCount() int {
 	fake.incWebhookDeliveryMutex.RLock()
 	defer fake.incWebhookDeliveryMutex.RUnlock()
 	return len(fake.incWebhookDeliveryArgsForCall)
 }
 
-func (fake *Metrics) IncWebhookDeliveryCalls(stub func(string)) {
+func (fake *WebhookMetrics) IncWebhookDeliveryCalls(stub func(string)) {
 	fake.incWebhookDeliveryMutex.Lock()
 	defer fake.incWebhookDeliveryMutex.Unlock()
 	fake.IncWebhookDeliveryStub = stub
 }
 
-func (fake *Metrics) IncWebhookDeliveryArgsForCall(i int) string {
+func (fake *WebhookMetrics) IncWebhookDeliveryArgsForCall(i int) string {
 	fake.incWebhookDeliveryMutex.RLock()
 	defer fake.incWebhookDeliveryMutex.RUnlock()
 	argsForCall := fake.incWebhookDeliveryArgsForCall[i]
 	return argsForCall.arg1
 }
 
-func (fake *Metrics) IncWebhookSignatureRejected() {
+func (fake *WebhookMetrics) IncWebhookSignatureRejected() {
 	fake.incWebhookSignatureRejectedMutex.Lock()
 	fake.incWebhookSignatureRejectedArgsForCall = append(fake.incWebhookSignatureRejectedArgsForCall, struct {
 	}{})
@@ -147,19 +73,19 @@ func (fake *Metrics) IncWebhookSignatureRejected() {
 	}
 }
 
-func (fake *Metrics) IncWebhookSignatureRejectedCallCount() int {
+func (fake *WebhookMetrics) IncWebhookSignatureRejectedCallCount() int {
 	fake.incWebhookSignatureRejectedMutex.RLock()
 	defer fake.incWebhookSignatureRejectedMutex.RUnlock()
 	return len(fake.incWebhookSignatureRejectedArgsForCall)
 }
 
-func (fake *Metrics) IncWebhookSignatureRejectedCalls(stub func()) {
+func (fake *WebhookMetrics) IncWebhookSignatureRejectedCalls(stub func()) {
 	fake.incWebhookSignatureRejectedMutex.Lock()
 	defer fake.incWebhookSignatureRejectedMutex.Unlock()
 	fake.IncWebhookSignatureRejectedStub = stub
 }
 
-func (fake *Metrics) ObserveWebhookDispatchLatency(arg1 float64) {
+func (fake *WebhookMetrics) ObserveWebhookDispatchLatency(arg1 float64) {
 	fake.observeWebhookDispatchLatencyMutex.Lock()
 	fake.observeWebhookDispatchLatencyArgsForCall = append(fake.observeWebhookDispatchLatencyArgsForCall, struct {
 		arg1 float64
@@ -172,26 +98,26 @@ func (fake *Metrics) ObserveWebhookDispatchLatency(arg1 float64) {
 	}
 }
 
-func (fake *Metrics) ObserveWebhookDispatchLatencyCallCount() int {
+func (fake *WebhookMetrics) ObserveWebhookDispatchLatencyCallCount() int {
 	fake.observeWebhookDispatchLatencyMutex.RLock()
 	defer fake.observeWebhookDispatchLatencyMutex.RUnlock()
 	return len(fake.observeWebhookDispatchLatencyArgsForCall)
 }
 
-func (fake *Metrics) ObserveWebhookDispatchLatencyCalls(stub func(float64)) {
+func (fake *WebhookMetrics) ObserveWebhookDispatchLatencyCalls(stub func(float64)) {
 	fake.observeWebhookDispatchLatencyMutex.Lock()
 	defer fake.observeWebhookDispatchLatencyMutex.Unlock()
 	fake.ObserveWebhookDispatchLatencyStub = stub
 }
 
-func (fake *Metrics) ObserveWebhookDispatchLatencyArgsForCall(i int) float64 {
+func (fake *WebhookMetrics) ObserveWebhookDispatchLatencyArgsForCall(i int) float64 {
 	fake.observeWebhookDispatchLatencyMutex.RLock()
 	defer fake.observeWebhookDispatchLatencyMutex.RUnlock()
 	argsForCall := fake.observeWebhookDispatchLatencyArgsForCall[i]
 	return argsForCall.arg1
 }
 
-func (fake *Metrics) Invocations() map[string][][]interface{} {
+func (fake *WebhookMetrics) Invocations() map[string][][]interface{} {
 	fake.invocationsMutex.RLock()
 	defer fake.invocationsMutex.RUnlock()
 	copiedInvocations := map[string][][]interface{}{}
@@ -201,7 +127,7 @@ func (fake *Metrics) Invocations() map[string][][]interface{} {
 	return copiedInvocations
 }
 
-func (fake *Metrics) recordInvocation(key string, args []interface{}) {
+func (fake *WebhookMetrics) recordInvocation(key string, args []interface{}) {
 	fake.invocationsMutex.Lock()
 	defer fake.invocationsMutex.Unlock()
 	if fake.invocations == nil {
@@ -213,4 +139,4 @@ func (fake *Metrics) recordInvocation(key string, args []interface{}) {
 	fake.invocations[key] = append(fake.invocations[key], args)
 }
 
-var _ pkg.Metrics = new(Metrics)
+var _ handler.WebhookMetrics = new(WebhookMetrics)
