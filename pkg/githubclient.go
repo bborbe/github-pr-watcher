@@ -13,7 +13,10 @@ import (
 
 	"github.com/bborbe/errors"
 	libtime "github.com/bborbe/time"
+	"github.com/golang/glog"
 	gogithub "github.com/google/go-github/v62/github"
+
+	"github.com/bborbe/maintainer/maintainerconfig"
 )
 
 // PullRequest holds the fields the watcher needs from a GitHub PR.
@@ -103,6 +106,30 @@ type GitHubClient interface {
 	// applies while something still blocks the merge. Requires the
 	// authenticating identity to hold Pull requests: Write on the repo.
 	EnableAutoMerge(ctx context.Context, owner, repo string, number int) error
+
+	// GetMaintainerConfig fetches and parses the repo's `.maintainer.yaml`
+	// trust file via maintainerconfig. An absent file (404) returns the
+	// zero-value config with nil error — matching the "opt-in, never
+	// defaulted-on" trust-gate contract. Other errors are wrapped.
+	GetMaintainerConfig(
+		ctx context.Context,
+		owner, repo string,
+	) (maintainerconfig.MaintainerConfig, error)
+
+	// ListPRFiles returns the PR's changed files with their patches, used by
+	// the mechanical triviality classifier.
+	ListPRFiles(ctx context.Context, owner, repo string, number int) ([]PRFile, error)
+
+	// AddLabel adds a label to a PR (a no-op when already present). Requires
+	// the authenticating identity to hold Pull requests: Write on the repo.
+	AddLabel(ctx context.Context, owner, repo string, number int, label string) error
+}
+
+// PRFile is a single changed file in a PR with its patch, as returned by the
+// pull-request files endpoint. Patch may be empty for large/binary files.
+type PRFile struct {
+	Filename string
+	Patch    string
 }
 
 // NewGitHubClient returns a GitHubClient backed by the real GitHub API.
@@ -143,6 +170,11 @@ func (c *githubClient) SearchPRs(
 
 	prs := make([]PullRequest, 0, len(result.Issues))
 	for _, issue := range result.Issues {
+		select {
+		case <-ctx.Done():
+			return SearchResult{}, errors.Wrapf(ctx, ctx.Err(), "search github prs scope=%s", scope)
+		default:
+		}
 		repoURL := issue.GetRepositoryURL()
 		owner, repo := parseOwnerRepo(repoURL)
 		prs = append(prs, PullRequest{
@@ -246,16 +278,135 @@ func (c *githubClient) EnableAutoMerge(
 			Message string `json:"message"`
 		} `json:"errors"`
 	}
-	if _, err := c.client.Do(ctx, req, &result); err != nil {
+	resp, err := c.client.Do(ctx, req, &result)
+	if err != nil {
 		return errors.Wrapf(ctx, err, "enable auto merge %s/%s#%d", owner, repo, number)
 	}
-	if len(result.Errors) > 0 {
+	// GitHub answers a failed mutation with HTTP 200 + a non-empty `errors`
+	// array, so success is NOT resp.StatusCode — it is len(result.Errors) == 0.
+	// No latency field: measuring it would require a direct time.Now() call,
+	// which the go-time rule forbids in business code.
+	failed := len(result.Errors) > 0
+	glog.V(2).Infof(
+		"enable auto merge %s/%s#%d status=%d success=%t",
+		owner, repo, number, resp.StatusCode, !failed,
+	)
+	if failed {
 		return errors.Errorf(
 			ctx,
 			"enable auto merge %s/%s#%d: %s %s",
 			owner, repo, number,
 			result.Errors[0].Type,
 			result.Errors[0].Message,
+		)
+	}
+	return nil
+}
+
+// GetMaintainerConfig fetches and parses the repo's `.maintainer.yaml` trust
+// file. A 404 (file absent) returns the zero-value config with nil error —
+// the repo simply has not opted in. Any other failure is wrapped.
+func (c *githubClient) GetMaintainerConfig(
+	ctx context.Context,
+	owner, repo string,
+) (maintainerconfig.MaintainerConfig, error) {
+	content, _, resp, err := c.client.Repositories.GetContents(
+		ctx,
+		owner,
+		repo,
+		".maintainer.yaml",
+		nil,
+	)
+	if err != nil {
+		if resp != nil && resp.StatusCode == http.StatusNotFound {
+			return maintainerconfig.MaintainerConfig{}, nil
+		}
+		return maintainerconfig.MaintainerConfig{}, errors.Wrapf(
+			ctx,
+			err,
+			"get .maintainer.yaml %s/%s",
+			owner,
+			repo,
+		)
+	}
+	raw, err := content.GetContent()
+	if err != nil {
+		return maintainerconfig.MaintainerConfig{}, errors.Wrapf(
+			ctx,
+			err,
+			"decode .maintainer.yaml %s/%s",
+			owner,
+			repo,
+		)
+	}
+	cfg, err := maintainerconfig.Parse(ctx, []byte(raw))
+	if err != nil {
+		return maintainerconfig.MaintainerConfig{}, errors.Wrapf(
+			ctx,
+			err,
+			"parse .maintainer.yaml %s/%s",
+			owner,
+			repo,
+		)
+	}
+	return cfg, nil
+}
+
+// ListPRFiles pages through the PR's changed files. Pagination is followed to
+// exhaustion (GitHub caps at 100 per page; large PRs span multiple pages).
+func (c *githubClient) ListPRFiles(
+	ctx context.Context,
+	owner, repo string,
+	number int,
+) ([]PRFile, error) {
+	var files []PRFile
+	opts := &gogithub.ListOptions{PerPage: 100}
+	for {
+		select {
+		case <-ctx.Done():
+			return nil, errors.Wrapf(ctx, ctx.Err(), "list pr files %s/%s#%d", owner, repo, number)
+		default:
+		}
+		page, resp, err := c.client.PullRequests.ListFiles(ctx, owner, repo, number, opts)
+		if err != nil {
+			return nil, errors.Wrapf(
+				ctx,
+				err,
+				"list pr files %s/%s#%d",
+				owner,
+				repo,
+				number,
+			)
+		}
+		for _, f := range page {
+			files = append(files, PRFile{Filename: f.GetFilename(), Patch: f.GetPatch()})
+		}
+		if resp.NextPage == 0 {
+			break
+		}
+		opts.Page = resp.NextPage
+	}
+	return files, nil
+}
+
+// AddLabel adds a label to a PR. Adding an already-present label is a no-op on
+// the GitHub side; the call still succeeds.
+func (c *githubClient) AddLabel(
+	ctx context.Context,
+	owner, repo string,
+	number int,
+	label string,
+) error {
+	_, _, err := c.client.Issues.AddLabelsToIssue(ctx, owner, repo, number, []string{label})
+	if err != nil {
+		return errors.Wrapf(
+			ctx,
+			err,
+			"add label %q %s/%s#%d",
+			label,
+			owner,
+			repo,
+			number,
 		)
 	}
 	return nil

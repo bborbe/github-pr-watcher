@@ -187,19 +187,21 @@ func NewWatcher(
 	taskCreationFilter filter.TaskCreationFilter,
 	overrideLabel string,
 	autoMergeLabel string,
+	trivialAutoMergeEnabled bool,
 	trustDecision trust.Trust,
 ) Watcher {
 	return &watcher{
-		ghClient:           ghClient,
-		publisher:          publisher,
-		metrics:            metrics,
-		cursorPath:         cursorPath,
-		startTime:          startTime,
-		scope:              scope,
-		taskCreationFilter: taskCreationFilter,
-		overrideLabel:      overrideLabel,
-		autoMergeLabel:     autoMergeLabel,
-		trustDecision:      trustDecision,
+		ghClient:                ghClient,
+		publisher:               publisher,
+		metrics:                 metrics,
+		cursorPath:              cursorPath,
+		startTime:               startTime,
+		scope:                   scope,
+		taskCreationFilter:      taskCreationFilter,
+		overrideLabel:           overrideLabel,
+		autoMergeLabel:          autoMergeLabel,
+		trivialAutoMergeEnabled: trivialAutoMergeEnabled,
+		trustDecision:           trustDecision,
 	}
 }
 
@@ -219,6 +221,13 @@ type watcher struct {
 	// auto-merge (EnableAutoMerge) so GitHub merges once checks + required
 	// reviews are green. Empty disables the auto-merge path entirely.
 	autoMergeLabel string
+	// trivialAutoMergeEnabled turns on the automatic trivial-PR flow: when a
+	// repo opts in via `.maintainer.yaml` `autoMerge.trivial` and the PR is
+	// mechanically trivial (stage-1 allow-list; the LLM stage-2 fallback is a
+	// follow-up), the watcher applies the auto-merge label itself instead of
+	// waiting for the author to. Off by default; the flag is the fleet-wide
+	// kill switch in addition to the per-repo `.maintainer.yaml` gate.
+	trivialAutoMergeEnabled bool
 	// trustDecision gates auto-merge arming to trusted authors (the label
 	// alone is insufficient — an untrusted author must not be able to opt
 	// any PR into auto-merge).
@@ -379,6 +388,16 @@ func (w *watcher) processPR(
 		return libtime.DateTime{}, false
 	}
 
+	// Automatic trivial flow: when the repo opted in via `.maintainer.yaml`
+	// `autoMerge.trivial` and the PR is mechanically trivial, apply the
+	// auto-merge label so the arming path below picks it up this poll. Never
+	// merges directly — GitHub-native auto-merge on green executes the merge
+	// (never-merge boundary held). The author-applied label is not needed.
+	if w.trivialAutoMergeEnabled && !slices.Contains(pr.Labels, w.autoMergeLabel) &&
+		w.maybeLabelTrivial(ctx, pr) {
+		pr.Labels = append(pr.Labels, w.autoMergeLabel)
+	}
+
 	// Auto-merge arming: a trusted author carrying the auto-merge label opts
 	// the PR into GitHub-native auto-merge. Side effect only — the review path
 	// continues unchanged below (the ruleset's required review must still
@@ -494,6 +513,50 @@ func (w *watcher) tryAutoMerge(
 	}
 	glog.V(2).Infof("armed auto-merge pr=%s/%s#%d", pr.Owner, pr.Repo, pr.Number)
 	w.metrics.IncPRPublished("auto_merge")
+	return true
+}
+
+// maybeLabelTrivial applies the auto-merge label to a mechanically trivial PR
+// when the repo opted in via `.maintainer.yaml` `autoMerge.trivial`. It returns
+// true when the label was applied, false otherwise (not opted in, not trivial,
+// or a transient error). This is the automatic counterpart to the author-applied
+// label — the watcher decides triviality itself. It never merges directly: the
+// label only feeds the arming path (tryAutoMerge), which delegates the merge to
+// GitHub-native auto-merge on green. Callers must have already confirmed the
+// label is absent.
+func (w *watcher) maybeLabelTrivial(ctx context.Context, pr PullRequest) bool {
+	cfg, err := w.ghClient.GetMaintainerConfig(ctx, pr.Owner, pr.Repo)
+	if err != nil {
+		glog.Errorf(
+			"trivial auto-merge: get maintainer config failed pr=%s err=%v",
+			pr.HTMLURL,
+			err,
+		)
+		w.metrics.IncPRPublished("error")
+		return false
+	}
+	if !cfg.AutoMerge.Trivial {
+		glog.V(3).Infof("trivial auto-merge: repo not opted in pr=%s/%s", pr.Owner, pr.Repo)
+		return false
+	}
+	files, err := w.ghClient.ListPRFiles(ctx, pr.Owner, pr.Repo, pr.Number)
+	if err != nil {
+		glog.Errorf("trivial auto-merge: list pr files failed pr=%s err=%v", pr.HTMLURL, err)
+		w.metrics.IncPRPublished("error")
+		return false
+	}
+	if !ClassifyTrivial(files) {
+		glog.V(3).Infof("trivial auto-merge: not trivial pr=%s/%s#%d", pr.Owner, pr.Repo, pr.Number)
+		w.metrics.IncPRPublished("auto_merge_not_trivial")
+		return false
+	}
+	if err := w.ghClient.AddLabel(ctx, pr.Owner, pr.Repo, pr.Number, w.autoMergeLabel); err != nil {
+		glog.Errorf("trivial auto-merge: add label failed pr=%s err=%v", pr.HTMLURL, err)
+		w.metrics.IncPRPublished("error")
+		return false
+	}
+	glog.V(2).Infof("trivial auto-merge: labeled pr=%s/%s#%d", pr.Owner, pr.Repo, pr.Number)
+	w.metrics.IncPRPublished("auto_merge_labeled")
 	return true
 }
 

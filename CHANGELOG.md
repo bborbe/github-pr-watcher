@@ -5,6 +5,10 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+- feat: automatically apply the `auto-merge` label to mechanically trivial PRs on repos opted in via `.maintainer.yaml` `autoMerge.trivial` (`TRIVIAL_AUTO_MERGE`; stage-1 allow-list, LLM stage-2 follow-up)
+
 ## v0.6.1
 
 - chore: update go module dependencies
