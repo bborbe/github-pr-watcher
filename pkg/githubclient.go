@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"net/http"
 	"path"
+	"strconv"
+	"sync"
 	"time"
 
 	"github.com/bborbe/errors"
@@ -123,6 +125,15 @@ type GitHubClient interface {
 	// AddLabel adds a label to a PR (a no-op when already present). Requires
 	// the authenticating identity to hold Pull requests: Write on the repo.
 	AddLabel(ctx context.Context, owner, repo string, number int, label string) error
+
+	// RateLimitRemaining returns the requests remaining in the current primary
+	// rate-limit window, as reported by the last API response's
+	// X-RateLimit-Remaining header. Zero until the first request populates it.
+	// Both watchers share the same App installation token, so this watcher's
+	// reading reflects the shared 12,500/hour budget — the metric built from
+	// this is the alert surface that catches quota exhaustion BEFORE the
+	// fleet-wide 403 stall (2026-08-23 incident).
+	RateLimitRemaining() int
 }
 
 // PRFile is a single changed file in a PR with its patch, as returned by the
@@ -134,15 +145,73 @@ type PRFile struct {
 
 // NewGitHubClient returns a GitHubClient backed by the real GitHub API.
 // The httpClient must already carry authentication (App auth via
-// lib/githubapp.NewClient).
+// lib/githubapp.NewClient). The client's transport is wrapped to observe
+// X-RateLimit-Remaining on every response, so RateLimitRemaining() reflects
+// the shared App token's live quota.
 func NewGitHubClient(httpClient *http.Client) GitHubClient {
-	return &githubClient{
-		client: gogithub.NewClient(httpClient),
+	c := &githubClient{}
+	inner := httpClient.Transport
+	if inner == nil {
+		inner = http.DefaultTransport
 	}
+	httpClient.Transport = &rateCapturingTransport{
+		inner: inner,
+		set:   c.setRateRemaining,
+	}
+	c.client = gogithub.NewClient(httpClient)
+	return c
 }
 
 type githubClient struct {
-	client *gogithub.Client
+	client        *gogithub.Client
+	mu            sync.Mutex
+	rateRemaining int
+}
+
+func (c *githubClient) setRateRemaining(n int) {
+	c.mu.Lock()
+	c.rateRemaining = n
+	c.mu.Unlock()
+}
+
+func (c *githubClient) RateLimitRemaining() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.rateRemaining
+}
+
+// rateCapturingTransport wraps an http.RoundTripper and records the primary
+// rate-limit remaining from each response's X-RateLimit-Remaining header. One
+// capture point covers every API call (success, pagination, and error
+// responses that carry the header), so the watcher can expose the shared
+// token's remaining quota without touching each method.
+type rateCapturingTransport struct {
+	inner http.RoundTripper
+	set   func(int)
+}
+
+func (t *rateCapturingTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	resp, err := t.inner.RoundTrip(req)
+	if err != nil || resp == nil {
+		return resp, err
+	}
+	t.captureRemaining(resp)
+	return resp, err
+}
+
+// captureRemaining records the response's remaining quota. Per-call logging is
+// deliberately absent: the gauge (and the alert on it) is the low-quota signal,
+// and the go-github client logs at its own HTTP boundary.
+func (t *rateCapturingTransport) captureRemaining(resp *http.Response) {
+	v := resp.Header.Get("X-RateLimit-Remaining")
+	if v == "" {
+		return
+	}
+	n, parseErr := strconv.Atoi(v)
+	if parseErr != nil {
+		return
+	}
+	t.set(n)
 }
 
 func (c *githubClient) SearchPRs(

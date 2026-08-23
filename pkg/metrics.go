@@ -23,6 +23,10 @@ type Metrics interface {
 	IncWebhookSignatureRejected()
 	// ObserveWebhookDispatchLatency records the dispatch latency of a webhook delivery.
 	ObserveWebhookDispatchLatency(seconds float64)
+	// SetRateLimitRemaining records the primary rate-limit window's remaining
+	// requests (shared App token). The alert rule on this gauge fires BEFORE
+	// quota exhaustion, catching the 2026-08-23 silent fleet-wide stall.
+	SetRateLimitRemaining(remaining int)
 }
 
 var (
@@ -51,6 +55,11 @@ var (
 		Help:    "Latency of dispatching a GitHub webhook delivery to Kafka.",
 		Buckets: prometheus.DefBuckets,
 	})
+
+	rateLimitRemaining = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "github_pr_watcher_rate_limit_remaining",
+		Help: "Requests remaining in the GitHub primary rate-limit window (shared App token). Zero until the first API response populates it.",
+	})
 )
 
 func init() {
@@ -60,6 +69,7 @@ func init() {
 		webhookDeliveriesTotal,
 		webhookSignatureRejectionsTotal,
 		webhookDispatchLatencySeconds,
+		rateLimitRemaining,
 	)
 	for _, result := range []string{"success", "rate_limited", "github_error"} {
 		pollCyclesTotal.WithLabelValues(result).Add(0)
@@ -97,4 +107,8 @@ func (m *prometheusMetrics) IncWebhookSignatureRejected() {
 
 func (m *prometheusMetrics) ObserveWebhookDispatchLatency(seconds float64) {
 	webhookDispatchLatencySeconds.Observe(seconds)
+}
+
+func (m *prometheusMetrics) SetRateLimitRemaining(remaining int) {
+	rateLimitRemaining.Set(float64(remaining))
 }
