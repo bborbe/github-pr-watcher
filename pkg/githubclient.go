@@ -198,6 +198,7 @@ func (t *rateCapturingTransport) RoundTrip(req *http.Request) (*http.Response, e
 				t.set(n)
 			}
 		}
+		glog.V(2).Infof("github api %s %s -> %d remaining=%s", req.Method, req.URL.Path, resp.StatusCode, resp.Header.Get("X-RateLimit-Remaining"))
 	}
 	return resp, err
 }
