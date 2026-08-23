@@ -34,3 +34,36 @@ var _ = Describe("rateCapturingTransport", func() {
 		Expect(captured).To(Equal(7342))
 	})
 })
+
+var _ = Describe("rateCapturingTransport edge cases", func() {
+	It("leaves captured unchanged when the response has no rate-limit header", func() {
+		var captured = -1
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusOK)
+		}))
+		defer srv.Close()
+
+		tr := &rateCapturingTransport{inner: srv.Client().Transport, set: func(n int) { captured = n }}
+		req, err := http.NewRequest("GET", srv.URL, nil)
+		Expect(err).NotTo(HaveOccurred())
+		_, err = tr.RoundTrip(req)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(captured).To(Equal(-1))
+	})
+
+	It("ignores a malformed non-integer header value", func() {
+		var captured = -1
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("X-RateLimit-Remaining", "abc")
+			w.WriteHeader(http.StatusOK)
+		}))
+		defer srv.Close()
+
+		tr := &rateCapturingTransport{inner: srv.Client().Transport, set: func(n int) { captured = n }}
+		req, err := http.NewRequest("GET", srv.URL, nil)
+		Expect(err).NotTo(HaveOccurred())
+		_, err = tr.RoundTrip(req)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(captured).To(Equal(-1))
+	})
+})
