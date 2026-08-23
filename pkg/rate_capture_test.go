@@ -5,6 +5,7 @@
 package pkg
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 
@@ -43,7 +44,10 @@ var _ = Describe("rateCapturingTransport edge cases", func() {
 		}))
 		defer srv.Close()
 
-		tr := &rateCapturingTransport{inner: srv.Client().Transport, set: func(n int) { captured = n }}
+		tr := &rateCapturingTransport{
+			inner: srv.Client().Transport,
+			set:   func(n int) { captured = n },
+		}
 		req, err := http.NewRequest("GET", srv.URL, nil)
 		Expect(err).NotTo(HaveOccurred())
 		_, err = tr.RoundTrip(req)
@@ -59,7 +63,10 @@ var _ = Describe("rateCapturingTransport edge cases", func() {
 		}))
 		defer srv.Close()
 
-		tr := &rateCapturingTransport{inner: srv.Client().Transport, set: func(n int) { captured = n }}
+		tr := &rateCapturingTransport{
+			inner: srv.Client().Transport,
+			set:   func(n int) { captured = n },
+		}
 		req, err := http.NewRequest("GET", srv.URL, nil)
 		Expect(err).NotTo(HaveOccurred())
 		_, err = tr.RoundTrip(req)
@@ -67,3 +74,24 @@ var _ = Describe("rateCapturingTransport edge cases", func() {
 		Expect(captured).To(Equal(-1))
 	})
 })
+
+var _ = Describe("rateCapturingTransport error path", func() {
+	It("preserves the previous captured value when the inner transport errors", func() {
+		var captured = 42
+		tr := &rateCapturingTransport{
+			inner: roundTripFunc(func(*http.Request) (*http.Response, error) {
+				return nil, fmt.Errorf("connection refused")
+			}),
+			set: func(n int) { captured = n },
+		}
+		req, err := http.NewRequest("GET", "https://api.github.com/x", nil)
+		Expect(err).NotTo(HaveOccurred())
+		_, err = tr.RoundTrip(req)
+		Expect(err).To(HaveOccurred())
+		Expect(captured).To(Equal(42))
+	})
+})
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) { return f(req) }

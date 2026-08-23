@@ -192,16 +192,41 @@ type rateCapturingTransport struct {
 
 func (t *rateCapturingTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	resp, err := t.inner.RoundTrip(req)
-	if err == nil && resp != nil {
-		if v := resp.Header.Get("X-RateLimit-Remaining"); v != "" {
-			if n, parseErr := strconv.Atoi(v); parseErr == nil {
-				t.set(n)
-			}
-		}
-		glog.V(2).Infof("github api %s %s -> %d remaining=%s", req.Method, req.URL.Path, resp.StatusCode, resp.Header.Get("X-RateLimit-Remaining"))
+	if err != nil || resp == nil {
+		return resp, err
 	}
+	t.captureAndWarn(req, resp)
 	return resp, err
 }
+
+// captureAndWarn records the response's remaining quota and logs the low-quota
+// sentinel. Logging every call would be proportional to poll frequency; this
+// is sparse and is exactly the signal the alert watches for.
+func (t *rateCapturingTransport) captureAndWarn(req *http.Request, resp *http.Response) {
+	v := resp.Header.Get("X-RateLimit-Remaining")
+	if v == "" {
+		return
+	}
+	n, parseErr := strconv.Atoi(v)
+	if parseErr != nil {
+		return
+	}
+	t.set(n)
+	if n < rateLimitLowThreshold {
+		glog.Warningf(
+			"github api rate limit remaining low: %d after %s %s -> %d",
+			n,
+			req.Method,
+			req.URL.Path,
+			resp.StatusCode,
+		)
+	}
+}
+
+// rateLimitLowThreshold is the shared-token remaining-quota floor below which
+// the transport logs the low-quota sentinel (matching the alert's 20% of the
+// 12,500/hr primary limit).
+const rateLimitLowThreshold = 2500
 
 func (c *githubClient) SearchPRs(
 	ctx context.Context,
