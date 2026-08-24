@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## Unreleased
+## v0.8.1
 
 - fix: scope the `rate_limit_remaining` gauge capture to the GitHub **core** rate-limit bucket — Search API responses report their own 30/min `search` bucket, which overwrote the gauge with a low number while the shared primary token was healthy (the false "29 remaining" critical alarm on both dev and prod, 2026-08-24)
 
