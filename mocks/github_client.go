@@ -74,6 +74,19 @@ type GitHubClient struct {
 		result1 pkg.PRDetails
 		result2 error
 	}
+	GetRateLimitCoreRemainingStub        func(context.Context) (int, error)
+	getRateLimitCoreRemainingMutex       sync.RWMutex
+	getRateLimitCoreRemainingArgsForCall []struct {
+		arg1 context.Context
+	}
+	getRateLimitCoreRemainingReturns struct {
+		result1 int
+		result2 error
+	}
+	getRateLimitCoreRemainingReturnsOnCall map[int]struct {
+		result1 int
+		result2 error
+	}
 	ListPRFilesStub        func(context.Context, string, string, int) ([]pkg.PRFile, error)
 	listPRFilesMutex       sync.RWMutex
 	listPRFilesArgsForCall []struct {
@@ -378,6 +391,70 @@ func (fake *GitHubClient) GetPRDetailsReturnsOnCall(i int, result1 pkg.PRDetails
 	}
 	fake.getPRDetailsReturnsOnCall[i] = struct {
 		result1 pkg.PRDetails
+		result2 error
+	}{result1, result2}
+}
+
+func (fake *GitHubClient) GetRateLimitCoreRemaining(arg1 context.Context) (int, error) {
+	fake.getRateLimitCoreRemainingMutex.Lock()
+	ret, specificReturn := fake.getRateLimitCoreRemainingReturnsOnCall[len(fake.getRateLimitCoreRemainingArgsForCall)]
+	fake.getRateLimitCoreRemainingArgsForCall = append(fake.getRateLimitCoreRemainingArgsForCall, struct {
+		arg1 context.Context
+	}{arg1})
+	stub := fake.GetRateLimitCoreRemainingStub
+	fakeReturns := fake.getRateLimitCoreRemainingReturns
+	fake.recordInvocation("GetRateLimitCoreRemaining", []interface{}{arg1})
+	fake.getRateLimitCoreRemainingMutex.Unlock()
+	if stub != nil {
+		return stub(arg1)
+	}
+	if specificReturn {
+		return ret.result1, ret.result2
+	}
+	return fakeReturns.result1, fakeReturns.result2
+}
+
+func (fake *GitHubClient) GetRateLimitCoreRemainingCallCount() int {
+	fake.getRateLimitCoreRemainingMutex.RLock()
+	defer fake.getRateLimitCoreRemainingMutex.RUnlock()
+	return len(fake.getRateLimitCoreRemainingArgsForCall)
+}
+
+func (fake *GitHubClient) GetRateLimitCoreRemainingCalls(stub func(context.Context) (int, error)) {
+	fake.getRateLimitCoreRemainingMutex.Lock()
+	defer fake.getRateLimitCoreRemainingMutex.Unlock()
+	fake.GetRateLimitCoreRemainingStub = stub
+}
+
+func (fake *GitHubClient) GetRateLimitCoreRemainingArgsForCall(i int) context.Context {
+	fake.getRateLimitCoreRemainingMutex.RLock()
+	defer fake.getRateLimitCoreRemainingMutex.RUnlock()
+	argsForCall := fake.getRateLimitCoreRemainingArgsForCall[i]
+	return argsForCall.arg1
+}
+
+func (fake *GitHubClient) GetRateLimitCoreRemainingReturns(result1 int, result2 error) {
+	fake.getRateLimitCoreRemainingMutex.Lock()
+	defer fake.getRateLimitCoreRemainingMutex.Unlock()
+	fake.GetRateLimitCoreRemainingStub = nil
+	fake.getRateLimitCoreRemainingReturns = struct {
+		result1 int
+		result2 error
+	}{result1, result2}
+}
+
+func (fake *GitHubClient) GetRateLimitCoreRemainingReturnsOnCall(i int, result1 int, result2 error) {
+	fake.getRateLimitCoreRemainingMutex.Lock()
+	defer fake.getRateLimitCoreRemainingMutex.Unlock()
+	fake.GetRateLimitCoreRemainingStub = nil
+	if fake.getRateLimitCoreRemainingReturnsOnCall == nil {
+		fake.getRateLimitCoreRemainingReturnsOnCall = make(map[int]struct {
+			result1 int
+			result2 error
+		})
+	}
+	fake.getRateLimitCoreRemainingReturnsOnCall[i] = struct {
+		result1 int
 		result2 error
 	}{result1, result2}
 }

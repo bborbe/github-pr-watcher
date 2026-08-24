@@ -5,6 +5,10 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+- fix: populate the `rate_limit_remaining` gauge from `GET /rate_limit` (core bucket) on poll cycles that make no core-API call — a search-only cycle with no open PRs previously left the gauge at the 0 "unpopulated" sentinel, which falsely read as quota exhaustion (found live on nukedev after the v0.8.1 core-scoping fix; the 0-gauge + `RateLimitRemainingCritical` < 500 rule re-fires)
+
 ## v0.8.1
 
 - fix: scope the `rate_limit_remaining` gauge capture to the GitHub **core** rate-limit bucket — Search API responses report their own 30/min `search` bucket, which overwrote the gauge with a low number while the shared primary token was healthy (the false "29 remaining" critical alarm on both dev and prod, 2026-08-24)

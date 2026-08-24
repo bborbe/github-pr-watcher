@@ -230,6 +230,34 @@ var _ = Describe("pkg.Watcher", func() {
 			result := fakeMetrics.IncPollCycleArgsForCall(0)
 			Expect(result).To(Equal("success"))
 		})
+
+		It("populates the gauge from /rate_limit when the cycle makes no core call", func() {
+			// Search-only cycle (no open PRs) leaves the transport-captured
+			// remaining at 0; the gauge must fall back to the /rate_limit
+			// core reading so it never sits at the unpopulated 0 sentinel
+			// (which would falsely read as quota exhaustion).
+			ghClient.RateLimitRemainingReturns(0)
+			ghClient.GetRateLimitCoreRemainingReturns(4994, nil)
+			ghClient.SearchPRsReturns(pkg.SearchResult{
+				PullRequests:  nil,
+				HasNextPage:   false,
+				RateRemaining: 29, // search bucket — must NOT be published
+			}, nil)
+
+			w := newTestWatcher(
+				ghClient,
+				createSender,
+				cursorPath,
+				startTime,
+				fakeMetrics,
+				trust.NewAuthorAllowlist([]string{"alice"}),
+			)
+			err := w.Poll(ctx)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(ghClient.GetRateLimitCoreRemainingCallCount()).To(Equal(1))
+			Expect(fakeMetrics.SetRateLimitRemainingCallCount()).To(Equal(1))
+			Expect(fakeMetrics.SetRateLimitRemainingArgsForCall(0)).To(Equal(4994))
+		})
 	})
 
 	Describe("New PR (no existing cursor entry)", func() {
