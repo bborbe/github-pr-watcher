@@ -90,6 +90,16 @@ type GitHubClient struct {
 		result1 []pkg.PRFile
 		result2 error
 	}
+	RateLimitRemainingStub        func() int
+	rateLimitRemainingMutex       sync.RWMutex
+	rateLimitRemainingArgsForCall []struct {
+	}
+	rateLimitRemainingReturns struct {
+		result1 int
+	}
+	rateLimitRemainingReturnsOnCall map[int]struct {
+		result1 int
+	}
 	SearchPRsStub        func(context.Context, string, time.DateTime, int) (pkg.SearchResult, error)
 	searchPRsMutex       sync.RWMutex
 	searchPRsArgsForCall []struct {
@@ -437,6 +447,59 @@ func (fake *GitHubClient) ListPRFilesReturnsOnCall(i int, result1 []pkg.PRFile, 
 		result1 []pkg.PRFile
 		result2 error
 	}{result1, result2}
+}
+
+func (fake *GitHubClient) RateLimitRemaining() int {
+	fake.rateLimitRemainingMutex.Lock()
+	ret, specificReturn := fake.rateLimitRemainingReturnsOnCall[len(fake.rateLimitRemainingArgsForCall)]
+	fake.rateLimitRemainingArgsForCall = append(fake.rateLimitRemainingArgsForCall, struct {
+	}{})
+	stub := fake.RateLimitRemainingStub
+	fakeReturns := fake.rateLimitRemainingReturns
+	fake.recordInvocation("RateLimitRemaining", []interface{}{})
+	fake.rateLimitRemainingMutex.Unlock()
+	if stub != nil {
+		return stub()
+	}
+	if specificReturn {
+		return ret.result1
+	}
+	return fakeReturns.result1
+}
+
+func (fake *GitHubClient) RateLimitRemainingCallCount() int {
+	fake.rateLimitRemainingMutex.RLock()
+	defer fake.rateLimitRemainingMutex.RUnlock()
+	return len(fake.rateLimitRemainingArgsForCall)
+}
+
+func (fake *GitHubClient) RateLimitRemainingCalls(stub func() int) {
+	fake.rateLimitRemainingMutex.Lock()
+	defer fake.rateLimitRemainingMutex.Unlock()
+	fake.RateLimitRemainingStub = stub
+}
+
+func (fake *GitHubClient) RateLimitRemainingReturns(result1 int) {
+	fake.rateLimitRemainingMutex.Lock()
+	defer fake.rateLimitRemainingMutex.Unlock()
+	fake.RateLimitRemainingStub = nil
+	fake.rateLimitRemainingReturns = struct {
+		result1 int
+	}{result1}
+}
+
+func (fake *GitHubClient) RateLimitRemainingReturnsOnCall(i int, result1 int) {
+	fake.rateLimitRemainingMutex.Lock()
+	defer fake.rateLimitRemainingMutex.Unlock()
+	fake.RateLimitRemainingStub = nil
+	if fake.rateLimitRemainingReturnsOnCall == nil {
+		fake.rateLimitRemainingReturnsOnCall = make(map[int]struct {
+			result1 int
+		})
+	}
+	fake.rateLimitRemainingReturnsOnCall[i] = struct {
+		result1 int
+	}{result1}
 }
 
 func (fake *GitHubClient) SearchPRs(arg1 context.Context, arg2 string, arg3 time.DateTime, arg4 int) (pkg.SearchResult, error) {

@@ -185,6 +185,16 @@ func (c *githubClient) RateLimitRemaining() int {
 // capture point covers every API call (success, pagination, and error
 // responses that carry the header), so the watcher can expose the shared
 // token's remaining quota without touching each method.
+//
+// GitHub scopes X-RateLimit-Remaining to the bucket named by
+// X-RateLimit-Resource: "core" is the shared 12,500/hour token budget, but
+// Search API responses report their own much smaller "search" bucket
+// (30/minute). Capturing every bucket lets a search response overwrite the
+// gauge with a low number while the primary quota is healthy — the false
+// "29 remaining" critical alarm seen on both dev and prod 2026-08-24 (pr-watcher
+// pinned at 29 = search quota while release-watcher, same token, read 6.6k-12k).
+// So only the "core" bucket is captured; responses without the header (non-GitHub
+// or legacy) are captured defensively.
 type rateCapturingTransport struct {
 	inner http.RoundTripper
 	set   func(int)
@@ -203,6 +213,9 @@ func (t *rateCapturingTransport) RoundTrip(req *http.Request) (*http.Response, e
 // deliberately absent: the gauge (and the alert on it) is the low-quota signal,
 // and the go-github client logs at its own HTTP boundary.
 func (t *rateCapturingTransport) captureRemaining(resp *http.Response) {
+	if resource := resp.Header.Get("X-RateLimit-Resource"); resource != "" && resource != "core" {
+		return
+	}
 	v := resp.Header.Get("X-RateLimit-Remaining")
 	if v == "" {
 		return

@@ -35,6 +35,11 @@ type Metrics struct {
 	observeWebhookDispatchLatencyArgsForCall []struct {
 		arg1 float64
 	}
+	SetRateLimitRemainingStub        func(int)
+	setRateLimitRemainingMutex       sync.RWMutex
+	setRateLimitRemainingArgsForCall []struct {
+		arg1 int
+	}
 	invocations      map[string][][]interface{}
 	invocationsMutex sync.RWMutex
 }
@@ -188,6 +193,38 @@ func (fake *Metrics) ObserveWebhookDispatchLatencyArgsForCall(i int) float64 {
 	fake.observeWebhookDispatchLatencyMutex.RLock()
 	defer fake.observeWebhookDispatchLatencyMutex.RUnlock()
 	argsForCall := fake.observeWebhookDispatchLatencyArgsForCall[i]
+	return argsForCall.arg1
+}
+
+func (fake *Metrics) SetRateLimitRemaining(arg1 int) {
+	fake.setRateLimitRemainingMutex.Lock()
+	fake.setRateLimitRemainingArgsForCall = append(fake.setRateLimitRemainingArgsForCall, struct {
+		arg1 int
+	}{arg1})
+	stub := fake.SetRateLimitRemainingStub
+	fake.recordInvocation("SetRateLimitRemaining", []interface{}{arg1})
+	fake.setRateLimitRemainingMutex.Unlock()
+	if stub != nil {
+		fake.SetRateLimitRemainingStub(arg1)
+	}
+}
+
+func (fake *Metrics) SetRateLimitRemainingCallCount() int {
+	fake.setRateLimitRemainingMutex.RLock()
+	defer fake.setRateLimitRemainingMutex.RUnlock()
+	return len(fake.setRateLimitRemainingArgsForCall)
+}
+
+func (fake *Metrics) SetRateLimitRemainingCalls(stub func(int)) {
+	fake.setRateLimitRemainingMutex.Lock()
+	defer fake.setRateLimitRemainingMutex.Unlock()
+	fake.SetRateLimitRemainingStub = stub
+}
+
+func (fake *Metrics) SetRateLimitRemainingArgsForCall(i int) int {
+	fake.setRateLimitRemainingMutex.RLock()
+	defer fake.setRateLimitRemainingMutex.RUnlock()
+	argsForCall := fake.setRateLimitRemainingArgsForCall[i]
 	return argsForCall.arg1
 }
 
