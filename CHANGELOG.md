@@ -5,6 +5,10 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+- fix: scope the `rate_limit_remaining` gauge capture to the GitHub **core** rate-limit bucket — Search API responses report their own 30/min `search` bucket, which overwrote the gauge with a low number while the shared primary token was healthy (the false "29 remaining" critical alarm on both dev and prod, 2026-08-24)
+
 ## v0.8.0
 
 - feat: `github_pr_watcher_rate_limit_remaining` gauge — exposes the shared App token's primary rate-limit remaining (from `X-RateLimit-Remaining`, captured at the transport layer) after every poll, the alert surface for quota exhaustion before the fleet-wide 403 stall (2026-08-23)
