@@ -134,6 +134,13 @@ type GitHubClient interface {
 	// this is the alert surface that catches quota exhaustion BEFORE the
 	// fleet-wide 403 stall (2026-08-23 incident).
 	RateLimitRemaining() int
+
+	// GetRateLimitCoreRemaining returns the shared token's primary (core)
+	// rate-limit remaining via the GET /rate_limit endpoint. Used to populate
+	// the gauge on poll cycles where no core-API call happens (search-only
+	// cycles with no open PRs would otherwise leave the gauge at 0 — the
+	// "unpopulated" sentinel — which falsely reads as quota exhaustion).
+	GetRateLimitCoreRemaining(ctx context.Context) (int, error)
 }
 
 // PRFile is a single changed file in a PR with its patch, as returned by the
@@ -178,6 +185,17 @@ func (c *githubClient) RateLimitRemaining() int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.rateRemaining
+}
+
+// GetRateLimitCoreRemaining returns the shared token's core rate-limit
+// remaining from GET /rate_limit. This is a core-API call, so its response
+// also updates the transport-captured gauge.
+func (c *githubClient) GetRateLimitCoreRemaining(ctx context.Context) (int, error) {
+	limits, _, err := c.client.RateLimit.Get(ctx)
+	if err != nil {
+		return 0, errors.Wrap(ctx, err, "get rate limits")
+	}
+	return limits.GetCore().Remaining, nil
 }
 
 // rateCapturingTransport wraps an http.RoundTripper and records the primary

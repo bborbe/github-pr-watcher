@@ -234,6 +234,24 @@ type watcher struct {
 	trustDecision trust.Trust
 }
 
+// rateLimitRemainingForGauge returns the value to publish to the gauge at the
+// end of a poll. Prefers the transport-captured remaining (updated by any
+// core-API call during the cycle); when it is still 0 — a search-only cycle
+// with no open PRs makes no core calls, so the gauge would otherwise sit at
+// the "unpopulated" sentinel and falsely read as quota exhaustion — falls back
+// to the GET /rate_limit core reading (one lightweight core call).
+func (w *watcher) rateLimitRemainingForGauge(ctx context.Context) int {
+	if remaining := w.ghClient.RateLimitRemaining(); remaining > 0 {
+		return remaining
+	}
+	remaining, err := w.ghClient.GetRateLimitCoreRemaining(ctx)
+	if err != nil {
+		glog.V(2).Infof("rate-limit probe failed, gauge stays 0: %v", err)
+		return 0
+	}
+	return remaining
+}
+
 func (w *watcher) Poll(ctx context.Context) error {
 	cursorState, err := LoadCursor(ctx, w.cursorPath, w.startTime)
 	if err != nil {
@@ -243,7 +261,7 @@ func (w *watcher) Poll(ctx context.Context) error {
 	// rate-limited abort, github-error abort) so the rate_limit_remaining
 	// gauge tracks the last API response's X-RateLimit-Remaining — the alert
 	// surface for quota exhaustion before the fleet-wide 403 stall.
-	defer w.metrics.SetRateLimitRemaining(w.ghClient.RateLimitRemaining())
+	defer w.metrics.SetRateLimitRemaining(w.rateLimitRemainingForGauge(ctx))
 
 	allPRs, abortReason := w.fetchAllPRs(ctx, cursorState.LastUpdatedAt)
 	if abortReason != "" {
