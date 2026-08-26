@@ -3,20 +3,20 @@ module github.com/bborbe/github-pr-watcher
 go 1.27.0
 
 require (
-	github.com/bborbe/agent v0.83.0
+	github.com/bborbe/agent v0.83.1
 	github.com/bborbe/cqrs v0.6.8
 	github.com/bborbe/errors v1.5.21
 	github.com/bborbe/http v1.26.24
 	github.com/bborbe/kafka v1.25.9
 	github.com/bborbe/kv v1.21.11
 	github.com/bborbe/log v1.6.25
-	github.com/bborbe/maintainer v0.50.2
+	github.com/bborbe/maintainer v0.50.3
 	github.com/bborbe/parse v1.10.21
 	github.com/bborbe/run v1.9.37
 	github.com/bborbe/sentry v1.9.27
 	github.com/bborbe/service v1.10.9
 	github.com/bborbe/time v1.27.10
-	github.com/bborbe/validation v1.4.22
+	github.com/bborbe/validation v1.4.23
 	github.com/golang/glog v1.2.5
 	github.com/google/go-github/v62 v62.0.0
 	github.com/google/uuid v1.6.0
@@ -31,7 +31,7 @@ require (
 	github.com/Masterminds/semver/v3 v3.5.0 // indirect
 	github.com/bborbe/argument/v2 v2.12.37 // indirect
 	github.com/bborbe/collection v1.20.24 // indirect
-	github.com/bborbe/k8s v1.14.14 // indirect
+	github.com/bborbe/k8s v1.14.16 // indirect
 	github.com/bborbe/math v1.4.7 // indirect
 	github.com/bborbe/strimzi v1.8.15 // indirect
 	github.com/bborbe/vault-cli v0.116.2 // indirect
