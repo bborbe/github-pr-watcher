@@ -133,6 +133,8 @@ type application struct {
 	RepoAllowlist    string           `required:"false" arg:"repo-allowlist"     env:"REPO_ALLOWLIST"        usage:"Comma-separated host-qualified repo allowlist (host/owner/repo format); empty means allow-all"`
 	MaxSlugLen       int              `required:"false" arg:"max-slug-len"       env:"MAX_SLUG_LEN"          usage:"Max length of slugified PR-title segment in vault filenames"                                                                                                                                                                                                                                                           default:"80"`
 	MaxTitleLen      int              `required:"false" arg:"max-title-len"      env:"MAX_TITLE_LEN"         usage:"Max length of vault task filename (whole title; safety cap)"                                                                                                                                                                                                                                                           default:"200"`
+	MaxAdditions     int              `required:"false" arg:"max-additions"      env:"MAX_ADDITIONS"         usage:"Park PRs with more added lines than this at human_review instead of spawning a review pod (diff overflows the reviewer's context window); 0 disables"`
+	MaxChangedFiles  int              `required:"false" arg:"max-changed-files"  env:"MAX_CHANGED_FILES"     usage:"Park PRs touching more files than this at human_review instead of spawning a review pod; 0 disables"`
 	TaskSuffix       string           `required:"false" arg:"task-suffix"        env:"TASK_SUFFIX"           usage:"Optional suffix appended to PR task filenames as ' - suffix'; empty = no suffix. Use distinct values per stage to prevent task-file collisions when both watchers poll the same repo into the same vault."`
 	TargetVault      string           `required:"false" arg:"target-vault"       env:"TARGET_VAULT"          usage:"Vault slug stamped on every CreateTaskCommand (matched verbatim against the controller's VAULT_NAME). Empty leaves it unset so the controller's legacy default-vault fallback applies — set this when the target vault is not the controller's legacy default (e.g. 'agent')."`
 	OverrideLabel    string           `required:"false" arg:"override-label"     env:"OVERRIDE_REVIEW_LABEL" usage:"PR label that triggers a pr-override task for trusted authors (bot posts APPROVE at head SHA so a false-positive review no longer blocks merge). Empty disables the override path."                                                                                                                                    default:"override-review"`
@@ -301,6 +303,8 @@ func (a *application) Run(ctx context.Context, _ libsentry.Client) error {
 		a.MaxTitleLen,
 		a.TaskSuffix,
 		a.TargetVault,
+		a.MaxAdditions,
+		a.MaxChangedFiles,
 		a.OverrideLabel,
 		a.AutoMergeLabel,
 		a.TrivialAutoMerge,
@@ -345,6 +349,8 @@ func (a *application) Run(ctx context.Context, _ libsentry.Client) error {
 		a.MaxTitleLen,
 		a.TaskSuffix,
 		a.TargetVault,
+		a.MaxAdditions,
+		a.MaxChangedFiles,
 		metrics, // shared with the watcher
 		a.TopicPrefix,
 		currentDateTime, // spec 067: time-injected clock for Force=true nonce

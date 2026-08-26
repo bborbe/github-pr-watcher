@@ -48,6 +48,8 @@ func NewTriggerPRReviewCommandExecutor(
 	maxTitleLen int,
 	taskSuffix string,
 	targetVault string,
+	maxAdditions int,
+	maxChangedFiles int,
 	metrics pkg.Metrics,
 	currentDateTime libtime.CurrentDateTimeGetter,
 ) cdb.CommandObjectExecutorTx {
@@ -58,7 +60,8 @@ func NewTriggerPRReviewCommandExecutor(
 			return runTriggerPRReview(
 				ctx, tx, commandObject,
 				ghClient, createSender, taskCreationFilter, trustDecision,
-				stage, maxSlugLen, maxTitleLen, taskSuffix, targetVault, metrics,
+				stage, maxSlugLen, maxTitleLen, taskSuffix, targetVault,
+				maxAdditions, maxChangedFiles, metrics,
 				currentDateTime,
 			)
 		},
@@ -89,6 +92,8 @@ func runTriggerPRReview(
 	maxTitleLen int,
 	taskSuffix string,
 	targetVault string,
+	maxAdditions int,
+	maxChangedFiles int,
 	metrics pkg.Metrics,
 	currentDateTime libtime.CurrentDateTimeGetter,
 ) (*base.EventID, base.Event, error) {
@@ -123,7 +128,8 @@ func runTriggerPRReview(
 	}
 	return publishCreateCommand(
 		ctx, prInfo, cmd, details, trustResult, createSender,
-		stage, maxSlugLen, maxTitleLen, taskSuffix, targetVault, metrics,
+		stage, maxSlugLen, maxTitleLen, taskSuffix, targetVault,
+		maxAdditions, maxChangedFiles, metrics,
 		currentDateTime,
 	)
 }
@@ -250,6 +256,8 @@ func publishCreateCommand(
 	maxTitleLen int,
 	taskSuffix string,
 	targetVault string,
+	maxAdditions int,
+	maxChangedFiles int,
 	metrics pkg.Metrics,
 	currentDateTime libtime.CurrentDateTimeGetter,
 ) (*base.EventID, base.Event, error) {
@@ -278,7 +286,7 @@ func publishCreateCommand(
 
 	createCmd := pkg.BuildCreateCommand(
 		pr, details, taskIDStr, stage, maxSlugLen, maxTitleLen, taskSuffix,
-		targetVault, trustResult, cmd.Force,
+		targetVault, trustResult, cmd.Force, maxAdditions, maxChangedFiles,
 	)
 	if err := createSender.SendCommand(ctx, createCmd); err != nil {
 		// Transient: downstream Kafka send error. Framework emits Failure and

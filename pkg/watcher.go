@@ -8,6 +8,7 @@ import (
 	"context"
 	"fmt"
 	"slices"
+	"strings"
 
 	agentlib "github.com/bborbe/agent"
 	task "github.com/bborbe/agent/command/task"
@@ -36,6 +37,12 @@ type TaskConfig struct {
 	// TargetVault unset, so the controller's legacy default-vault fallback
 	// applies — preserving pre-TARGET_VAULT behaviour.
 	TargetVault string
+	// MaxAdditions parks PRs with more than this many added lines at
+	// human_review instead of spawning a review pod. 0 disables the check.
+	MaxAdditions int
+	// MaxChangedFiles parks PRs touching more than this many files at
+	// human_review instead of spawning a review pod. 0 disables the check.
+	MaxChangedFiles int
 }
 
 //counterfeiter:generate -o ../mocks/task_publisher.go --fake-name TaskPublisher . TaskPublisher
@@ -113,6 +120,8 @@ func (p *taskPublisher) PublishCreate(
 		p.cfg.TargetVault,
 		trustResult,
 		false, // poll path is never a forced re-review
+		p.cfg.MaxAdditions,
+		p.cfg.MaxChangedFiles,
 	)
 
 	if err := p.createSender.SendCommand(ctx, cmd); err != nil {
@@ -120,9 +129,18 @@ func (p *taskPublisher) PublishCreate(
 		p.metrics.IncPRPublished("error")
 		return false
 	}
-	glog.V(2).Infof("published CreateTaskCommand pr=%s/%s#%d sha=%s taskID=%s trusted=%t",
-		pr.Owner, pr.Repo, pr.Number, details.HeadSHA, taskIDStr, trustResult.Success())
-	p.metrics.IncPRPublished("create")
+	// Count oversized trusted-author PRs the poll parked at human_review
+	// separately from normal reviews — matches BuildCreateCommand's decision
+	// (park only applies to trusted authors in the poll path, where forced is
+	// always false). The parked count is how the crash fix proves itself live.
+	parked := trustResult.Success() && oversized(details, p.cfg.MaxAdditions, p.cfg.MaxChangedFiles)
+	if parked {
+		p.metrics.IncPRPublished("parked")
+	} else {
+		p.metrics.IncPRPublished("create")
+	}
+	glog.V(2).Infof("published CreateTaskCommand pr=%s/%s#%d sha=%s taskID=%s trusted=%t parked=%t",
+		pr.Owner, pr.Repo, pr.Number, details.HeadSHA, taskIDStr, trustResult.Success(), parked)
 	return true
 }
 
@@ -602,9 +620,37 @@ func BuildCreateCommand(
 	targetVault string,
 	trustResult trust.Result,
 	forced bool,
+	maxAdditions int,
+	maxChangedFiles int,
 ) task.CreateCommand {
 	retryToken := retryTokenFor(taskIDStr, forced)
 	if trustResult.Success() {
+		// Park oversized PRs at human_review instead of spawning a review pod:
+		// a diff past the thresholds overflows the reviewer's context window
+		// (claude CLI failed: Prompt is too long → compact_error: too_few_groups),
+		// so the pod would die before posting any verdict — deterministic waste.
+		// The parked task needs operator reassignment to proceed. A forced
+		// re-review bypasses the park: the operator explicitly requested it.
+		if !forced && oversized(details, maxAdditions, maxChangedFiles) {
+			return task.CreateCommand{
+				Title: computePRTitle(
+					"github",
+					pr.Owner,
+					pr.Repo,
+					pr.Number,
+					details.HeadSHA,
+					pr.Title,
+					maxSlugLen,
+					maxTitleLen,
+					taskSuffix,
+					retryToken,
+				),
+				TargetVault:    targetVault,
+				TaskIdentifier: agentlib.TaskIdentifier(taskIDStr),
+				Frontmatter:    buildHumanReviewFrontmatter(pr, taskIDStr, stage, details),
+				Body:           buildParkedBody(details, maxAdditions, maxChangedFiles),
+			}
+		}
 		return task.CreateCommand{
 			Title: computePRTitle(
 				"github",
@@ -769,6 +815,45 @@ func buildHumanReviewFrontmatter(
 		"ref":             details.HeadSHA,
 		"base_ref":        details.BaseRef,
 	}
+}
+
+// oversized reports whether a PR's diff exceeds the park thresholds. A
+// threshold of 0 disables that dimension (never parks on it). Park when
+// either dimension is STRICTLY over its limit — a PR exactly at the limit
+// still reviews normally. The check is deliberately per-dimension disabled
+// rather than treat-0-as-limit, so an unset env var cannot silently park
+// every PR.
+func oversized(details PRDetails, maxAdditions, maxChangedFiles int) bool {
+	if maxAdditions > 0 && details.Additions > maxAdditions {
+		return true
+	}
+	if maxChangedFiles > 0 && details.ChangedFiles > maxChangedFiles {
+		return true
+	}
+	return false
+}
+
+// buildParkedBody explains why a PR was parked at human_review and how the
+// operator proceeds. Only dimensions with an enabled threshold are listed,
+// so a disabled dimension never appears as a confusing "limit 0".
+func buildParkedBody(details PRDetails, maxAdditions, maxChangedFiles int) string {
+	var reasons []string
+	if maxAdditions > 0 {
+		reasons = append(
+			reasons,
+			fmt.Sprintf("%d added lines (limit %d)", details.Additions, maxAdditions),
+		)
+	}
+	if maxChangedFiles > 0 {
+		reasons = append(
+			reasons,
+			fmt.Sprintf("%d changed files (limit %d)", details.ChangedFiles, maxChangedFiles),
+		)
+	}
+	return fmt.Sprintf(
+		"## Oversized PR — parked for human review\n\nThis PR has %s, which exceeds the auto-reviewer's context budget. Spawning a review pod would overflow its context window (`claude CLI failed: Prompt is too long`) and die before posting a verdict.\n\nTo review anyway, edit the frontmatter: `assignee: pr-reviewer-agent`, `phase: in_progress`, `status: in_progress`. To dismiss, set `status: aborted`.\n",
+		strings.Join(reasons, " and "),
+	)
 }
 
 // buildOverrideFrontmatter builds the frontmatter for a `pr-override` task.

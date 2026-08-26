@@ -5,6 +5,10 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+- fix: park oversized PRs at human_review instead of spawning a review pod whose prompt overflows the context window (MAX_ADDITIONS / MAX_CHANGED_FILES thresholds)
+
 ## v0.8.5
 
 - chore: update github.com/bborbe/agent to v0.83.1, github.com/bborbe/maintainer to v0.50.3, github.com/bborbe/validation to v1.4.23

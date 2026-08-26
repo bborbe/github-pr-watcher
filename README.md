@@ -41,6 +41,8 @@ Two independent decision chains run per PR — see [`docs/watcher-decision-chain
 | `REPO_ALLOWLIST` | no | — | Comma-separated host-qualified repo allowlist (`host/owner/repo`); empty means allow-all |
 | `BOT_ALLOWLIST` | no | `dependabot[bot],renovate[bot]` | Comma-separated bot author logins to skip |
 | `AUTO_MERGE_LABEL` | no | `auto-merge` | PR label that opts the PR into GitHub-native auto-merge for trusted authors (watcher arms `EnableAutoMerge`; GitHub merges once checks + required reviews are green). Empty disables the auto-merge path. Requires the watcher GitHub App to hold Pull requests: Write. **Arming only works while the PR is still blocked** — see below |
+| `MAX_ADDITIONS` | no | `0` | Park PRs with more added lines than this at `human_review` instead of spawning a review pod (an oversized diff overflows the reviewer's context window — `claude CLI failed: Prompt is too long`); `0` disables |
+| `MAX_CHANGED_FILES` | no | `0` | Park PRs touching more files than this at `human_review` instead of spawning a review pod; `0` disables |
 | `MAX_PR_AGE` | no | `2160h` (90d) | Skip PRs older than this; empty disables |
 | `BACKFILL_DURATION` | no | `720h` (30d) | On cold start, backdate the initial cursor by this; empty disables |
 | `SENTRY_DSN` | no | — | Sentry DSN for error tracking |

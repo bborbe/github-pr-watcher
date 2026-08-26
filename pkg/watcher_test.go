@@ -1740,6 +1740,8 @@ var _ = Describe("BuildCreateCommand", func() {
 				"agent",
 				trustResult,
 				false,
+				0, // maxAdditions disabled
+				0, // maxChangedFiles disabled
 			)
 
 			Expect(cmd.TargetVault).To(Equal("agent"))
@@ -1768,6 +1770,8 @@ var _ = Describe("BuildCreateCommand", func() {
 			"agent",
 			trustResult,
 			false,
+			0, // maxAdditions disabled
+			0, // maxChangedFiles disabled
 		)
 
 		Expect(cmd.TargetVault).To(Equal("agent"))
@@ -1797,6 +1801,8 @@ var _ = Describe("BuildCreateCommand", func() {
 			"",
 			trustResult,
 			false,
+			0, // maxAdditions disabled
+			0, // maxChangedFiles disabled
 		)
 
 		Expect(cmd.Body).To(ContainSubstring("(unknown)"))
@@ -1820,6 +1826,8 @@ var _ = Describe("BuildCreateCommand", func() {
 			"",
 			trustResult,
 			false,
+			0, // maxAdditions disabled
+			0, // maxChangedFiles disabled
 		)
 
 		// Title must not contain slashes or colons that could break filename
@@ -1845,6 +1853,8 @@ var _ = Describe("BuildCreateCommand", func() {
 			"",
 			trustResult,
 			false,
+			0, // maxAdditions disabled
+			0, // maxChangedFiles disabled
 		) // maxTitleLen=30
 
 		Expect(len(cmd.Title)).To(BeNumerically("<=", 30+len("-github-owner-repo-1-abc123")))
@@ -1870,7 +1880,7 @@ var _ = Describe("BuildCreateCommand forced re-review", func() {
 
 	build := func(taskIDStr string, forced bool) task.CreateCommand {
 		return pkg.BuildCreateCommand(
-			pr, details, taskIDStr, "prod", 80, 200, "", "", trusted, forced,
+			pr, details, taskIDStr, "prod", 80, 200, "", "", trusted, forced, 0, 0,
 		)
 	}
 
@@ -1895,5 +1905,139 @@ var _ = Describe("BuildCreateCommand forced re-review", func() {
 	It("still carries the salted identifier onto the command", func() {
 		forced := build("a25d2b9a-c548-50b5-83c5-fdc6f2fe8927", true)
 		Expect(string(forced.TaskIdentifier)).To(Equal("a25d2b9a-c548-50b5-83c5-fdc6f2fe8927"))
+	})
+})
+
+var _ = Describe("oversized park predicate", func() {
+	makeDetails := func(additions, changedFiles int) pkg.PRDetails {
+		return pkg.PRDetails{
+			HeadSHA:      "abc123",
+			CloneURL:     "https://github.com/owner/repo.git",
+			BaseRef:      "master",
+			Additions:    additions,
+			ChangedFiles: changedFiles,
+		}
+	}
+
+	DescribeTable(
+		"threshold boundaries",
+		func(details pkg.PRDetails, maxAdditions, maxChangedFiles int, wantParked bool) {
+			Expect(pkg.Oversized(details, maxAdditions, maxChangedFiles)).To(Equal(wantParked))
+		},
+		Entry("over additions threshold", makeDetails(601, 2), 500, 100, true),
+		Entry(
+			"at additions threshold is not parked (strictly over)",
+			makeDetails(500, 2),
+			500,
+			100,
+			false,
+		),
+		Entry("under both thresholds", makeDetails(100, 10), 500, 100, false),
+		Entry("over changed-files threshold", makeDetails(50, 101), 500, 100, true),
+		Entry(
+			"at changed-files threshold is not parked (strictly over)",
+			makeDetails(50, 100),
+			500,
+			100,
+			false,
+		),
+		Entry(
+			"additions disabled (0) — changedFiles guard still applies",
+			makeDetails(10, 150),
+			0,
+			100,
+			true,
+		),
+		Entry(
+			"changedFiles disabled (0) — additions guard still applies",
+			makeDetails(600, 10),
+			500,
+			0,
+			true,
+		),
+		Entry("both disabled (0) — never parks", makeDetails(99999, 99999), 0, 0, false),
+		Entry("zero-size PR never parks", makeDetails(0, 0), 500, 100, false),
+	)
+})
+
+var _ = Describe("BuildCreateCommand oversized PR park", func() {
+	makePR := func(login string) pkg.PullRequest {
+		return pkg.PullRequest{
+			Number:      1,
+			Owner:       "owner",
+			Repo:        "repo",
+			Title:       "feat: add new feature",
+			HTMLURL:     "https://github.com/owner/repo/pull/1",
+			AuthorLogin: login,
+			IsDraft:     false,
+			UpdatedAt:   libtime.DateTime(time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC)),
+		}
+	}
+	makeOversized := func() pkg.PRDetails {
+		return pkg.PRDetails{
+			HeadSHA:      "abc123",
+			CloneURL:     "https://github.com/owner/repo.git",
+			BaseRef:      "master",
+			Additions:    600,
+			ChangedFiles: 2,
+		}
+	}
+
+	It("trusted oversized author — parks at human_review with park body", func() {
+		cmd := pkg.BuildCreateCommand(
+			makePR("trusted-user"), makeOversized(), "00000000-0000-0000-0000-000000000011",
+			"dev", 80, 60, "pr-reviewer", "agent",
+			trust.NewResult(true, "author allowlist"), false, 500, 100,
+		)
+		Expect(cmd.Frontmatter["phase"]).To(Equal("human_review"))
+		Expect(cmd.Frontmatter["status"]).To(Equal("todo"))
+		Expect(cmd.Frontmatter["assignee"]).To(Equal(""))
+		Expect(cmd.Body).To(ContainSubstring("Oversized PR"))
+		Expect(cmd.Body).To(ContainSubstring("600 added lines"))
+		Expect(cmd.Body).To(ContainSubstring("2 changed files"))
+	})
+
+	It("trusted oversized author with thresholds disabled — reviews normally", func() {
+		cmd := pkg.BuildCreateCommand(
+			makePR("trusted-user"), makeOversized(), "00000000-0000-0000-0000-000000000012",
+			"dev", 80, 60, "pr-reviewer", "agent",
+			trust.NewResult(true, "author allowlist"), false, 0, 0,
+		)
+		Expect(cmd.Frontmatter["phase"]).To(Equal("planning"))
+		Expect(cmd.Frontmatter["assignee"]).To(Equal("pr-reviewer-agent"))
+		Expect(cmd.Body).NotTo(ContainSubstring("Oversized PR"))
+	})
+
+	It("trusted author at the threshold — reviews normally (strictly over)", func() {
+		details := makeOversized()
+		details.Additions = 500 // exactly at the additions limit
+		cmd := pkg.BuildCreateCommand(
+			makePR("trusted-user"), details, "00000000-0000-0000-0000-000000000013",
+			"dev", 80, 60, "pr-reviewer", "agent",
+			trust.NewResult(true, "author allowlist"), false, 500, 100,
+		)
+		Expect(cmd.Frontmatter["phase"]).To(Equal("planning"))
+	})
+
+	It("forced re-review bypasses the park", func() {
+		cmd := pkg.BuildCreateCommand(
+			makePR("trusted-user"), makeOversized(), "00000000-0000-0000-0000-000000000014",
+			"dev", 80, 60, "pr-reviewer", "agent",
+			trust.NewResult(true, "author allowlist"), true, 500, 100,
+		)
+		Expect(cmd.Frontmatter["phase"]).To(Equal("planning"))
+		Expect(cmd.Frontmatter["assignee"]).To(Equal("pr-reviewer-agent"))
+	})
+
+	It("untrusted oversized author — keeps the untrusted body, not the park body", func() {
+		cmd := pkg.BuildCreateCommand(
+			makePR("unknown-user"), makeOversized(), "00000000-0000-0000-0000-000000000015",
+			"dev", 80, 60, "pr-reviewer", "agent",
+			trust.NewResult(false, "author not in allowlist"), false, 500, 100,
+		)
+		Expect(cmd.Frontmatter["phase"]).To(Equal("human_review"))
+		Expect(cmd.Frontmatter["assignee"]).To(Equal(""))
+		Expect(cmd.Body).To(ContainSubstring("Untrusted author"))
+		Expect(cmd.Body).NotTo(ContainSubstring("Oversized PR"))
 	})
 })
