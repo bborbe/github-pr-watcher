@@ -38,13 +38,16 @@ var _ = func(
 	maxTitleLen int,
 	taskSuffix string,
 	targetVault string,
+	maxAdditions int,
+	maxChangedFiles int,
 	metrics pkg.Metrics,
 	currentDateTime libtime.CurrentDateTimeGetter,
 ) (*base.EventID, base.Event, error) {
 	return runTriggerPRReview(
 		ctx, tx, obj,
 		ghClient, createSender, taskCreationFilter, trustDecision,
-		stage, maxSlugLen, maxTitleLen, taskSuffix, targetVault, metrics,
+		stage, maxSlugLen, maxTitleLen, taskSuffix, targetVault,
+		maxAdditions, maxChangedFiles, metrics,
 		currentDateTime,
 	)
 }

@@ -108,7 +108,7 @@ var _ = Describe("end-to-end command flow through wired consumer (spec 066 AC 11
 			createSender,
 			taskCreationFilter,
 			trustDecision,
-			"dev", 80, 200, "", "",
+			"dev", 80, 200, "", "", 0, 0,
 			metrics,
 			libtime.NewCurrentDateTime(),
 		)
@@ -141,7 +141,7 @@ var _ = Describe("end-to-end command flow through wired consumer (spec 066 AC 11
 				createSender,
 				taskCreationFilter,
 				trustDecision,
-				"dev", 80, 200, "", "",
+				"dev", 80, 200, "", "", 0, 0,
 				metrics,
 				base.TopicPrefix("develop"),
 				libtime.NewCurrentDateTime(),

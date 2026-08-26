@@ -79,6 +79,15 @@ type PRDetails struct {
 	// Labels holds the PR's label names (e.g. `override-review`). Used to
 	// route a labeled PR to the override task type.
 	Labels []string
+
+	// Additions is the PR's added-line count (diff size). Used to park
+	// oversized PRs at human_review before spawning a review pod whose
+	// prompt would overflow the reviewer's context window.
+	Additions int
+
+	// ChangedFiles is the number of files the PR touches. Used alongside
+	// Additions for the same oversized-PR park decision.
+	ChangedFiles int
 }
 
 //counterfeiter:generate -o ../mocks/github_client.go --fake-name GitHubClient . GitHubClient
@@ -318,14 +327,16 @@ func (c *githubClient) GetPRDetails(
 		)
 	}
 	return PRDetails{
-		HeadSHA:     pr.GetHead().GetSHA(),
-		CloneURL:    pr.GetHead().GetRepo().GetCloneURL(),
-		BaseRef:     pr.GetBase().GetRef(),
-		AuthorLogin: pr.GetUser().GetLogin(),
-		Title:       pr.GetTitle(),
-		IsDraft:     pr.GetDraft(),
-		UpdatedAt:   libtime.DateTime(pr.GetUpdatedAt().Time),
-		Labels:      labelNames(pr.Labels),
+		HeadSHA:      pr.GetHead().GetSHA(),
+		CloneURL:     pr.GetHead().GetRepo().GetCloneURL(),
+		BaseRef:      pr.GetBase().GetRef(),
+		AuthorLogin:  pr.GetUser().GetLogin(),
+		Title:        pr.GetTitle(),
+		IsDraft:      pr.GetDraft(),
+		UpdatedAt:    libtime.DateTime(pr.GetUpdatedAt().Time),
+		Labels:       labelNames(pr.Labels),
+		Additions:    pr.GetAdditions(),
+		ChangedFiles: pr.GetChangedFiles(),
 	}, nil
 }
 

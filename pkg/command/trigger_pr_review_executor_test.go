@@ -102,7 +102,7 @@ var _ = Describe("NewTriggerPRReviewCommandExecutor", func() {
 				nil,
 				newCommandObject(cmd),
 				ghClient, createSender, taskCreationFilter, trustDecision,
-				"dev", 80, 200, "", "",
+				"dev", 80, 200, "", "", 0, 0,
 				pkg.NewMetrics(),
 				libtime.NewCurrentDateTime(),
 			)
@@ -248,7 +248,7 @@ var _ = Describe(
 				nil,
 				newCommandObject(publishedCmd),
 				ghClient, executorSender, taskCreationFilter, trustDecision,
-				"dev", 80, 200, "", "",
+				"dev", 80, 200, "", "", 0, 0,
 				pkg.NewMetrics(),
 				libtime.NewCurrentDateTime(),
 			)
@@ -286,7 +286,7 @@ var _ = Describe(
 				nil,
 				newCommandObject(publishedCmd),
 				ghClient, executorSender, taskCreationFilter, trustDecision,
-				"dev", 80, 200, "", "",
+				"dev", 80, 200, "", "", 0, 0,
 				pkg.NewMetrics(),
 				libtime.NewCurrentDateTime(),
 			)
@@ -352,7 +352,7 @@ var _ = Describe("executor crash recovery (spec 066 AC 16)", func() {
 		_, _, err := command.RunTriggerPRReview(
 			killedCtx, nil, commandObject,
 			ghClient, createSender, taskCreationFilter, trustDecision,
-			"dev", 80, 200, "", "",
+			"dev", 80, 200, "", "", 0, 0,
 			pkg.NewMetrics(),
 			libtime.NewCurrentDateTime(),
 		)
@@ -382,7 +382,7 @@ var _ = Describe("executor crash recovery (spec 066 AC 16)", func() {
 		_, _, err = command.RunTriggerPRReview(
 			context.Background(), nil, commandObject,
 			ghClient, freshSender, taskCreationFilter, trustDecision,
-			"dev", 80, 200, "", "",
+			"dev", 80, 200, "", "", 0, 0,
 			pkg.NewMetrics(),
 			libtime.NewCurrentDateTime(),
 		)
@@ -453,7 +453,7 @@ var _ = Describe("force-true branch (spec 067)", func() {
 			nil,
 			newCommandObject(cmd),
 			ghClient, createSender, taskCreationFilter, trustDecision,
-			"dev", 80, 200, "", "",
+			"dev", 80, 200, "", "", 0, 0,
 			pkg.NewMetrics(),
 			currentDateTime,
 		)
@@ -519,6 +519,8 @@ var _ = Describe("force-true branch (spec 067)", func() {
 			"dev", 80, 200, "", "",
 			trust.NewResult(true, "trusted"),
 			false,
+			0, // maxAdditions disabled
+			0, // maxChangedFiles disabled
 		)
 
 		// Field-by-field equality on every field except TaskIdentifier
@@ -561,7 +563,7 @@ var _ = Describe("force-true branch (spec 067)", func() {
 			nil,
 			newCommandObject(command.TriggerPRReviewCommand{URL: validPRURL, Force: true}),
 			ghClient, createSender, taskCreationFilter, trustDecision,
-			"dev", 80, 200, "", "",
+			"dev", 80, 200, "", "", 0, 0,
 			metrics,
 			currentDateTime,
 		)
