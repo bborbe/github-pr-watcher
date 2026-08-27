@@ -5,6 +5,10 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+- feat: opt into `autoMerge.trivial` for mechanically-trivial update PRs
+
 ## v0.8.6
 
 - fix: park oversized PRs at human_review instead of spawning a review pod whose prompt overflows the context window (MAX_ADDITIONS / MAX_CHANGED_FILES thresholds)
