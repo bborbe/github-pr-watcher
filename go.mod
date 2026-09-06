@@ -1,6 +1,6 @@
 module github.com/bborbe/github-pr-watcher
 
-go 1.27.0
+go 1.27.1
 
 require (
 	github.com/bborbe/agent v0.87.1
