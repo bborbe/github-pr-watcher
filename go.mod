@@ -3,20 +3,20 @@ module github.com/bborbe/github-pr-watcher
 go 1.27.1
 
 require (
-	github.com/bborbe/agent v0.87.1
+	github.com/bborbe/agent v0.87.4
 	github.com/bborbe/cqrs v0.6.10
-	github.com/bborbe/errors v1.6.0
-	github.com/bborbe/http v1.26.25
-	github.com/bborbe/kafka v1.25.12
+	github.com/bborbe/errors v1.6.1
+	github.com/bborbe/http v1.26.26
+	github.com/bborbe/kafka v1.25.15
 	github.com/bborbe/kv v1.21.13
 	github.com/bborbe/log v1.6.25
-	github.com/bborbe/maintainer v0.50.6
-	github.com/bborbe/parse v1.11.1
+	github.com/bborbe/maintainer v0.50.7
+	github.com/bborbe/parse v1.11.3
 	github.com/bborbe/run v1.10.2
 	github.com/bborbe/sentry v1.10.1
-	github.com/bborbe/service v1.10.12
-	github.com/bborbe/time v1.27.12
-	github.com/bborbe/validation v1.4.23
+	github.com/bborbe/service v1.10.13
+	github.com/bborbe/time v1.27.14
+	github.com/bborbe/validation v1.5.0
 	github.com/golang/glog v1.2.5
 	github.com/google/go-github/v62 v62.0.0
 	github.com/google/uuid v1.6.0
@@ -31,10 +31,10 @@ require (
 	github.com/Masterminds/semver/v3 v3.5.0 // indirect
 	github.com/bborbe/argument/v2 v2.13.2 // indirect
 	github.com/bborbe/collection v1.20.26 // indirect
-	github.com/bborbe/k8s v1.14.17 // indirect
+	github.com/bborbe/k8s v1.14.19 // indirect
 	github.com/bborbe/math v1.4.8 // indirect
 	github.com/bborbe/strimzi v1.8.17 // indirect
-	github.com/bborbe/vault-cli v0.121.3 // indirect
+	github.com/bborbe/vault-cli v0.126.3 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/bradleyfalzon/ghinstallation/v2 v2.19.0 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
@@ -65,7 +65,7 @@ require (
 	github.com/google/go-cmp v0.7.0 // indirect
 	github.com/google/go-github/v88 v88.0.0 // indirect
 	github.com/google/go-querystring v1.2.0 // indirect
-	github.com/google/pprof v0.0.0-20260903180319-d6c3cb2f37ec // indirect
+	github.com/google/pprof v0.0.0-20260906184651-6331bc6350fe // indirect
 	github.com/hashicorp/go-uuid v1.0.3 // indirect
 	github.com/jcmturner/aescts/v2 v2.0.0 // indirect
 	github.com/jcmturner/dnsutils/v2 v2.0.0 // indirect
