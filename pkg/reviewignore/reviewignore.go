@@ -23,6 +23,8 @@ import (
 // no pattern may ever match — see Parse.
 const Filename = ".reviewignore"
 
+//counterfeiter:generate -o ../../mocks/review_ignore_matcher.go --fake-name ReviewIgnoreMatcher . Matcher
+
 // Matcher reports whether a repo-relative path is excluded from review.
 type Matcher interface {
 	// Match reports whether path is excluded. path is repo-relative and
@@ -36,6 +38,10 @@ type Matcher interface {
 	Empty() bool
 }
 
+// Parse is named for what it does to the input, not `NewMatcher` — it mirrors
+// `maintainerconfig.Parse`, the sibling repo-root config parser this package
+// was modeled on, and the stdlib `time.Parse`/`url.Parse` shape.
+//
 // Parse builds a Matcher from `.reviewignore` content. Empty, blank or
 // all-comment content yields a matcher that excludes nothing — an absent or
 // empty file is never an implicit "ignore everything".

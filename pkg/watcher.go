@@ -881,6 +881,10 @@ func buildHumanReviewFrontmatter(
 	}
 }
 
+// Exclusion is a computed result, not a constructed dependency, so the
+// functions producing it (ComputeExclusion, ReviewIgnoreExclusion) are named
+// for the computation rather than carrying a `New` constructor prefix.
+//
 // Exclusion is what a repo's `.reviewignore` removed from the size-gate
 // counts. The zero value means nothing was excluded — the state for a repo
 // with no `.reviewignore`, and the safe default on any fetch error, so a
