@@ -521,6 +521,7 @@ var _ = Describe("force-true branch (spec 067)", func() {
 			false,
 			0, // maxAdditions disabled
 			0, // maxChangedFiles disabled
+			pkg.Exclusion{},
 		)
 
 		// Field-by-field equality on every field except TaskIdentifier

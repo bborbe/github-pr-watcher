@@ -1,0 +1,8 @@
+# Paths the PR reviewer skips — excluded from the MAX_ADDITIONS /
+# MAX_CHANGED_FILES size gate and from the reviewer's context.
+# See README.md § `.reviewignore`.
+
+# Counterfeiter-generated fakes. Regenerated wholesale by `go generate`,
+# never hand-edited, so there is nothing to review — and they are the
+# largest single block in any PR that touches an interface.
+mocks/

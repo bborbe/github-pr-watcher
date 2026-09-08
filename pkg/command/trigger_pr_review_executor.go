@@ -126,11 +126,17 @@ func runTriggerPRReview(
 	if err != nil || trustResult == nil {
 		return nil, nil, err
 	}
+	// A forced re-review bypasses the park regardless, but the exclusion is
+	// still computed here: it feeds the `.reviewignore` audit line on the task
+	// body, which must appear on every review task, not only parked ones.
+	exclusion := pkg.ReviewIgnoreExclusion(
+		ctx, ghClient, prInfo.Owner, prInfo.Repo, prInfo.Number, cmd.URL,
+	)
 	return publishCreateCommand(
 		ctx, prInfo, cmd, details, trustResult, createSender,
 		stage, maxSlugLen, maxTitleLen, taskSuffix, targetVault,
 		maxAdditions, maxChangedFiles, metrics,
-		currentDateTime,
+		currentDateTime, exclusion,
 	)
 }
 
@@ -260,6 +266,7 @@ func publishCreateCommand(
 	maxChangedFiles int,
 	metrics pkg.Metrics,
 	currentDateTime libtime.CurrentDateTimeGetter,
+	exclusion pkg.Exclusion,
 ) (*base.EventID, base.Event, error) {
 	pr := pkg.PullRequest{
 		Number:      prInfo.Number,
@@ -287,6 +294,7 @@ func publishCreateCommand(
 	createCmd := pkg.BuildCreateCommand(
 		pr, details, taskIDStr, stage, maxSlugLen, maxTitleLen, taskSuffix,
 		targetVault, trustResult, cmd.Force, maxAdditions, maxChangedFiles,
+		exclusion,
 	)
 	if err := createSender.SendCommand(ctx, createCmd); err != nil {
 		// Transient: downstream Kafka send error. Framework emits Failure and

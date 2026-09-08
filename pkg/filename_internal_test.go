@@ -306,9 +306,34 @@ var _ = Describe("buildTaskBody", func() {
 			Title:   "feat: my feature",
 			HTMLURL: "https://github.com/bborbe/foo/pull/1",
 		}
-		body := buildTaskBody(pr)
+		body := buildTaskBody(pr, Exclusion{})
 		Expect(body).To(ContainSubstring("https://github.com/bborbe/foo/pull/1"))
 		Expect(body).To(ContainSubstring("**Repo:** [bborbe/foo](https://github.com/bborbe/foo)"))
+	})
+
+	It("omits the .reviewignore note when nothing was excluded", func() {
+		pr := PullRequest{
+			Number:  1,
+			Owner:   "bborbe",
+			Repo:    "foo",
+			Title:   "feat: my feature",
+			HTMLURL: "https://github.com/bborbe/foo/pull/1",
+		}
+		Expect(buildTaskBody(pr, Exclusion{})).NotTo(ContainSubstring(".reviewignore"))
+	})
+
+	It("reports the exclusion on a normal (non-parked) review task", func() {
+		pr := PullRequest{
+			Number:  1,
+			Owner:   "bborbe",
+			Repo:    "foo",
+			Title:   "feat: my feature",
+			HTMLURL: "https://github.com/bborbe/foo/pull/1",
+		}
+		body := buildTaskBody(pr, Exclusion{Additions: 499, Files: 3})
+		Expect(
+			body,
+		).To(ContainSubstring("499 additions across 3 files excluded by `.reviewignore`"))
 	})
 })
 

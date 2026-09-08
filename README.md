@@ -61,6 +61,69 @@ Entries are comma-separated. A leading `!` marks an exclusion. A target is allow
 
 An allowlist consisting of only exclude entries is treated as allow-all-except: every target passes the include gate, and only the exclude gate filters. Example: `REPO_ALLOWLIST=!github.com/bborbe/go-skeleton` rejects go-skeleton and allows every other repo (including all other bborbe repos). To allow every bborbe repo except go-skeleton, write `github.com/bborbe/*,!github.com/bborbe/go-skeleton`.
 
+## `.reviewignore` — per-repo size-gate exclusion
+
+`MAX_ADDITIONS` / `MAX_CHANGED_FILES` count the whole diff, so a PR that is mostly
+non-reviewable content parks even when the real code change is small. A repo opts
+out of that by committing a `.reviewignore` at its root:
+
+```gitignore
+# generated / vendored — nobody reviews these
+vendor/
+**/mocks/**
+*.snap
+
+# dark-factory pipeline state (NOT scenarios — those are shipped contracts)
+prompts/
+specs/
+```
+
+Syntax is gitignore: `#` comments, blank lines, `**` depth wildcards, `!` negation.
+Matched files are subtracted from both the added-line and changed-file counts
+**before** the park decision, so only reviewable content can trip the thresholds.
+The same exclusion is reported on the task body:
+
+```
+499 additions across 3 files excluded by `.reviewignore` (not counted toward the size gate, not sent to the reviewer).
+```
+
+Two properties are deliberate:
+
+- **The audit line appears on every review task, not only parked ones.** Reporting it
+  only on parks would hide the exclusion on exactly the PRs it rescued from parking.
+- **`.reviewignore` can never exclude itself.** A pattern matching `.reviewignore` —
+  directly, via `*`, or via negation ordering — has no effect: the file's own added
+  lines always count toward the gate and never appear in the excluded total. A repo
+  cannot use the file to conceal edits to the file.
+
+An absent or empty `.reviewignore` excludes nothing, and any error reading it is
+treated the same way — a failure can only ever park more, never let an oversized PR
+through.
+
+### Negation and excluded parents
+
+Matching follows git, including the gitignore rule that **a file cannot be
+re-included once a parent directory is excluded**:
+
+```gitignore
+specs/
+!specs/README.md    # has NO effect — specs/ already excluded the parent
+```
+
+`specs/README.md` stays excluded. To exclude a directory's contents while keeping
+one file, exclude by pattern rather than by directory:
+
+```gitignore
+specs/*
+!specs/README.md    # works — no parent directory was excluded
+```
+
+This is worth stating because the Go gitignore library backing the size gate does
+*not* implement that rule on its own; the matcher re-checks ancestor directories to
+restore it. The size gate and the reviewer prompt (which drives git's own ignore
+engine) must agree about the same file — otherwise a path the gate counts as
+reviewable would be withheld from the reviewer.
+
 ## HTTP Endpoints
 
 | Path | Method | Purpose |

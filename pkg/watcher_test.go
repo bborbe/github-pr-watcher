@@ -17,6 +17,7 @@ import (
 	"github.com/bborbe/github-pr-watcher/mocks"
 	"github.com/bborbe/github-pr-watcher/pkg"
 	"github.com/bborbe/github-pr-watcher/pkg/filter"
+	"github.com/bborbe/github-pr-watcher/pkg/reviewignore"
 	"github.com/bborbe/github-pr-watcher/pkg/trust"
 	libtime "github.com/bborbe/time"
 	. "github.com/onsi/ginkgo/v2"
@@ -43,6 +44,7 @@ func newTestWatcher(
 			MaxTitleLen: pkg.DefaultMaxTitleLen,
 			TaskSuffix:  "",
 		},
+		ghClient,
 	)
 	return pkg.NewWatcher(
 		ghClient,
@@ -81,6 +83,7 @@ func newTestWatcherWithOverride(
 			MaxTitleLen: pkg.DefaultMaxTitleLen,
 			TaskSuffix:  "",
 		},
+		ghClient,
 	)
 	return pkg.NewWatcher(
 		ghClient,
@@ -119,6 +122,7 @@ func newTestWatcherWithAutoMerge(
 			MaxTitleLen: pkg.DefaultMaxTitleLen,
 			TaskSuffix:  "",
 		},
+		ghClient,
 	)
 	return pkg.NewWatcher(
 		ghClient,
@@ -157,6 +161,7 @@ func newTestWatcherWithTrivialAutoMerge(
 			MaxTitleLen: pkg.DefaultMaxTitleLen,
 			TaskSuffix:  "",
 		},
+		ghClient,
 	)
 	return pkg.NewWatcher(
 		ghClient,
@@ -1742,6 +1747,8 @@ var _ = Describe("BuildCreateCommand", func() {
 				false,
 				0, // maxAdditions disabled
 				0, // maxChangedFiles disabled
+
+				pkg.Exclusion{},
 			)
 
 			Expect(cmd.TargetVault).To(Equal("agent"))
@@ -1772,6 +1779,8 @@ var _ = Describe("BuildCreateCommand", func() {
 			false,
 			0, // maxAdditions disabled
 			0, // maxChangedFiles disabled
+
+			pkg.Exclusion{},
 		)
 
 		Expect(cmd.TargetVault).To(Equal("agent"))
@@ -1803,6 +1812,8 @@ var _ = Describe("BuildCreateCommand", func() {
 			false,
 			0, // maxAdditions disabled
 			0, // maxChangedFiles disabled
+
+			pkg.Exclusion{},
 		)
 
 		Expect(cmd.Body).To(ContainSubstring("(unknown)"))
@@ -1828,6 +1839,8 @@ var _ = Describe("BuildCreateCommand", func() {
 			false,
 			0, // maxAdditions disabled
 			0, // maxChangedFiles disabled
+
+			pkg.Exclusion{},
 		)
 
 		// Title must not contain slashes or colons that could break filename
@@ -1855,6 +1868,7 @@ var _ = Describe("BuildCreateCommand", func() {
 			false,
 			0, // maxAdditions disabled
 			0, // maxChangedFiles disabled
+			pkg.Exclusion{},
 		) // maxTitleLen=30
 
 		Expect(len(cmd.Title)).To(BeNumerically("<=", 30+len("-github-owner-repo-1-abc123")))
@@ -1881,6 +1895,7 @@ var _ = Describe("BuildCreateCommand forced re-review", func() {
 	build := func(taskIDStr string, forced bool) task.CreateCommand {
 		return pkg.BuildCreateCommand(
 			pr, details, taskIDStr, "prod", 80, 200, "", "", trusted, forced, 0, 0,
+			pkg.Exclusion{},
 		)
 	}
 
@@ -1922,7 +1937,9 @@ var _ = Describe("oversized park predicate", func() {
 	DescribeTable(
 		"threshold boundaries",
 		func(details pkg.PRDetails, maxAdditions, maxChangedFiles int, wantParked bool) {
-			Expect(pkg.Oversized(details, maxAdditions, maxChangedFiles)).To(Equal(wantParked))
+			Expect(
+				pkg.Oversized(details, pkg.Exclusion{}, maxAdditions, maxChangedFiles),
+			).To(Equal(wantParked))
 		},
 		Entry("over additions threshold", makeDetails(601, 2), 500, 100, true),
 		Entry(
@@ -1988,6 +2005,7 @@ var _ = Describe("BuildCreateCommand oversized PR park", func() {
 			makePR("trusted-user"), makeOversized(), "00000000-0000-0000-0000-000000000011",
 			"dev", 80, 60, "pr-reviewer", "agent",
 			trust.NewResult(true, "author allowlist"), false, 500, 100,
+			pkg.Exclusion{},
 		)
 		Expect(cmd.Frontmatter["phase"]).To(Equal("human_review"))
 		Expect(cmd.Frontmatter["status"]).To(Equal("todo"))
@@ -2002,6 +2020,7 @@ var _ = Describe("BuildCreateCommand oversized PR park", func() {
 			makePR("trusted-user"), makeOversized(), "00000000-0000-0000-0000-000000000012",
 			"dev", 80, 60, "pr-reviewer", "agent",
 			trust.NewResult(true, "author allowlist"), false, 0, 0,
+			pkg.Exclusion{},
 		)
 		Expect(cmd.Frontmatter["phase"]).To(Equal("planning"))
 		Expect(cmd.Frontmatter["assignee"]).To(Equal("pr-reviewer-agent"))
@@ -2015,6 +2034,7 @@ var _ = Describe("BuildCreateCommand oversized PR park", func() {
 			makePR("trusted-user"), details, "00000000-0000-0000-0000-000000000013",
 			"dev", 80, 60, "pr-reviewer", "agent",
 			trust.NewResult(true, "author allowlist"), false, 500, 100,
+			pkg.Exclusion{},
 		)
 		Expect(cmd.Frontmatter["phase"]).To(Equal("planning"))
 	})
@@ -2024,6 +2044,7 @@ var _ = Describe("BuildCreateCommand oversized PR park", func() {
 			makePR("trusted-user"), makeOversized(), "00000000-0000-0000-0000-000000000014",
 			"dev", 80, 60, "pr-reviewer", "agent",
 			trust.NewResult(true, "author allowlist"), true, 500, 100,
+			pkg.Exclusion{},
 		)
 		Expect(cmd.Frontmatter["phase"]).To(Equal("planning"))
 		Expect(cmd.Frontmatter["assignee"]).To(Equal("pr-reviewer-agent"))
@@ -2034,10 +2055,107 @@ var _ = Describe("BuildCreateCommand oversized PR park", func() {
 			makePR("unknown-user"), makeOversized(), "00000000-0000-0000-0000-000000000015",
 			"dev", 80, 60, "pr-reviewer", "agent",
 			trust.NewResult(false, "author not in allowlist"), false, 500, 100,
+			pkg.Exclusion{},
 		)
 		Expect(cmd.Frontmatter["phase"]).To(Equal("human_review"))
 		Expect(cmd.Frontmatter["assignee"]).To(Equal(""))
 		Expect(cmd.Body).To(ContainSubstring("Untrusted author"))
 		Expect(cmd.Body).NotTo(ContainSubstring("Oversized PR"))
+	})
+
+	// The two shapes below are the measured incidents this feature exists for.
+	// trading#278: 827 additions / 6 files, of which 499 additions across 3
+	// files were dark-factory artifacts — only ~328 lines were reviewable.
+	// trading#259: 2481 additions, ~62% artifacts — still oversized net of
+	// exclusion, and must keep parking.
+	It("PR #278 shape — excluded artifacts bring it under the limit, reviews", func() {
+		details := pkg.PRDetails{
+			HeadSHA:      "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+			CloneURL:     "https://github.com/bborbe/trading.git",
+			BaseRef:      "master",
+			Additions:    827,
+			ChangedFiles: 6,
+		}
+		cmd := pkg.BuildCreateCommand(
+			makePR("trusted-user"), details, "00000000-0000-0000-0000-000000000016",
+			"dev", 80, 60, "pr-reviewer", "agent",
+			trust.NewResult(true, "author allowlist"), false, 500, 100,
+			pkg.Exclusion{Additions: 499, Files: 3},
+		)
+		Expect(cmd.Frontmatter["phase"]).To(Equal("planning"))
+		Expect(cmd.Frontmatter["assignee"]).To(Equal("pr-reviewer-agent"))
+		Expect(cmd.Body).NotTo(ContainSubstring("Oversized PR"))
+		Expect(cmd.Body).To(
+			ContainSubstring("499 additions across 3 files excluded by `.reviewignore`"),
+		)
+	})
+
+	It("PR #259 shape — still oversized net of exclusion, parks", func() {
+		details := pkg.PRDetails{
+			HeadSHA:      "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+			CloneURL:     "https://github.com/bborbe/trading.git",
+			BaseRef:      "master",
+			Additions:    2481,
+			ChangedFiles: 37,
+		}
+		cmd := pkg.BuildCreateCommand(
+			makePR("trusted-user"), details, "00000000-0000-0000-0000-000000000017",
+			"dev", 80, 60, "pr-reviewer", "agent",
+			trust.NewResult(true, "author allowlist"), false, 500, 100,
+			pkg.Exclusion{Additions: 1500, Files: 20},
+		)
+		Expect(cmd.Frontmatter["phase"]).To(Equal("human_review"))
+		Expect(cmd.Body).To(ContainSubstring("Oversized PR"))
+		// The park reports the REVIEWABLE size, not the raw diff size.
+		Expect(cmd.Body).To(ContainSubstring("981 added lines"))
+		Expect(cmd.Body).To(ContainSubstring("17 changed files"))
+		Expect(cmd.Body).To(
+			ContainSubstring("1500 additions across 20 files excluded by `.reviewignore`"),
+		)
+	})
+
+	It("exclusion larger than the PR totals clamps at zero, never parks on a negative", func() {
+		cmd := pkg.BuildCreateCommand(
+			makePR("trusted-user"), makeOversized(), "00000000-0000-0000-0000-000000000018",
+			"dev", 80, 60, "pr-reviewer", "agent",
+			trust.NewResult(true, "author allowlist"), false, 500, 100,
+			pkg.Exclusion{Additions: 9999, Files: 9999},
+		)
+		Expect(cmd.Frontmatter["phase"]).To(Equal("planning"))
+	})
+})
+
+var _ = Describe("ComputeExclusion", func() {
+	files := []pkg.PRFile{
+		{Filename: "prompts/completed/151.md", Additions: 195},
+		{Filename: "prompts/completed/152.md", Additions: 170},
+		{Filename: "specs/in-progress/021.md", Additions: 151},
+		{Filename: "core/signal/finder.py", Additions: 328},
+		{Filename: ".reviewignore", Additions: 4},
+	}
+
+	It("sums additions and files for matched paths only", func() {
+		matcher := reviewignore.Parse([]byte("prompts/\nspecs/\n"))
+		Expect(pkg.ComputeExclusion(files, matcher)).To(Equal(
+			pkg.Exclusion{Additions: 516, Files: 3},
+		))
+	})
+
+	It("never counts .reviewignore itself, even when the file names itself", func() {
+		matcher := reviewignore.Parse([]byte("prompts/\nspecs/\n.reviewignore\n"))
+		exclusion := pkg.ComputeExclusion(files, matcher)
+		Expect(exclusion).To(Equal(pkg.Exclusion{Additions: 516, Files: 3}))
+		// 4 additions from .reviewignore stay counted toward the gate.
+		Expect(exclusion.Additions).NotTo(Equal(520))
+	})
+
+	It("returns the zero exclusion for a nil matcher", func() {
+		Expect(pkg.ComputeExclusion(files, nil)).To(Equal(pkg.Exclusion{}))
+		Expect(pkg.ComputeExclusion(files, nil).Empty()).To(BeTrue())
+	})
+
+	It("returns the zero exclusion when nothing matches", func() {
+		matcher := reviewignore.Parse([]byte("nonexistent/\n"))
+		Expect(pkg.ComputeExclusion(files, matcher).Empty()).To(BeTrue())
 	})
 })

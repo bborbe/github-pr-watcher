@@ -9,6 +9,7 @@ import (
 	"sync"
 
 	"github.com/bborbe/github-pr-watcher/pkg"
+	"github.com/bborbe/github-pr-watcher/pkg/reviewignore"
 	"github.com/bborbe/maintainer/maintainerconfig"
 	"github.com/bborbe/time"
 )
@@ -85,6 +86,21 @@ type GitHubClient struct {
 	}
 	getRateLimitCoreRemainingReturnsOnCall map[int]struct {
 		result1 int
+		result2 error
+	}
+	GetReviewIgnoreStub        func(context.Context, string, string) (reviewignore.Matcher, error)
+	getReviewIgnoreMutex       sync.RWMutex
+	getReviewIgnoreArgsForCall []struct {
+		arg1 context.Context
+		arg2 string
+		arg3 string
+	}
+	getReviewIgnoreReturns struct {
+		result1 reviewignore.Matcher
+		result2 error
+	}
+	getReviewIgnoreReturnsOnCall map[int]struct {
+		result1 reviewignore.Matcher
 		result2 error
 	}
 	ListPRFilesStub        func(context.Context, string, string, int) ([]pkg.PRFile, error)
@@ -455,6 +471,72 @@ func (fake *GitHubClient) GetRateLimitCoreRemainingReturnsOnCall(i int, result1 
 	}
 	fake.getRateLimitCoreRemainingReturnsOnCall[i] = struct {
 		result1 int
+		result2 error
+	}{result1, result2}
+}
+
+func (fake *GitHubClient) GetReviewIgnore(arg1 context.Context, arg2 string, arg3 string) (reviewignore.Matcher, error) {
+	fake.getReviewIgnoreMutex.Lock()
+	ret, specificReturn := fake.getReviewIgnoreReturnsOnCall[len(fake.getReviewIgnoreArgsForCall)]
+	fake.getReviewIgnoreArgsForCall = append(fake.getReviewIgnoreArgsForCall, struct {
+		arg1 context.Context
+		arg2 string
+		arg3 string
+	}{arg1, arg2, arg3})
+	stub := fake.GetReviewIgnoreStub
+	fakeReturns := fake.getReviewIgnoreReturns
+	fake.recordInvocation("GetReviewIgnore", []interface{}{arg1, arg2, arg3})
+	fake.getReviewIgnoreMutex.Unlock()
+	if stub != nil {
+		return stub(arg1, arg2, arg3)
+	}
+	if specificReturn {
+		return ret.result1, ret.result2
+	}
+	return fakeReturns.result1, fakeReturns.result2
+}
+
+func (fake *GitHubClient) GetReviewIgnoreCallCount() int {
+	fake.getReviewIgnoreMutex.RLock()
+	defer fake.getReviewIgnoreMutex.RUnlock()
+	return len(fake.getReviewIgnoreArgsForCall)
+}
+
+func (fake *GitHubClient) GetReviewIgnoreCalls(stub func(context.Context, string, string) (reviewignore.Matcher, error)) {
+	fake.getReviewIgnoreMutex.Lock()
+	defer fake.getReviewIgnoreMutex.Unlock()
+	fake.GetReviewIgnoreStub = stub
+}
+
+func (fake *GitHubClient) GetReviewIgnoreArgsForCall(i int) (context.Context, string, string) {
+	fake.getReviewIgnoreMutex.RLock()
+	defer fake.getReviewIgnoreMutex.RUnlock()
+	argsForCall := fake.getReviewIgnoreArgsForCall[i]
+	return argsForCall.arg1, argsForCall.arg2, argsForCall.arg3
+}
+
+func (fake *GitHubClient) GetReviewIgnoreReturns(result1 reviewignore.Matcher, result2 error) {
+	fake.getReviewIgnoreMutex.Lock()
+	defer fake.getReviewIgnoreMutex.Unlock()
+	fake.GetReviewIgnoreStub = nil
+	fake.getReviewIgnoreReturns = struct {
+		result1 reviewignore.Matcher
+		result2 error
+	}{result1, result2}
+}
+
+func (fake *GitHubClient) GetReviewIgnoreReturnsOnCall(i int, result1 reviewignore.Matcher, result2 error) {
+	fake.getReviewIgnoreMutex.Lock()
+	defer fake.getReviewIgnoreMutex.Unlock()
+	fake.GetReviewIgnoreStub = nil
+	if fake.getReviewIgnoreReturnsOnCall == nil {
+		fake.getReviewIgnoreReturnsOnCall = make(map[int]struct {
+			result1 reviewignore.Matcher
+			result2 error
+		})
+	}
+	fake.getReviewIgnoreReturnsOnCall[i] = struct {
+		result1 reviewignore.Matcher
 		result2 error
 	}{result1, result2}
 }

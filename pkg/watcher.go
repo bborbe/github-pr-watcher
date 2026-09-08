@@ -14,6 +14,7 @@ import (
 	task "github.com/bborbe/agent/command/task"
 	"github.com/bborbe/errors"
 	"github.com/bborbe/github-pr-watcher/pkg/filter"
+	"github.com/bborbe/github-pr-watcher/pkg/reviewignore"
 	"github.com/bborbe/github-pr-watcher/pkg/trust"
 	libtime "github.com/bborbe/time"
 	"github.com/golang/glog"
@@ -77,12 +78,14 @@ func NewTaskPublisher(
 	trustDecision trust.Trust,
 	metrics Metrics,
 	cfg TaskConfig,
+	ghClient GitHubClient,
 ) TaskPublisher {
 	return &taskPublisher{
 		createSender:  createSender,
 		trustDecision: trustDecision,
 		metrics:       metrics,
 		cfg:           cfg,
+		ghClient:      ghClient,
 	}
 }
 
@@ -91,6 +94,10 @@ type taskPublisher struct {
 	trustDecision trust.Trust
 	metrics       Metrics
 	cfg           TaskConfig
+	// ghClient reads the repo's `.reviewignore` so the size gate counts only
+	// reviewable content. Nil-tolerant: a publisher built without one simply
+	// excludes nothing.
+	ghClient GitHubClient
 }
 
 // PublishCreate implements TaskPublisher.
@@ -109,6 +116,8 @@ func (p *taskPublisher) PublishCreate(
 		return false
 	}
 
+	exclusion := ReviewIgnoreExclusion(ctx, p.ghClient, pr.Owner, pr.Repo, pr.Number, pr.HTMLURL)
+
 	cmd := BuildCreateCommand(
 		pr,
 		details,
@@ -122,6 +131,7 @@ func (p *taskPublisher) PublishCreate(
 		false, // poll path is never a forced re-review
 		p.cfg.MaxAdditions,
 		p.cfg.MaxChangedFiles,
+		exclusion,
 	)
 
 	if err := p.createSender.SendCommand(ctx, cmd); err != nil {
@@ -133,7 +143,8 @@ func (p *taskPublisher) PublishCreate(
 	// separately from normal reviews — matches BuildCreateCommand's decision
 	// (park only applies to trusted authors in the poll path, where forced is
 	// always false). The parked count is how the crash fix proves itself live.
-	parked := trustResult.Success() && oversized(details, p.cfg.MaxAdditions, p.cfg.MaxChangedFiles)
+	parked := trustResult.Success() &&
+		oversized(details, exclusion, p.cfg.MaxAdditions, p.cfg.MaxChangedFiles)
 	if parked {
 		p.metrics.IncPRPublished("parked")
 	} else {
@@ -142,6 +153,57 @@ func (p *taskPublisher) PublishCreate(
 	glog.V(2).Infof("published CreateTaskCommand pr=%s/%s#%d sha=%s taskID=%s trusted=%t parked=%t",
 		pr.Owner, pr.Repo, pr.Number, details.HeadSHA, taskIDStr, trustResult.Success(), parked)
 	return true
+}
+
+// ReviewIgnoreExclusion reads the repo's `.reviewignore` and computes what it
+// excludes from a PR's size-gate counts. prURL is used only for log context.
+//
+// Every failure path returns the zero Exclusion — nothing excluded. That is
+// the safe direction: an unreadable `.reviewignore` can then only park a PR
+// that would otherwise review, never review a PR that should have parked.
+//
+// The per-file GitHub call is made only when the repo actually has patterns,
+// so a repo that never opted in costs exactly one extra API call per PR (the
+// contents lookup, which 404s) rather than two.
+func ReviewIgnoreExclusion(
+	ctx context.Context,
+	ghClient GitHubClient,
+	owner, repo string,
+	number int,
+	prURL string,
+) Exclusion {
+	if ghClient == nil {
+		return Exclusion{}
+	}
+	matcher, err := ghClient.GetReviewIgnore(ctx, owner, repo)
+	if err != nil {
+		glog.Errorf("get %s failed pr=%s err=%v", reviewignore.Filename, prURL, err)
+		return Exclusion{}
+	}
+	if matcher == nil || matcher.Empty() {
+		return Exclusion{}
+	}
+	files, err := ghClient.ListPRFiles(ctx, owner, repo, number)
+	if err != nil {
+		glog.Errorf(
+			"list pr files for %s failed pr=%s err=%v",
+			reviewignore.Filename,
+			prURL,
+			err,
+		)
+		return Exclusion{}
+	}
+	exclusion := ComputeExclusion(files, matcher)
+	glog.V(3).Infof(
+		"%s excluded additions=%d files=%d pr=%s/%s#%d",
+		reviewignore.Filename,
+		exclusion.Additions,
+		exclusion.Files,
+		owner,
+		repo,
+		number,
+	)
+	return exclusion
 }
 
 // PublishOverride implements TaskPublisher. It emits a `pr-override` task only
@@ -622,6 +684,7 @@ func BuildCreateCommand(
 	forced bool,
 	maxAdditions int,
 	maxChangedFiles int,
+	exclusion Exclusion,
 ) task.CreateCommand {
 	retryToken := retryTokenFor(taskIDStr, forced)
 	if trustResult.Success() {
@@ -631,7 +694,7 @@ func BuildCreateCommand(
 		// so the pod would die before posting any verdict — deterministic waste.
 		// The parked task needs operator reassignment to proceed. A forced
 		// re-review bypasses the park: the operator explicitly requested it.
-		if !forced && oversized(details, maxAdditions, maxChangedFiles) {
+		if !forced && oversized(details, exclusion, maxAdditions, maxChangedFiles) {
 			return task.CreateCommand{
 				Title: computePRTitle(
 					"github",
@@ -648,7 +711,7 @@ func BuildCreateCommand(
 				TargetVault:    targetVault,
 				TaskIdentifier: agentlib.TaskIdentifier(taskIDStr),
 				Frontmatter:    buildHumanReviewFrontmatter(pr, taskIDStr, stage, details),
-				Body:           buildParkedBody(details, maxAdditions, maxChangedFiles),
+				Body:           buildParkedBody(details, exclusion, maxAdditions, maxChangedFiles),
 			}
 		}
 		return task.CreateCommand{
@@ -667,7 +730,7 @@ func BuildCreateCommand(
 			TargetVault:    targetVault,
 			TaskIdentifier: agentlib.TaskIdentifier(taskIDStr),
 			Frontmatter:    buildFrontmatter(pr, taskIDStr, stage, details),
-			Body:           buildTaskBody(pr),
+			Body:           buildTaskBody(pr, exclusion),
 		}
 	}
 	author := pr.AuthorLogin
@@ -767,15 +830,16 @@ func (w *watcher) fetchPRDetails(
 	return details, nil
 }
 
-func buildTaskBody(pr PullRequest) string {
+func buildTaskBody(pr PullRequest, exclusion Exclusion) string {
 	repoLink := fmt.Sprintf("https://github.com/%s/%s", pr.Owner, pr.Repo)
 	return fmt.Sprintf(
-		"# PR Review: %s\n\n%s\n\n**Repo:** [%s/%s](%s)\n",
+		"# PR Review: %s\n\n%s\n\n**Repo:** [%s/%s](%s)\n%s",
 		pr.Title,
 		pr.HTMLURL,
 		pr.Owner,
 		pr.Repo,
 		repoLink,
+		buildExclusionNote(exclusion),
 	)
 }
 
@@ -817,42 +881,124 @@ func buildHumanReviewFrontmatter(
 	}
 }
 
-// oversized reports whether a PR's diff exceeds the park thresholds. A
-// threshold of 0 disables that dimension (never parks on it). Park when
-// either dimension is STRICTLY over its limit — a PR exactly at the limit
-// still reviews normally. The check is deliberately per-dimension disabled
-// rather than treat-0-as-limit, so an unset env var cannot silently park
-// every PR.
-func oversized(details PRDetails, maxAdditions, maxChangedFiles int) bool {
-	if maxAdditions > 0 && details.Additions > maxAdditions {
+// Exclusion is a computed result, not a constructed dependency, so the
+// functions producing it (ComputeExclusion, ReviewIgnoreExclusion) are named
+// for the computation rather than carrying a `New` constructor prefix.
+//
+// Exclusion is what a repo's `.reviewignore` removed from the size-gate
+// counts. The zero value means nothing was excluded — the state for a repo
+// with no `.reviewignore`, and the safe default on any fetch error, so a
+// failure to read the file can only ever park more, never less.
+type Exclusion struct {
+	// Additions is the sum of added lines across matched files.
+	Additions int
+	// Files is the number of matched files.
+	Files int
+}
+
+// Empty reports whether the exclusion removed nothing, so callers can skip
+// reporting a line that would read "0 additions across 0 files excluded".
+func (e Exclusion) Empty() bool {
+	return e.Additions == 0 && e.Files == 0
+}
+
+// ComputeExclusion sums the additions and file count that matcher excludes
+// across the PR's changed files. `.reviewignore` can never match itself (the
+// guard lives in reviewignore.Parse), so the file's own edits always count
+// toward the gate and never appear here.
+func ComputeExclusion(files []PRFile, matcher reviewignore.Matcher) Exclusion {
+	if matcher == nil {
+		return Exclusion{}
+	}
+	var e Exclusion
+	for _, f := range files {
+		if matcher.Match(f.Filename) {
+			e.Additions += f.Additions
+			e.Files++
+		}
+	}
+	return e
+}
+
+// oversized reports whether a PR's REVIEWABLE diff exceeds the park
+// thresholds. Reviewable means net of exclusion: whatever a repo's
+// `.reviewignore` matched is subtracted first, so non-reviewable content
+// (vendored deps, generated mocks, dark-factory pipeline state) cannot park a
+// small code change. A threshold of 0 disables that dimension (never parks on
+// it). Park when either dimension is STRICTLY over its limit — a PR exactly at
+// the limit still reviews normally. The check is deliberately per-dimension
+// disabled rather than treat-0-as-limit, so an unset env var cannot silently
+// park every PR.
+func oversized(
+	details PRDetails,
+	exclusion Exclusion,
+	maxAdditions, maxChangedFiles int,
+) bool {
+	additions, changedFiles := effectiveSize(details, exclusion)
+	if maxAdditions > 0 && additions > maxAdditions {
 		return true
 	}
-	if maxChangedFiles > 0 && details.ChangedFiles > maxChangedFiles {
+	if maxChangedFiles > 0 && changedFiles > maxChangedFiles {
 		return true
 	}
 	return false
 }
 
+// effectiveSize returns the PR's reviewable added-line and changed-file counts
+// after subtracting the exclusion. Both are clamped at 0: GitHub's PR-level
+// totals and its per-file list are fetched in separate calls and can disagree
+// on a PR that changed between them, and a negative count would silently
+// disable the gate.
+func effectiveSize(details PRDetails, exclusion Exclusion) (int, int) {
+	additions := max(details.Additions-exclusion.Additions, 0)
+	changedFiles := max(details.ChangedFiles-exclusion.Files, 0)
+	return additions, changedFiles
+}
+
 // buildParkedBody explains why a PR was parked at human_review and how the
 // operator proceeds. Only dimensions with an enabled threshold are listed,
 // so a disabled dimension never appears as a confusing "limit 0".
-func buildParkedBody(details PRDetails, maxAdditions, maxChangedFiles int) string {
+func buildParkedBody(
+	details PRDetails,
+	exclusion Exclusion,
+	maxAdditions, maxChangedFiles int,
+) string {
+	additions, changedFiles := effectiveSize(details, exclusion)
 	var reasons []string
 	if maxAdditions > 0 {
 		reasons = append(
 			reasons,
-			fmt.Sprintf("%d added lines (limit %d)", details.Additions, maxAdditions),
+			fmt.Sprintf("%d added lines (limit %d)", additions, maxAdditions),
 		)
 	}
 	if maxChangedFiles > 0 {
 		reasons = append(
 			reasons,
-			fmt.Sprintf("%d changed files (limit %d)", details.ChangedFiles, maxChangedFiles),
+			fmt.Sprintf("%d changed files (limit %d)", changedFiles, maxChangedFiles),
 		)
 	}
 	return fmt.Sprintf(
-		"## Oversized PR — parked for human review\n\nThis PR has %s, which exceeds the auto-reviewer's context budget. Spawning a review pod would overflow its context window (`claude CLI failed: Prompt is too long`) and die before posting a verdict.\n\nTo review anyway, edit the frontmatter: `assignee: pr-reviewer-agent`, `phase: in_progress`, `status: in_progress`. To dismiss, set `status: aborted`.\n",
+		"## Oversized PR — parked for human review\n\nThis PR has %s, which exceeds the auto-reviewer's context budget. Spawning a review pod would overflow its context window (`claude CLI failed: Prompt is too long`) and die before posting a verdict.\n%s\nTo review anyway, edit the frontmatter: `assignee: pr-reviewer-agent`, `phase: in_progress`, `status: in_progress`. To dismiss, set `status: aborted`.\n",
 		strings.Join(reasons, " and "),
+		buildExclusionNote(exclusion),
+	)
+}
+
+// buildExclusionNote renders the `.reviewignore` audit line that makes an
+// exclusion visible rather than silent. It is deliberately present on BOTH the
+// park body and the normal review body: reporting it only on parks would hide
+// it on exactly the PRs the exclusion rescued from parking, which is the case
+// the visibility control exists for. Returns an empty string when nothing was
+// excluded, so repos without a `.reviewignore` see no change.
+func buildExclusionNote(exclusion Exclusion) string {
+	if exclusion.Empty() {
+		return ""
+	}
+	return fmt.Sprintf(
+		"\n%d additions across %d files excluded by `%s` (not counted toward the size gate, not sent to the reviewer).\n",
+		exclusion.Additions,
+		exclusion.Files,
+		reviewignore.Filename,
 	)
 }
 

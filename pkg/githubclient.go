@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/bborbe/errors"
+	"github.com/bborbe/github-pr-watcher/pkg/reviewignore"
 	libtime "github.com/bborbe/time"
 	"github.com/golang/glog"
 	gogithub "github.com/google/go-github/v62/github"
@@ -131,6 +132,16 @@ type GitHubClient interface {
 	// the mechanical triviality classifier.
 	ListPRFiles(ctx context.Context, owner, repo string, number int) ([]PRFile, error)
 
+	// GetReviewIgnore fetches the repo's root `.reviewignore` and returns a
+	// matcher for the paths it excludes from the size gate. An absent file
+	// (404) returns a matcher that excludes nothing, with a nil error —
+	// matching the "opt-in, never defaulted-on" contract GetMaintainerConfig
+	// uses. Other errors are wrapped.
+	GetReviewIgnore(
+		ctx context.Context,
+		owner, repo string,
+	) (reviewignore.Matcher, error)
+
 	// AddLabel adds a label to a PR (a no-op when already present). Requires
 	// the authenticating identity to hold Pull requests: Write on the repo.
 	AddLabel(ctx context.Context, owner, repo string, number int, label string) error
@@ -157,6 +168,11 @@ type GitHubClient interface {
 type PRFile struct {
 	Filename string
 	Patch    string
+	// Additions is the file's added-line count, as reported by the GitHub
+	// files API. Used to compute how many additions a repo's `.reviewignore`
+	// excludes from the size gate, so the park decision counts only
+	// reviewable content.
+	Additions int
 }
 
 // NewGitHubClient returns a GitHubClient backed by the real GitHub API.
@@ -463,6 +479,47 @@ func (c *githubClient) GetMaintainerConfig(
 	return cfg, nil
 }
 
+// GetReviewIgnore fetches and parses the repo's root `.reviewignore`. An
+// absent file yields a matcher that excludes nothing, so a repo that never
+// opted in is unaffected by the size-gate exclusion path.
+func (c *githubClient) GetReviewIgnore(
+	ctx context.Context,
+	owner, repo string,
+) (reviewignore.Matcher, error) {
+	content, _, resp, err := c.client.Repositories.GetContents(
+		ctx,
+		owner,
+		repo,
+		reviewignore.Filename,
+		nil,
+	)
+	if err != nil {
+		if resp != nil && resp.StatusCode == http.StatusNotFound {
+			return reviewignore.Parse(nil), nil
+		}
+		return nil, errors.Wrapf(
+			ctx,
+			err,
+			"get %s %s/%s",
+			reviewignore.Filename,
+			owner,
+			repo,
+		)
+	}
+	raw, err := content.GetContent()
+	if err != nil {
+		return nil, errors.Wrapf(
+			ctx,
+			err,
+			"decode %s %s/%s",
+			reviewignore.Filename,
+			owner,
+			repo,
+		)
+	}
+	return reviewignore.Parse([]byte(raw)), nil
+}
+
 // ListPRFiles pages through the PR's changed files. Pagination is followed to
 // exhaustion (GitHub caps at 100 per page; large PRs span multiple pages).
 func (c *githubClient) ListPRFiles(
@@ -490,7 +547,11 @@ func (c *githubClient) ListPRFiles(
 			)
 		}
 		for _, f := range page {
-			files = append(files, PRFile{Filename: f.GetFilename(), Patch: f.GetPatch()})
+			files = append(files, PRFile{
+				Filename:  f.GetFilename(),
+				Patch:     f.GetPatch(),
+				Additions: f.GetAdditions(),
+			})
 		}
 		if resp.NextPage == 0 {
 			break
