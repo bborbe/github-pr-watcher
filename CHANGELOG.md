@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+- feat: honour a repo-root `.reviewignore` (gitignore syntax) so non-reviewable paths — vendored deps, generated mocks, dark-factory `prompts/`/`specs/` — no longer count toward the `MAX_ADDITIONS`/`MAX_CHANGED_FILES` park thresholds
+- feat: report `N additions across M files excluded by .reviewignore` on both the parked body and the normal review task body, so an exclusion is always visible
+- feat: `.reviewignore` can never exclude itself; its own added lines always count toward the size gate
+
 ## v0.9.4
 
 - chore: update Go to 1.27.1

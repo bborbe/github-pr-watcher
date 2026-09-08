@@ -61,6 +61,45 @@ Entries are comma-separated. A leading `!` marks an exclusion. A target is allow
 
 An allowlist consisting of only exclude entries is treated as allow-all-except: every target passes the include gate, and only the exclude gate filters. Example: `REPO_ALLOWLIST=!github.com/bborbe/go-skeleton` rejects go-skeleton and allows every other repo (including all other bborbe repos). To allow every bborbe repo except go-skeleton, write `github.com/bborbe/*,!github.com/bborbe/go-skeleton`.
 
+## `.reviewignore` — per-repo size-gate exclusion
+
+`MAX_ADDITIONS` / `MAX_CHANGED_FILES` count the whole diff, so a PR that is mostly
+non-reviewable content parks even when the real code change is small. A repo opts
+out of that by committing a `.reviewignore` at its root:
+
+```gitignore
+# generated / vendored — nobody reviews these
+vendor/
+**/mocks/**
+*.snap
+
+# dark-factory pipeline state (NOT scenarios — those are shipped contracts)
+prompts/
+specs/
+```
+
+Syntax is gitignore: `#` comments, blank lines, `**` depth wildcards, `!` negation.
+Matched files are subtracted from both the added-line and changed-file counts
+**before** the park decision, so only reviewable content can trip the thresholds.
+The same exclusion is reported on the task body:
+
+```
+499 additions across 3 files excluded by `.reviewignore` (not counted toward the size gate, not sent to the reviewer).
+```
+
+Two properties are deliberate:
+
+- **The audit line appears on every review task, not only parked ones.** Reporting it
+  only on parks would hide the exclusion on exactly the PRs it rescued from parking.
+- **`.reviewignore` can never exclude itself.** A pattern matching `.reviewignore` —
+  directly, via `*`, or via negation ordering — has no effect: the file's own added
+  lines always count toward the gate and never appear in the excluded total. A repo
+  cannot use the file to conceal edits to the file.
+
+An absent or empty `.reviewignore` excludes nothing, and any error reading it is
+treated the same way — a failure can only ever park more, never let an oversized PR
+through.
+
 ## HTTP Endpoints
 
 | Path | Method | Purpose |

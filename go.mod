@@ -24,6 +24,7 @@ require (
 	github.com/onsi/ginkgo/v2 v2.32.1
 	github.com/onsi/gomega v1.43.0
 	github.com/prometheus/client_golang v1.24.1
+	github.com/sabhiram/go-gitignore v0.0.0-20210923224102-525f6e181f06
 )
 
 require (

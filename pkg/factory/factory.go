@@ -85,6 +85,7 @@ func CreateWatcher(
 			MaxAdditions:    maxAdditions,
 			MaxChangedFiles: maxChangedFiles,
 		},
+		ghClient,
 	)
 	return pkg.NewWatcher(
 		ghClient,
