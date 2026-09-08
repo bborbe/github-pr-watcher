@@ -100,6 +100,30 @@ An absent or empty `.reviewignore` excludes nothing, and any error reading it is
 treated the same way — a failure can only ever park more, never let an oversized PR
 through.
 
+### Negation and excluded parents
+
+Matching follows git, including the gitignore rule that **a file cannot be
+re-included once a parent directory is excluded**:
+
+```gitignore
+specs/
+!specs/README.md    # has NO effect — specs/ already excluded the parent
+```
+
+`specs/README.md` stays excluded. To exclude a directory's contents while keeping
+one file, exclude by pattern rather than by directory:
+
+```gitignore
+specs/*
+!specs/README.md    # works — no parent directory was excluded
+```
+
+This is worth stating because the Go gitignore library backing the size gate does
+*not* implement that rule on its own; the matcher re-checks ancestor directories to
+restore it. The size gate and the reviewer prompt (which drives git's own ignore
+engine) must agree about the same file — otherwise a path the gate counts as
+reviewable would be withheld from the reviewer.
+
 ## HTTP Endpoints
 
 | Path | Method | Purpose |

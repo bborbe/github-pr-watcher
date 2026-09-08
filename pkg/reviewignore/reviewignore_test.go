@@ -61,17 +61,41 @@ var _ = Describe("Parse", func() {
 		)
 	})
 
-	Context("negation re-includes", func() {
-		BeforeEach(func() {
-			matcher = reviewignore.Parse([]byte("specs/\n!specs/README.md\n"))
+	Context("negation", func() {
+		// git semantics, verified against
+		// `git -c core.excludesFile=<file> check-ignore --no-index` on
+		// 2026-09-08. These two cases differ, and the difference is the
+		// gitignore spec's rule that a file cannot be re-included once a
+		// parent directory is excluded.
+		Context("under an excluded directory — negation does NOT re-include", func() {
+			BeforeEach(func() {
+				matcher = reviewignore.Parse([]byte("specs/\n!specs/README.md\n"))
+			})
+
+			It("excludes the directory contents", func() {
+				Expect(matcher.Match("specs/021.md")).To(BeTrue())
+			})
+
+			It("keeps the negated path excluded, matching git", func() {
+				// `sabhiram/go-gitignore` alone re-includes this; git does
+				// not. The size gate must agree with the reviewer prompt,
+				// which drives git's own engine — see parentExcluded.
+				Expect(matcher.Match("specs/README.md")).To(BeTrue())
+			})
 		})
 
-		It("excludes the directory", func() {
-			Expect(matcher.Match("specs/021.md")).To(BeTrue())
-		})
+		Context("no excluded parent — negation DOES re-include", func() {
+			BeforeEach(func() {
+				matcher = reviewignore.Parse([]byte("*.snap\n!keep.snap\n"))
+			})
 
-		It("re-includes the negated path", func() {
-			Expect(matcher.Match("specs/README.md")).To(BeFalse())
+			It("excludes the matched suffix", func() {
+				Expect(matcher.Match("fixture.snap")).To(BeTrue())
+			})
+
+			It("re-includes the negated file", func() {
+				Expect(matcher.Match("keep.snap")).To(BeFalse())
+			})
 		})
 	})
 

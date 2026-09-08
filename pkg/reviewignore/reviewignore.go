@@ -79,7 +79,43 @@ func (m *matcher) Match(path string) bool {
 	if path == Filename {
 		return false
 	}
-	return m.ignore.MatchesPath(path)
+	if m.ignore.MatchesPath(path) {
+		return true
+	}
+	return m.parentExcluded(path)
+}
+
+// parentExcluded reports whether any ancestor directory of path is excluded.
+//
+// This exists because `sabhiram/go-gitignore` diverges from git here. The
+// gitignore spec is explicit: "It is not possible to re-include a file if a
+// parent directory of that file is excluded." Given
+//
+//	specs/
+//	!specs/README.md
+//
+// git leaves `specs/README.md` ignored; the library re-includes it. Verified
+// against `git -c core.excludesFile=... check-ignore` on 2026-09-08.
+//
+// The divergence matters because the size gate (this package) and the reviewer
+// prompt (`/coding:pr-review`, which drives git's own ignore engine) must agree
+// about the same file — otherwise a path counted as reviewable by the gate is
+// withheld from the reviewer, or vice versa. Re-checking ancestors makes this
+// package follow git.
+func (m *matcher) parentExcluded(path string) bool {
+	for i, r := range path {
+		if r != '/' {
+			continue
+		}
+		// Test both forms: the library matches directory patterns like
+		// `specs/` against the trailing-slash spelling, and plain name
+		// patterns like `specs` against the bare one.
+		dir := path[:i]
+		if m.ignore.MatchesPath(dir) || m.ignore.MatchesPath(dir+"/") {
+			return true
+		}
+	}
+	return false
 }
 
 func (m *matcher) Empty() bool {
