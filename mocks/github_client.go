@@ -145,6 +145,20 @@ type GitHubClient struct {
 		result1 pkg.SearchResult
 		result2 error
 	}
+	UpdateBranchStub        func(context.Context, string, string, int) error
+	updateBranchMutex       sync.RWMutex
+	updateBranchArgsForCall []struct {
+		arg1 context.Context
+		arg2 string
+		arg3 string
+		arg4 int
+	}
+	updateBranchReturns struct {
+		result1 error
+	}
+	updateBranchReturnsOnCall map[int]struct {
+		result1 error
+	}
 	invocations      map[string][][]interface{}
 	invocationsMutex sync.RWMutex
 }
@@ -726,6 +740,70 @@ func (fake *GitHubClient) SearchPRsReturnsOnCall(i int, result1 pkg.SearchResult
 		result1 pkg.SearchResult
 		result2 error
 	}{result1, result2}
+}
+
+func (fake *GitHubClient) UpdateBranch(arg1 context.Context, arg2 string, arg3 string, arg4 int) error {
+	fake.updateBranchMutex.Lock()
+	ret, specificReturn := fake.updateBranchReturnsOnCall[len(fake.updateBranchArgsForCall)]
+	fake.updateBranchArgsForCall = append(fake.updateBranchArgsForCall, struct {
+		arg1 context.Context
+		arg2 string
+		arg3 string
+		arg4 int
+	}{arg1, arg2, arg3, arg4})
+	stub := fake.UpdateBranchStub
+	fakeReturns := fake.updateBranchReturns
+	fake.recordInvocation("UpdateBranch", []interface{}{arg1, arg2, arg3, arg4})
+	fake.updateBranchMutex.Unlock()
+	if stub != nil {
+		return stub(arg1, arg2, arg3, arg4)
+	}
+	if specificReturn {
+		return ret.result1
+	}
+	return fakeReturns.result1
+}
+
+func (fake *GitHubClient) UpdateBranchCallCount() int {
+	fake.updateBranchMutex.RLock()
+	defer fake.updateBranchMutex.RUnlock()
+	return len(fake.updateBranchArgsForCall)
+}
+
+func (fake *GitHubClient) UpdateBranchCalls(stub func(context.Context, string, string, int) error) {
+	fake.updateBranchMutex.Lock()
+	defer fake.updateBranchMutex.Unlock()
+	fake.UpdateBranchStub = stub
+}
+
+func (fake *GitHubClient) UpdateBranchArgsForCall(i int) (context.Context, string, string, int) {
+	fake.updateBranchMutex.RLock()
+	defer fake.updateBranchMutex.RUnlock()
+	argsForCall := fake.updateBranchArgsForCall[i]
+	return argsForCall.arg1, argsForCall.arg2, argsForCall.arg3, argsForCall.arg4
+}
+
+func (fake *GitHubClient) UpdateBranchReturns(result1 error) {
+	fake.updateBranchMutex.Lock()
+	defer fake.updateBranchMutex.Unlock()
+	fake.UpdateBranchStub = nil
+	fake.updateBranchReturns = struct {
+		result1 error
+	}{result1}
+}
+
+func (fake *GitHubClient) UpdateBranchReturnsOnCall(i int, result1 error) {
+	fake.updateBranchMutex.Lock()
+	defer fake.updateBranchMutex.Unlock()
+	fake.UpdateBranchStub = nil
+	if fake.updateBranchReturnsOnCall == nil {
+		fake.updateBranchReturnsOnCall = make(map[int]struct {
+			result1 error
+		})
+	}
+	fake.updateBranchReturnsOnCall[i] = struct {
+		result1 error
+	}{result1}
 }
 
 func (fake *GitHubClient) Invocations() map[string][][]interface{} {

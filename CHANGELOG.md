@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+- feat: add `tryUpdateBranch` — a trusted author's auto-merge-labeled PR whose head branch has gone stale against its base now gets GitHub-native update-branch (a merge, never a force-push) before auto-merge is re-armed, so master advancing no longer strands an otherwise-mergeable PR
+- feat: carry `MergeableState` on `PRDetails` (from the `PullRequests.Get` already made per poll), gating the update on `behind`/`dirty` and deliberately not on `unknown`, which would fire an update every poll until GitHub finishes computing the state
+- fix: a conflicting update (422) is logged and counted, never fatal — update-branch resolves staleness, not conflicts, so the poll and the review path continue unchanged
+
 ## v0.10.0
 
 - feat: honour a repo-root `.reviewignore` (gitignore syntax) so non-reviewable paths — vendored deps, generated mocks, dark-factory `prompts/`/`specs/` — no longer count toward the `MAX_ADDITIONS`/`MAX_CHANGED_FILES` park thresholds

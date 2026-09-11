@@ -501,6 +501,14 @@ func (w *watcher) processPR(
 		pr.Labels = append(pr.Labels, w.autoMergeLabel)
 	}
 
+	// Branch freshness: a labeled, trusted PR whose head branch has gone stale
+	// against its base cannot be merged by GitHub-native auto-merge however
+	// green it is — master moving strands it. Refresh the branch first, then
+	// (re-)arm below; arming is idempotent, so ordering update-branch ahead of
+	// it lets a single poll both refresh the branch and re-arm. Side effect
+	// only; the review path continues unchanged.
+	w.tryUpdateBranch(ctx, pr, details)
+
 	// Auto-merge arming: a trusted author carrying the auto-merge label opts
 	// the PR into GitHub-native auto-merge. Side effect only — the review path
 	// continues unchanged below (the ruleset's required review must still
@@ -575,6 +583,84 @@ func (w *watcher) tryOverride(
 		newHeadSHAs[overrideID] = details.HeadSHA
 	}
 	return handled
+}
+
+// mergeStateBehind is the REST merge-state for a head branch that is behind
+// its base with no conflict — the case update-branch resolves.
+const mergeStateBehind = "behind"
+
+// mergeStateDirty is the REST merge-state for a PR whose merge commit cannot
+// be created (a real conflict). update-branch does not resolve it.
+const mergeStateDirty = "dirty"
+
+// staleMergeState reports whether a REST merge-state value means the head
+// branch is out of date against its base.
+//
+// `behind` is the mechanical case update-branch resolves. `dirty` is included
+// because GitHub computes mergeability lazily and caches it, so a `dirty`
+// reading can be stale; the attempt is cheap and a real conflict simply fails.
+// `unknown` is deliberately excluded — it means GitHub has not computed the
+// state yet, so acting on it would fire an update-branch call on every poll
+// until the state settles.
+func staleMergeState(state string) bool {
+	return state == mergeStateBehind || state == mergeStateDirty
+}
+
+// tryUpdateBranch merges the base branch into the head branch of a labeled PR
+// from a trusted author whose branch has gone stale against its base. It
+// returns true when the branch was updated.
+//
+// This closes the residue the arming path cannot: a PR that was APPROVED and
+// green when opened turns `behind` (or `dirty`) as soon as master moves, and
+// GitHub-native auto-merge cannot fire until the branch is current again. The
+// watcher performs only the mechanical half — GitHub still executes the merge,
+// holding the same never-merge boundary as tryAutoMerge.
+//
+// Gated on the same population as tryAutoMerge: the auto-merge label plus a
+// trusted author. A PR already opted into auto-merge is exactly the PR whose
+// staleness strands the loop, so no separate per-repo opt-in is required.
+//
+// `dirty` means a real conflict, which update-branch cannot resolve — it
+// merges base into head, so a conflicting merge fails. A failure is logged and
+// returns false so the caller continues normally; the conflicting-dep-bump
+// case belongs to the update-go abort-and-reemit policy, not here.
+//
+// Failures never block the review path: like tryAutoMerge this is a side
+// effect, and the caller continues regardless.
+func (w *watcher) tryUpdateBranch(
+	ctx context.Context,
+	pr PullRequest,
+	details PRDetails,
+) bool {
+	if w.autoMergeLabel == "" || !slices.Contains(pr.Labels, w.autoMergeLabel) {
+		return false
+	}
+	if !staleMergeState(details.MergeableState) {
+		return false
+	}
+	trustResult, err := w.trustDecision.IsTrusted(ctx, trust.PR{AuthorLogin: pr.AuthorLogin})
+	if err != nil {
+		glog.Errorf("update-branch trust check failed pr=%s err=%v", pr.HTMLURL, err)
+		w.metrics.IncPRPublished("error")
+		return false
+	}
+	if !trustResult.Success() {
+		glog.V(2).Infof("update-branch skipped, untrusted author pr=%s", pr.HTMLURL)
+		w.metrics.IncPRPublished("update_branch_skipped")
+		return false
+	}
+	if err := w.ghClient.UpdateBranch(ctx, pr.Owner, pr.Repo, pr.Number); err != nil {
+		// Expected for a genuinely conflicting (`dirty`) PR — update-branch
+		// resolves staleness, not conflicts. Logged, not fatal.
+		glog.V(2).Infof("update branch failed pr=%s/%s#%d state=%s err=%v",
+			pr.Owner, pr.Repo, pr.Number, details.MergeableState, err)
+		w.metrics.IncPRPublished("update_branch_failed")
+		return false
+	}
+	glog.V(2).Infof("updated branch pr=%s/%s#%d state=%s",
+		pr.Owner, pr.Repo, pr.Number, details.MergeableState)
+	w.metrics.IncPRPublished("update_branch")
+	return true
 }
 
 // tryAutoMerge arms GitHub-native auto-merge for a labeled PR from a trusted
