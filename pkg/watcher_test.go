@@ -1582,7 +1582,7 @@ var _ = Describe("pkg.Watcher", func() {
 
 		// detailsWithState primes the merge state the watcher reads via
 		// GetPRDetails. The watcher never calls the Search API for it.
-		detailsWithState := func(state string) {
+		detailsWithState := func(state pkg.MergeState) {
 			ghClient.GetPRDetailsReturns(pkg.PRDetails{
 				HeadSHA:        "deadbeef",
 				CloneURL:       "https://github.com/bborbe/repo.git",
@@ -1600,7 +1600,7 @@ var _ = Describe("pkg.Watcher", func() {
 			}
 			return labels
 		}
-		pollWithState := func(state string, labels []string, author string) pkg.Watcher {
+		pollWithState := func(state pkg.MergeState, labels []string, author string) pkg.Watcher {
 			detailsWithState(state)
 			ghClient.SearchPRsReturns(pkg.SearchResult{
 				PullRequests:  []pkg.PullRequest{prStale(labels, author)},

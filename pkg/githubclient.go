@@ -90,8 +90,7 @@ type PRDetails struct {
 	// Additions for the same oversized-PR park decision.
 	ChangedFiles int
 
-	// MergeableState is GitHub's REST merge-state for the PR — one of
-	// `clean`, `dirty`, `behind`, `blocked`, `unstable`, `unknown`. Used by
+	// MergeableState is GitHub's REST merge-state for the PR. Used by
 	// tryUpdateBranch to decide whether the head branch is stale against its
 	// base.
 	//
@@ -100,7 +99,7 @@ type PRDetails struct {
 	// (a real conflict), which update-branch does NOT fix — it merges base
 	// into head, so a conflicting merge fails. GraphQL exposes the same
 	// concept as `mergeStateStatus` with upper-cased values.
-	MergeableState string
+	MergeableState MergeState
 }
 
 //counterfeiter:generate -o ../mocks/github_client.go --fake-name GitHubClient . GitHubClient
@@ -374,7 +373,7 @@ func (c *githubClient) GetPRDetails(
 		Labels:         labelNames(pr.Labels),
 		Additions:      pr.GetAdditions(),
 		ChangedFiles:   pr.GetChangedFiles(),
-		MergeableState: pr.GetMergeableState(),
+		MergeableState: MergeState(pr.GetMergeableState()),
 	}, nil
 }
 

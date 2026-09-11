@@ -585,25 +585,38 @@ func (w *watcher) tryOverride(
 	return handled
 }
 
-// mergeStateBehind is the REST merge-state for a head branch that is behind
-// its base with no conflict — the case update-branch resolves.
-const mergeStateBehind = "behind"
-
-// mergeStateDirty is the REST merge-state for a PR whose merge commit cannot
-// be created (a real conflict). update-branch does not resolve it.
-const mergeStateDirty = "dirty"
-
-// staleMergeState reports whether a REST merge-state value means the head
-// branch is out of date against its base.
+// MergeState is a GitHub REST merge-state value, typed so a state-name typo is
+// caught by the compiler rather than silently never matching.
 //
-// `behind` is the mechanical case update-branch resolves. `dirty` is included
-// because GitHub computes mergeability lazily and caches it, so a `dirty`
+// The set below is deliberately partial: it names only the states the watcher
+// reasons about, not GitHub's full vocabulary (`clean`, `blocked`, `unstable`,
+// and `unknown` are all real values that simply never drive a decision here).
+// An unrecognized value is never stale, which is the safe default.
+type MergeState string
+
+const (
+	// MergeStateBehind is a head branch behind its base with no conflict —
+	// the case update-branch resolves.
+	MergeStateBehind MergeState = "behind"
+	// MergeStateDirty is a PR whose merge commit cannot be created (a real
+	// conflict). update-branch does not resolve it.
+	MergeStateDirty MergeState = "dirty"
+)
+
+// AvailableMergeStates lists every merge state the watcher acts on.
+var AvailableMergeStates = []MergeState{MergeStateBehind, MergeStateDirty}
+
+// staleMergeState reports whether a merge state means the head branch is out
+// of date against its base.
+//
+// Behind is the mechanical case update-branch resolves. Dirty is included
+// because GitHub computes mergeability lazily and caches it, so a dirty
 // reading can be stale; the attempt is cheap and a real conflict simply fails.
-// `unknown` is deliberately excluded — it means GitHub has not computed the
+// Unknown is deliberately excluded — it means GitHub has not computed the
 // state yet, so acting on it would fire an update-branch call on every poll
 // until the state settles.
-func staleMergeState(state string) bool {
-	return state == mergeStateBehind || state == mergeStateDirty
+func staleMergeState(state MergeState) bool {
+	return state == MergeStateBehind || state == MergeStateDirty
 }
 
 // tryUpdateBranch merges the base branch into the head branch of a labeled PR
