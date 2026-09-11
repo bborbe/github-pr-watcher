@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## Unreleased
+## v0.11.0
 
 - feat: add `tryUpdateBranch` — a trusted author's auto-merge-labeled PR whose head branch has gone stale against its base now gets GitHub-native update-branch (a merge, never a force-push) before auto-merge is re-armed, so master advancing no longer strands an otherwise-mergeable PR
 - feat: carry `MergeableState` on `PRDetails` (from the `PullRequests.Get` already made per poll), gating the update on `behind`/`dirty` and deliberately not on `unknown`, which would fire an update every poll until GitHub finishes computing the state
