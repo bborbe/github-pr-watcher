@@ -501,6 +501,14 @@ func (w *watcher) processPR(
 		pr.Labels = append(pr.Labels, w.autoMergeLabel)
 	}
 
+	// Branch freshness: a labeled, trusted PR whose head branch has gone stale
+	// against its base cannot be merged by GitHub-native auto-merge however
+	// green it is — master moving strands it. Refresh the branch first, then
+	// (re-)arm below; arming is idempotent, so ordering update-branch ahead of
+	// it lets a single poll both refresh the branch and re-arm. Side effect
+	// only; the review path continues unchanged.
+	w.tryUpdateBranch(ctx, pr, details)
+
 	// Auto-merge arming: a trusted author carrying the auto-merge label opts
 	// the PR into GitHub-native auto-merge. Side effect only — the review path
 	// continues unchanged below (the ruleset's required review must still
@@ -575,6 +583,97 @@ func (w *watcher) tryOverride(
 		newHeadSHAs[overrideID] = details.HeadSHA
 	}
 	return handled
+}
+
+// MergeState is a GitHub REST merge-state value, typed so a state-name typo is
+// caught by the compiler rather than silently never matching.
+//
+// The set below is deliberately partial: it names only the states the watcher
+// reasons about, not GitHub's full vocabulary (`clean`, `blocked`, `unstable`,
+// and `unknown` are all real values that simply never drive a decision here).
+// An unrecognized value is never stale, which is the safe default.
+type MergeState string
+
+const (
+	// MergeStateBehind is a head branch behind its base with no conflict —
+	// the case update-branch resolves.
+	MergeStateBehind MergeState = "behind"
+	// MergeStateDirty is a PR whose merge commit cannot be created (a real
+	// conflict). update-branch does not resolve it.
+	MergeStateDirty MergeState = "dirty"
+)
+
+// AvailableMergeStates lists every merge state the watcher acts on.
+var AvailableMergeStates = []MergeState{MergeStateBehind, MergeStateDirty}
+
+// staleMergeState reports whether a merge state means the head branch is out
+// of date against its base.
+//
+// Behind is the mechanical case update-branch resolves. Dirty is included
+// because GitHub computes mergeability lazily and caches it, so a dirty
+// reading can be stale; the attempt is cheap and a real conflict simply fails.
+// Unknown is deliberately excluded — it means GitHub has not computed the
+// state yet, so acting on it would fire an update-branch call on every poll
+// until the state settles.
+func staleMergeState(state MergeState) bool {
+	return state == MergeStateBehind || state == MergeStateDirty
+}
+
+// tryUpdateBranch merges the base branch into the head branch of a labeled PR
+// from a trusted author whose branch has gone stale against its base. It
+// returns true when the branch was updated.
+//
+// This closes the residue the arming path cannot: a PR that was APPROVED and
+// green when opened turns `behind` (or `dirty`) as soon as master moves, and
+// GitHub-native auto-merge cannot fire until the branch is current again. The
+// watcher performs only the mechanical half — GitHub still executes the merge,
+// holding the same never-merge boundary as tryAutoMerge.
+//
+// Gated on the same population as tryAutoMerge: the auto-merge label plus a
+// trusted author. A PR already opted into auto-merge is exactly the PR whose
+// staleness strands the loop, so no separate per-repo opt-in is required.
+//
+// `dirty` means a real conflict, which update-branch cannot resolve — it
+// merges base into head, so a conflicting merge fails. A failure is logged and
+// returns false so the caller continues normally; the conflicting-dep-bump
+// case belongs to the update-go abort-and-reemit policy, not here.
+//
+// Failures never block the review path: like tryAutoMerge this is a side
+// effect, and the caller continues regardless.
+func (w *watcher) tryUpdateBranch(
+	ctx context.Context,
+	pr PullRequest,
+	details PRDetails,
+) bool {
+	if w.autoMergeLabel == "" || !slices.Contains(pr.Labels, w.autoMergeLabel) {
+		return false
+	}
+	if !staleMergeState(details.MergeableState) {
+		return false
+	}
+	trustResult, err := w.trustDecision.IsTrusted(ctx, trust.PR{AuthorLogin: pr.AuthorLogin})
+	if err != nil {
+		glog.Errorf("update-branch trust check failed pr=%s err=%v", pr.HTMLURL, err)
+		w.metrics.IncPRPublished("error")
+		return false
+	}
+	if !trustResult.Success() {
+		glog.V(2).Infof("update-branch skipped, untrusted author pr=%s", pr.HTMLURL)
+		w.metrics.IncPRPublished("update_branch_skipped")
+		return false
+	}
+	if err := w.ghClient.UpdateBranch(ctx, pr.Owner, pr.Repo, pr.Number); err != nil {
+		// Expected for a genuinely conflicting (`dirty`) PR — update-branch
+		// resolves staleness, not conflicts. Logged, not fatal.
+		glog.V(2).Infof("update branch failed pr=%s/%s#%d state=%s err=%v",
+			pr.Owner, pr.Repo, pr.Number, details.MergeableState, err)
+		w.metrics.IncPRPublished("update_branch_failed")
+		return false
+	}
+	glog.V(2).Infof("updated branch pr=%s/%s#%d state=%s",
+		pr.Owner, pr.Repo, pr.Number, details.MergeableState)
+	w.metrics.IncPRPublished("update_branch")
+	return true
 }
 
 // tryAutoMerge arms GitHub-native auto-merge for a labeled PR from a trusted

@@ -1564,6 +1564,155 @@ var _ = Describe("pkg.Watcher", func() {
 		})
 	})
 
+	Describe("stale branch update", func() {
+		prStale := func(labels []string, author string) pkg.PullRequest {
+			return pkg.PullRequest{
+				Number:      9,
+				Owner:       "bborbe",
+				Repo:        "repo",
+				Title:       "bump deps",
+				HTMLURL:     "https://github.com/bborbe/repo/pull/9",
+				AuthorLogin: author,
+				IsDraft:     false,
+				UpdatedAt:   libtime.DateTime(time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC)),
+				Labels:      labels,
+			}
+		}
+		trustAlice := trust.NewAuthorAllowlist([]string{"alice"})
+
+		// detailsWithState primes the merge state the watcher reads via
+		// GetPRDetails. The watcher never calls the Search API for it.
+		detailsWithState := func(state pkg.MergeState) {
+			ghClient.GetPRDetailsReturns(pkg.PRDetails{
+				HeadSHA:        "deadbeef",
+				CloneURL:       "https://github.com/bborbe/repo.git",
+				BaseRef:        "master",
+				MergeableState: state,
+			}, nil)
+		}
+		// metricLabels returns every IncPRPublished label recorded this poll.
+		// Collected rather than indexed: the review path also increments, so a
+		// fixed index would be brittle.
+		metricLabels := func() []string {
+			labels := make([]string, 0, fakeMetrics.IncPRPublishedCallCount())
+			for i := 0; i < fakeMetrics.IncPRPublishedCallCount(); i++ {
+				labels = append(labels, fakeMetrics.IncPRPublishedArgsForCall(i))
+			}
+			return labels
+		}
+		pollWithState := func(state pkg.MergeState, labels []string, author string) pkg.Watcher {
+			detailsWithState(state)
+			ghClient.SearchPRsReturns(pkg.SearchResult{
+				PullRequests:  []pkg.PullRequest{prStale(labels, author)},
+				RateRemaining: 100,
+			}, nil)
+			return newTestWatcherWithAutoMerge(
+				ghClient,
+				createSender,
+				cursorPath,
+				startTime,
+				fakeMetrics,
+				trustAlice,
+				"auto-merge",
+			)
+		}
+
+		BeforeEach(func() {
+			ghClient.EnableAutoMergeReturns(nil)
+			ghClient.UpdateBranchReturns(nil)
+			createSender.SendCommandReturns(nil)
+		})
+
+		It("updates the branch for a trusted author carrying the label when behind", func() {
+			w := pollWithState("behind", []string{"auto-merge"}, "alice")
+			Expect(w.Poll(ctx)).NotTo(HaveOccurred())
+			Expect(ghClient.UpdateBranchCallCount()).To(Equal(1))
+			_, owner, repo, number := ghClient.UpdateBranchArgsForCall(0)
+			Expect(owner).To(Equal("bborbe"))
+			Expect(repo).To(Equal("repo"))
+			Expect(number).To(Equal(9))
+			Expect(metricLabels()).To(ContainElement("update_branch"))
+		})
+
+		It("attempts the update when dirty, since mergeability is computed lazily", func() {
+			w := pollWithState("dirty", []string{"auto-merge"}, "alice")
+			Expect(w.Poll(ctx)).NotTo(HaveOccurred())
+			Expect(ghClient.UpdateBranchCallCount()).To(Equal(1))
+		})
+
+		It("does not update an already-clean branch", func() {
+			w := pollWithState("clean", []string{"auto-merge"}, "alice")
+			Expect(w.Poll(ctx)).NotTo(HaveOccurred())
+			Expect(ghClient.UpdateBranchCallCount()).To(Equal(0))
+		})
+
+		It("does not update an unknown merge state, which would fire every poll", func() {
+			w := pollWithState("unknown", []string{"auto-merge"}, "alice")
+			Expect(w.Poll(ctx)).NotTo(HaveOccurred())
+			Expect(ghClient.UpdateBranchCallCount()).To(Equal(0))
+		})
+
+		It("does not update a stale branch for an untrusted author", func() {
+			w := pollWithState("behind", []string{"auto-merge"}, "mallory")
+			Expect(w.Poll(ctx)).NotTo(HaveOccurred())
+			Expect(ghClient.UpdateBranchCallCount()).To(Equal(0))
+			Expect(metricLabels()).To(ContainElement("update_branch_skipped"))
+		})
+
+		It("does not update a stale branch without the label", func() {
+			w := pollWithState("behind", []string{"other-label"}, "alice")
+			Expect(w.Poll(ctx)).NotTo(HaveOccurred())
+			Expect(ghClient.UpdateBranchCallCount()).To(Equal(0))
+		})
+
+		It("ignores a stale branch when the auto-merge path is disabled", func() {
+			detailsWithState("behind")
+			ghClient.SearchPRsReturns(pkg.SearchResult{
+				PullRequests:  []pkg.PullRequest{prStale([]string{"auto-merge"}, "alice")},
+				RateRemaining: 100,
+			}, nil)
+			w := newTestWatcher(
+				ghClient,
+				createSender,
+				cursorPath,
+				startTime,
+				fakeMetrics,
+				trustAlice,
+			)
+			Expect(w.Poll(ctx)).NotTo(HaveOccurred())
+			Expect(ghClient.UpdateBranchCallCount()).To(Equal(0))
+		})
+
+		It("does not fail the poll when the update conflicts (422)", func() {
+			detailsWithState("dirty")
+			ghClient.UpdateBranchReturns(errors.New("422 merge conflict"))
+			ghClient.SearchPRsReturns(pkg.SearchResult{
+				PullRequests:  []pkg.PullRequest{prStale([]string{"auto-merge"}, "alice")},
+				RateRemaining: 100,
+			}, nil)
+			w := newTestWatcherWithAutoMerge(
+				ghClient,
+				createSender,
+				cursorPath,
+				startTime,
+				fakeMetrics,
+				trustAlice,
+				"auto-merge",
+			)
+			Expect(w.Poll(ctx)).NotTo(HaveOccurred())
+			Expect(metricLabels()).To(ContainElement("update_branch_failed"))
+		})
+
+		It("still emits the review task when the branch was updated (side effect only)", func() {
+			w := pollWithState("behind", []string{"auto-merge"}, "alice")
+			Expect(w.Poll(ctx)).NotTo(HaveOccurred())
+			Expect(ghClient.UpdateBranchCallCount()).To(Equal(1))
+			Expect(createSender.SendCommandCallCount()).To(Equal(1))
+			_, cmd := createSender.SendCommandArgsForCall(0)
+			Expect(cmd.Frontmatter["task_type"]).To(Equal("pr-review"))
+		})
+	})
+
 	Describe("trivial auto-merge label", func() {
 		prTrivial := func() pkg.PullRequest {
 			return pkg.PullRequest{

@@ -89,6 +89,17 @@ type PRDetails struct {
 	// ChangedFiles is the number of files the PR touches. Used alongside
 	// Additions for the same oversized-PR park decision.
 	ChangedFiles int
+
+	// MergeableState is GitHub's REST merge-state for the PR. Used by
+	// tryUpdateBranch to decide whether the head branch is stale against its
+	// base.
+	//
+	// `behind` means the base moved with no conflict; that is the case
+	// update-branch resolves. `dirty` means the merge commit cannot be created
+	// (a real conflict), which update-branch does NOT fix — it merges base
+	// into head, so a conflicting merge fails. GraphQL exposes the same
+	// concept as `mergeStateStatus` with upper-cased values.
+	MergeableState MergeState
 }
 
 //counterfeiter:generate -o ../mocks/github_client.go --fake-name GitHubClient . GitHubClient
@@ -118,6 +129,15 @@ type GitHubClient interface {
 	// applies while something still blocks the merge. Requires the
 	// authenticating identity to hold Pull requests: Write on the repo.
 	EnableAutoMerge(ctx context.Context, owner, repo string, number int) error
+
+	// UpdateBranch merges the PR's base branch into its head branch —
+	// GitHub-native update-branch, a merge and never a force-push. Used to
+	// clear the `behind` state that strands an otherwise-mergeable PR once
+	// master moves. A conflicting merge fails (GitHub answers 422), so a
+	// `dirty` PR is NOT resolvable this way — update-branch fixes staleness,
+	// not conflicts. Requires the authenticating identity to hold
+	// Contents: Write on the repo.
+	UpdateBranch(ctx context.Context, owner, repo string, number int) error
 
 	// GetMaintainerConfig fetches and parses the repo's `.maintainer.yaml`
 	// trust file via maintainerconfig. An absent file (404) returns the
@@ -343,16 +363,17 @@ func (c *githubClient) GetPRDetails(
 		)
 	}
 	return PRDetails{
-		HeadSHA:      pr.GetHead().GetSHA(),
-		CloneURL:     pr.GetHead().GetRepo().GetCloneURL(),
-		BaseRef:      pr.GetBase().GetRef(),
-		AuthorLogin:  pr.GetUser().GetLogin(),
-		Title:        pr.GetTitle(),
-		IsDraft:      pr.GetDraft(),
-		UpdatedAt:    libtime.DateTime(pr.GetUpdatedAt().Time),
-		Labels:       labelNames(pr.Labels),
-		Additions:    pr.GetAdditions(),
-		ChangedFiles: pr.GetChangedFiles(),
+		HeadSHA:        pr.GetHead().GetSHA(),
+		CloneURL:       pr.GetHead().GetRepo().GetCloneURL(),
+		BaseRef:        pr.GetBase().GetRef(),
+		AuthorLogin:    pr.GetUser().GetLogin(),
+		Title:          pr.GetTitle(),
+		IsDraft:        pr.GetDraft(),
+		UpdatedAt:      libtime.DateTime(pr.GetUpdatedAt().Time),
+		Labels:         labelNames(pr.Labels),
+		Additions:      pr.GetAdditions(),
+		ChangedFiles:   pr.GetChangedFiles(),
+		MergeableState: MergeState(pr.GetMergeableState()),
 	}, nil
 }
 
@@ -427,6 +448,36 @@ func (c *githubClient) EnableAutoMerge(
 			result.Errors[0].Message,
 		)
 	}
+	return nil
+}
+
+// UpdateBranch merges the PR's base branch into its head branch via the REST
+// `PUT /repos/{owner}/{repo}/pulls/{pull_number}/update-branch` endpoint.
+//
+// Unlike auto-merge, this operation HAS a REST route and go-github ships a
+// typed wrapper for it (PullRequestsService.UpdateBranch), so no raw GraphQL
+// is needed. The GraphQL `updatePullRequestBranch` mutation exists as well,
+// but the typed wrapper is the smaller surface and is already vendored.
+//
+// The update is a MERGE of base into head — never a force-push or rebase —
+// so it preserves the head branch's history and cannot discard commits.
+//
+// A conflicting merge fails with 422. That is expected for a PR in `dirty`
+// state: update-branch resolves staleness, not conflicts. Callers treat it as
+// a non-fatal skip rather than an error worth alerting on.
+func (c *githubClient) UpdateBranch(
+	ctx context.Context,
+	owner, repo string,
+	number int,
+) error {
+	_, resp, err := c.client.PullRequests.UpdateBranch(ctx, owner, repo, number, nil)
+	if err != nil {
+		return errors.Wrapf(ctx, err, "update branch %s/%s#%d", owner, repo, number)
+	}
+	glog.V(2).Infof(
+		"update branch %s/%s#%d status=%d",
+		owner, repo, number, resp.StatusCode,
+	)
 	return nil
 }
 
