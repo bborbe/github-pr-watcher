@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## Unreleased
+## v0.12.0
 
 - feat: retire a conflicting update-go dep-bump PR instead of trying to refresh it — `trySupersedeDepBump` closes it with a comment explaining the CHANGELOG fold race, so the update-go pipeline replaces it with a fresh PR off current master
 - feat: `ClosePR` on the GitHub client — REST close plus a best-effort comment, so a comment failure cannot strand the stale PR and its conflicting CHANGELOG hunk
