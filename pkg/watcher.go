@@ -501,6 +501,12 @@ func (w *watcher) processPR(
 		pr.Labels = append(pr.Labels, w.autoMergeLabel)
 	}
 
+	// Supersession: a dep-bump PR that has gone dirty is retired rather than
+	// refreshed — see trySupersedeDepBump for why merging master in cannot
+	// resolve it. Runs before the branch-freshness step so the abort path owns
+	// the dirty-dep-bump case outright; tryUpdateBranch skips that same case.
+	w.trySupersedeDepBump(ctx, pr, details)
+
 	// Branch freshness: a labeled, trusted PR whose head branch has gone stale
 	// against its base cannot be merged by GitHub-native auto-merge however
 	// green it is — master moving strands it. Refresh the branch first, then
@@ -648,6 +654,13 @@ func (w *watcher) tryUpdateBranch(
 	if w.autoMergeLabel == "" || !slices.Contains(pr.Labels, w.autoMergeLabel) {
 		return false
 	}
+	// A dirty dep-bump PR is the abort-and-reemit case, not a refresh case —
+	// merging master in cannot resolve it (see isSupersededDepBump). Let the
+	// abort path own that PR outright rather than attempting an update that
+	// will 422.
+	if isSupersededDepBump(pr, details) {
+		return false
+	}
 	if !staleMergeState(details.MergeableState) {
 		return false
 	}
@@ -673,6 +686,102 @@ func (w *watcher) tryUpdateBranch(
 	glog.V(2).Infof("updated branch pr=%s/%s#%d state=%s",
 		pr.Owner, pr.Repo, pr.Number, details.MergeableState)
 	w.metrics.IncPRPublished("update_branch")
+	return true
+}
+
+// updateGoBranchPrefix is the head-branch prefix the update-go agent gives its
+// dep-bump PRs (`fix/update-go-<sha>`). Verified across five live PRs
+// (go-skeleton #107/#104/#103, alert-controller #11, notification #1); the
+// agent's non-dep-bump work uses ordinary prefixes like `feature/…`.
+const updateGoBranchPrefix = "fix/update-go-"
+
+// botLoginSuffix is how GitHub renders an App's login in the API
+// (`ben-s-go-updater-dev[bot]`), as opposed to the `app/<slug>` form the web
+// UI shows.
+const botLoginSuffix = "[bot]"
+
+// depBumpSupersededComment explains the close on the PR itself, so the
+// supersession is legible to whoever finds it later rather than reading as an
+// arbitrary closure.
+const depBumpSupersededComment = "Closing as superseded: this dependency-bump PR conflicts with a release that " +
+	"renamed `## Unreleased` in CHANGELOG.md. That conflict is structural — every bump edits the same region — " +
+	"so the branch cannot be refreshed by merging master in.\n\n" +
+	"A fresh bump off current master replaces it. The update-go watcher emits one task per repo HEAD ref, and " +
+	"master moving is what put this PR in conflict."
+
+// isSupersededDepBump reports whether pr is an update-go dep-bump PR that a
+// conflicting merge has stranded — the case the abort-and-reemit policy exists
+// for.
+//
+// Both identity conditions are required:
+//   - the head branch carries the update-go prefix, and
+//   - the author is an App (`<slug>[bot]`).
+//
+// The author check is what holds the task's Out-of-Scope boundary: a
+// human-authored PR is never auto-closed, however it happens to be named.
+//
+// `dirty` is required because that is the state abort-and-reemit resolves and
+// update-branch cannot — DIRTY means the merge commit cannot be created, so
+// merging base into head fails. `behind` belongs to tryUpdateBranch, which is
+// strictly cheaper: it keeps the PR and its review.
+func isSupersededDepBump(pr PullRequest, details PRDetails) bool {
+	if !strings.HasPrefix(details.HeadRef, updateGoBranchPrefix) {
+		return false
+	}
+	if !strings.HasSuffix(pr.AuthorLogin, botLoginSuffix) {
+		return false
+	}
+	return details.MergeableState == MergeStateDirty
+}
+
+// trySupersedeDepBump retires a dep-bump PR that a conflicting merge has
+// stranded, so the update-go pipeline can replace it with a fresh one off
+// current master. Returns true when the PR was closed.
+//
+// Why close rather than refresh: the CHANGELOG fold race. A release renames
+// `## Unreleased`, and every open dep-bump PR edits that same region, so the
+// conflict is structural — update-branch merges base into head and a
+// conflicting merge fails. Regenerating off current master is the only
+// resolution that does not require hand-editing a generated file.
+//
+// The successor arrives on its own: the update-go watcher emits one task per
+// repo HEAD ref, and master having moved is precisely what made this PR dirty,
+// so a fresh task (and PR) follows.
+//
+// Gated on the same trusted-author check as the rest of the watcher — an
+// untrusted author's PR is left alone, never closed.
+//
+// Failures never block the review path: this returns false and the caller
+// continues.
+func (w *watcher) trySupersedeDepBump(
+	ctx context.Context,
+	pr PullRequest,
+	details PRDetails,
+) bool {
+	if !isSupersededDepBump(pr, details) {
+		return false
+	}
+	trustResult, err := w.trustDecision.IsTrusted(ctx, trust.PR{AuthorLogin: pr.AuthorLogin})
+	if err != nil {
+		glog.Errorf("abort-and-reemit trust check failed pr=%s err=%v", pr.HTMLURL, err)
+		w.metrics.IncPRPublished("error")
+		return false
+	}
+	if !trustResult.Success() {
+		glog.V(2).Infof("abort-and-reemit skipped, untrusted author pr=%s", pr.HTMLURL)
+		w.metrics.IncPRPublished("dep_bump_skipped")
+		return false
+	}
+	if err := w.ghClient.ClosePR(
+		ctx, pr.Owner, pr.Repo, pr.Number, depBumpSupersededComment,
+	); err != nil {
+		glog.Errorf("close superseded dep-bump pr failed pr=%s/%s#%d err=%v",
+			pr.Owner, pr.Repo, pr.Number, err)
+		w.metrics.IncPRPublished("error")
+		return false
+	}
+	glog.V(2).Infof("closed superseded dep-bump pr=%s/%s#%d", pr.Owner, pr.Repo, pr.Number)
+	w.metrics.IncPRPublished("dep_bump_superseded")
 	return true
 }
 

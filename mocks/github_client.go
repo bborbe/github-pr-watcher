@@ -30,6 +30,21 @@ type GitHubClient struct {
 	addLabelReturnsOnCall map[int]struct {
 		result1 error
 	}
+	ClosePRStub        func(context.Context, string, string, int, string) error
+	closePRMutex       sync.RWMutex
+	closePRArgsForCall []struct {
+		arg1 context.Context
+		arg2 string
+		arg3 string
+		arg4 int
+		arg5 string
+	}
+	closePRReturns struct {
+		result1 error
+	}
+	closePRReturnsOnCall map[int]struct {
+		result1 error
+	}
 	EnableAutoMergeStub        func(context.Context, string, string, int) error
 	enableAutoMergeMutex       sync.RWMutex
 	enableAutoMergeArgsForCall []struct {
@@ -224,6 +239,71 @@ func (fake *GitHubClient) AddLabelReturnsOnCall(i int, result1 error) {
 		})
 	}
 	fake.addLabelReturnsOnCall[i] = struct {
+		result1 error
+	}{result1}
+}
+
+func (fake *GitHubClient) ClosePR(arg1 context.Context, arg2 string, arg3 string, arg4 int, arg5 string) error {
+	fake.closePRMutex.Lock()
+	ret, specificReturn := fake.closePRReturnsOnCall[len(fake.closePRArgsForCall)]
+	fake.closePRArgsForCall = append(fake.closePRArgsForCall, struct {
+		arg1 context.Context
+		arg2 string
+		arg3 string
+		arg4 int
+		arg5 string
+	}{arg1, arg2, arg3, arg4, arg5})
+	stub := fake.ClosePRStub
+	fakeReturns := fake.closePRReturns
+	fake.recordInvocation("ClosePR", []interface{}{arg1, arg2, arg3, arg4, arg5})
+	fake.closePRMutex.Unlock()
+	if stub != nil {
+		return stub(arg1, arg2, arg3, arg4, arg5)
+	}
+	if specificReturn {
+		return ret.result1
+	}
+	return fakeReturns.result1
+}
+
+func (fake *GitHubClient) ClosePRCallCount() int {
+	fake.closePRMutex.RLock()
+	defer fake.closePRMutex.RUnlock()
+	return len(fake.closePRArgsForCall)
+}
+
+func (fake *GitHubClient) ClosePRCalls(stub func(context.Context, string, string, int, string) error) {
+	fake.closePRMutex.Lock()
+	defer fake.closePRMutex.Unlock()
+	fake.ClosePRStub = stub
+}
+
+func (fake *GitHubClient) ClosePRArgsForCall(i int) (context.Context, string, string, int, string) {
+	fake.closePRMutex.RLock()
+	defer fake.closePRMutex.RUnlock()
+	argsForCall := fake.closePRArgsForCall[i]
+	return argsForCall.arg1, argsForCall.arg2, argsForCall.arg3, argsForCall.arg4, argsForCall.arg5
+}
+
+func (fake *GitHubClient) ClosePRReturns(result1 error) {
+	fake.closePRMutex.Lock()
+	defer fake.closePRMutex.Unlock()
+	fake.ClosePRStub = nil
+	fake.closePRReturns = struct {
+		result1 error
+	}{result1}
+}
+
+func (fake *GitHubClient) ClosePRReturnsOnCall(i int, result1 error) {
+	fake.closePRMutex.Lock()
+	defer fake.closePRMutex.Unlock()
+	fake.ClosePRStub = nil
+	if fake.closePRReturnsOnCall == nil {
+		fake.closePRReturnsOnCall = make(map[int]struct {
+			result1 error
+		})
+	}
+	fake.closePRReturnsOnCall[i] = struct {
 		result1 error
 	}{result1}
 }

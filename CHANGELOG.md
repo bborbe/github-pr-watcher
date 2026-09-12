@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+- feat: retire a conflicting update-go dep-bump PR instead of trying to refresh it — `trySupersedeDepBump` closes it with a comment explaining the CHANGELOG fold race, so the update-go pipeline replaces it with a fresh PR off current master
+- feat: `ClosePR` on the GitHub client — REST close plus a best-effort comment, so a comment failure cannot strand the stale PR and its conflicting CHANGELOG hunk
+- feat: carry `HeadRef` on `PRDetails`. A superseded dep-bump is `fix/update-go-` + a `[bot]` author + `dirty` — a discriminator verified across five live PRs; the author check is what keeps a human's PR from ever being auto-closed, however its branch is named
+- fix: `tryUpdateBranch` skips the dirty-dep-bump case so the abort path owns it outright, rather than attempting an update-branch that cannot succeed
+
 ## v0.11.0
 
 - feat: add `tryUpdateBranch` — a trusted author's auto-merge-labeled PR whose head branch has gone stale against its base now gets GitHub-native update-branch (a merge, never a force-push) before auto-merge is re-armed, so master advancing no longer strands an otherwise-mergeable PR
