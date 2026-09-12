@@ -65,6 +65,11 @@ type PRDetails struct {
 	// the `base_ref` the execution phase diffs against.
 	BaseRef string
 
+	// HeadRef is the head branch name (e.g. `fix/update-go-c0cf2ac`). Used to
+	// recognise the update-go agent's dep-bump PRs, which it names
+	// `fix/update-go-<sha>` — see isSupersededDepBump.
+	HeadRef string
+
 	// AuthorLogin is the GitHub author login; empty for deleted accounts.
 	AuthorLogin string
 
@@ -138,6 +143,18 @@ type GitHubClient interface {
 	// not conflicts. Requires the authenticating identity to hold
 	// Contents: Write on the repo.
 	UpdateBranch(ctx context.Context, owner, repo string, number int) error
+
+	// ClosePR closes the PR without merging it, optionally posting a comment
+	// first explaining why. This is the abort half of the update-go
+	// abort-and-reemit policy: a dep-bump PR whose CHANGELOG hunk conflicts
+	// with a release cannot be refreshed by UpdateBranch — that merges base
+	// into head, and a conflicting merge fails — so it is retired and the
+	// update-go pipeline produces a fresh one off current master.
+	//
+	// This is NOT a merge route and the never-merge boundary holds: closing is
+	// strictly weaker than merging, and the watcher still cannot land a
+	// change. Requires Pull requests: Write.
+	ClosePR(ctx context.Context, owner, repo string, number int, comment string) error
 
 	// GetMaintainerConfig fetches and parses the repo's `.maintainer.yaml`
 	// trust file via maintainerconfig. An absent file (404) returns the
@@ -366,6 +383,7 @@ func (c *githubClient) GetPRDetails(
 		HeadSHA:        pr.GetHead().GetSHA(),
 		CloneURL:       pr.GetHead().GetRepo().GetCloneURL(),
 		BaseRef:        pr.GetBase().GetRef(),
+		HeadRef:        pr.GetHead().GetRef(),
 		AuthorLogin:    pr.GetUser().GetLogin(),
 		Title:          pr.GetTitle(),
 		IsDraft:        pr.GetDraft(),
@@ -478,6 +496,39 @@ func (c *githubClient) UpdateBranch(
 		"update branch %s/%s#%d status=%d",
 		owner, repo, number, resp.StatusCode,
 	)
+	return nil
+}
+
+// ClosePR closes the PR and, when comment is non-empty, posts it as an issue
+// comment first so the reason is on the record before the PR goes read-only.
+//
+// A comment failure does NOT block the close. The abort is the load-bearing
+// action, and leaving a superseded dep-bump PR open because a comment 403'd
+// would keep the stale PR — and its conflicting CHANGELOG hunk — sitting in
+// the merge queue, which is the exact residue this path exists to clear. The
+// comment is best-effort and its failure is logged rather than returned.
+func (c *githubClient) ClosePR(
+	ctx context.Context,
+	owner, repo string,
+	number int,
+	comment string,
+) error {
+	if comment != "" {
+		if _, _, err := c.client.Issues.CreateComment(
+			ctx, owner, repo, number,
+			&gogithub.IssueComment{Body: gogithub.String(comment)},
+		); err != nil {
+			glog.Warningf("close pr comment failed pr=%s/%s#%d err=%v", owner, repo, number, err)
+		}
+	}
+	_, _, err := c.client.PullRequests.Edit(
+		ctx, owner, repo, number,
+		&gogithub.PullRequest{State: gogithub.String("closed")},
+	)
+	if err != nil {
+		return errors.Wrapf(ctx, err, "close pr %s/%s#%d", owner, repo, number)
+	}
+	glog.V(2).Infof("closed pr %s/%s#%d", owner, repo, number)
 	return nil
 }
 

@@ -1713,6 +1713,127 @@ var _ = Describe("pkg.Watcher", func() {
 		})
 	})
 
+	Describe("update-go abort-and-reemit", func() {
+		prDepBump := func(author string) pkg.PullRequest {
+			return pkg.PullRequest{
+				Number:      7,
+				Owner:       "bborbe",
+				Repo:        "repo",
+				Title:       "update go module dependencies",
+				HTMLURL:     "https://github.com/bborbe/repo/pull/7",
+				AuthorLogin: author,
+				IsDraft:     false,
+				UpdatedAt:   libtime.DateTime(time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC)),
+				Labels:      []string{"auto-merge"},
+			}
+		}
+		trustUpdater := trust.NewAuthorAllowlist([]string{"alice", "ben-s-go-updater[bot]"})
+
+		detailsFor := func(headRef, state string) {
+			ghClient.GetPRDetailsReturns(pkg.PRDetails{
+				HeadSHA:        "deadbeef",
+				CloneURL:       "https://github.com/bborbe/repo.git",
+				BaseRef:        "master",
+				HeadRef:        headRef,
+				MergeableState: pkg.MergeState(state),
+			}, nil)
+		}
+		metricLabels := func() []string {
+			labels := make([]string, 0, fakeMetrics.IncPRPublishedCallCount())
+			for i := 0; i < fakeMetrics.IncPRPublishedCallCount(); i++ {
+				labels = append(labels, fakeMetrics.IncPRPublishedArgsForCall(i))
+			}
+			return labels
+		}
+		pollWith := func(headRef, state, author string) pkg.Watcher {
+			detailsFor(headRef, state)
+			ghClient.SearchPRsReturns(pkg.SearchResult{
+				PullRequests:  []pkg.PullRequest{prDepBump(author)},
+				RateRemaining: 100,
+			}, nil)
+			return newTestWatcherWithAutoMerge(
+				ghClient,
+				createSender,
+				cursorPath,
+				startTime,
+				fakeMetrics,
+				trustUpdater,
+				"auto-merge",
+			)
+		}
+
+		BeforeEach(func() {
+			ghClient.EnableAutoMergeReturns(nil)
+			ghClient.UpdateBranchReturns(nil)
+			ghClient.ClosePRReturns(nil)
+			createSender.SendCommandReturns(nil)
+		})
+
+		It("closes a dirty dep-bump PR from a bot author", func() {
+			w := pollWith("fix/update-go-abc1234", "dirty", "ben-s-go-updater[bot]")
+			Expect(w.Poll(ctx)).NotTo(HaveOccurred())
+			Expect(ghClient.ClosePRCallCount()).To(Equal(1))
+			_, owner, repo, number, comment := ghClient.ClosePRArgsForCall(0)
+			Expect(owner).To(Equal("bborbe"))
+			Expect(repo).To(Equal("repo"))
+			Expect(number).To(Equal(7))
+			Expect(comment).To(ContainSubstring("superseded"))
+			Expect(metricLabels()).To(ContainElement("dep_bump_superseded"))
+		})
+
+		It("never closes a human-authored PR, however its branch is named", func() {
+			w := pollWith("fix/update-go-abc1234", "dirty", "alice")
+			Expect(w.Poll(ctx)).NotTo(HaveOccurred())
+			Expect(ghClient.ClosePRCallCount()).To(Equal(0))
+		})
+
+		It("does not close a behind dep-bump PR — that is update-branch's case", func() {
+			w := pollWith("fix/update-go-abc1234", "behind", "ben-s-go-updater[bot]")
+			Expect(w.Poll(ctx)).NotTo(HaveOccurred())
+			Expect(ghClient.ClosePRCallCount()).To(Equal(0))
+			Expect(ghClient.UpdateBranchCallCount()).To(Equal(1))
+		})
+
+		It("does not close a dirty PR that is not a dep bump", func() {
+			w := pollWith("feature/something", "dirty", "ben-s-go-updater[bot]")
+			Expect(w.Poll(ctx)).NotTo(HaveOccurred())
+			Expect(ghClient.ClosePRCallCount()).To(Equal(0))
+		})
+
+		It("does not close a dep-bump PR from an untrusted author", func() {
+			detailsFor("fix/update-go-abc1234", "dirty")
+			ghClient.SearchPRsReturns(pkg.SearchResult{
+				PullRequests:  []pkg.PullRequest{prDepBump("ben-s-go-updater-dev[bot]")},
+				RateRemaining: 100,
+			}, nil)
+			w := newTestWatcherWithAutoMerge(
+				ghClient,
+				createSender,
+				cursorPath,
+				startTime,
+				fakeMetrics,
+				trustUpdater,
+				"auto-merge",
+			)
+			Expect(w.Poll(ctx)).NotTo(HaveOccurred())
+			Expect(ghClient.ClosePRCallCount()).To(Equal(0))
+			Expect(metricLabels()).To(ContainElement("dep_bump_skipped"))
+		})
+
+		It("does not attempt update-branch on a dirty dep-bump PR", func() {
+			w := pollWith("fix/update-go-abc1234", "dirty", "ben-s-go-updater[bot]")
+			Expect(w.Poll(ctx)).NotTo(HaveOccurred())
+			Expect(ghClient.UpdateBranchCallCount()).To(Equal(0))
+		})
+
+		It("does not fail the poll when the close errors", func() {
+			ghClient.ClosePRReturns(errors.New("403 forbidden"))
+			w := pollWith("fix/update-go-abc1234", "dirty", "ben-s-go-updater[bot]")
+			Expect(w.Poll(ctx)).NotTo(HaveOccurred())
+			Expect(metricLabels()).To(ContainElement("error"))
+		})
+	})
+
 	Describe("trivial auto-merge label", func() {
 		prTrivial := func() pkg.PullRequest {
 			return pkg.PullRequest{
