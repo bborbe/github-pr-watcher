@@ -121,6 +121,25 @@ type GitHubClient interface {
 		page int,
 	) (SearchResult, error)
 
+	// SearchLabeledPRs issues a GitHub Search query for open PRs carrying
+	// label, with NO `updated:>=` bound. page=1 for the first call; use
+	// SearchResult.NextPage for subsequent calls.
+	//
+	// The absence of an updated bound is the point: SearchPRs is scoped by a
+	// monotonic cursor, so a PR that has stopped being updated — which is what
+	// a stale branch IS — drops out of its window permanently. The side-effect
+	// paths (update-branch, auto-merge, supersede) exist precisely for those
+	// PRs, so they query by label instead and stay reachable for as long as
+	// the label is present. See processLabeledPRs.
+	//
+	// PullRequest.HeadSHA in the result is empty — call GetPRDetails to fetch it.
+	SearchLabeledPRs(
+		ctx context.Context,
+		scope string,
+		label string,
+		page int,
+	) (SearchResult, error)
+
 	// GetPRDetails fetches the head SHA, clone URL, and base ref for a single PR.
 	// The Search API does NOT return any of these, so the poll loop must call
 	// this for every PR before publishing a task command.
@@ -318,6 +337,33 @@ func (c *githubClient) SearchPRs(
 		scope,
 		since.Format(time.RFC3339),
 	)
+	return c.searchIssuePRs(ctx, scope, query, page)
+}
+
+// SearchLabeledPRs searches by label with no updated bound — see the interface
+// doc for why the bound must be absent on this path.
+func (c *githubClient) SearchLabeledPRs(
+	ctx context.Context,
+	scope string,
+	label string,
+	page int,
+) (SearchResult, error) {
+	query := fmt.Sprintf(
+		"is:pr is:open archived:false user:%s label:%q",
+		scope,
+		label,
+	)
+	return c.searchIssuePRs(ctx, scope, query, page)
+}
+
+// searchIssuePRs runs query and maps the issue results onto PullRequests.
+// Shared by SearchPRs and SearchLabeledPRs, which differ only in their query.
+func (c *githubClient) searchIssuePRs(
+	ctx context.Context,
+	scope string,
+	query string,
+	page int,
+) (SearchResult, error) {
 	opts := &gogithub.SearchOptions{
 		ListOptions: gogithub.ListOptions{
 			Page:    page,
