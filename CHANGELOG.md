@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+- fix: run the auto-merge side effects — update-branch, auto-merge, supersede — over the auto-merge-labeled PRs each poll, not only over the PRs the cursor window returns. That window is `updated:>=cursor` and the cursor only ever advances, so a PR that stopped being updated (which is what a stale branch IS) left it permanently, making the side effects unreachable for exactly the population they exist to serve
+- fix: `SearchLabeledPRs` on the GitHub client — a label-scoped search with no `updated:` bound, so a labeled PR stays reachable however old it is
+- fix: bound that pass with a `sideEffectFilter` rather than the task-creation filter — the repo-allowlist and draft gates still apply (a dev watcher must not act on repos outside its allowlist, whatever labels they carry), the age/bot/WIP gates do not
+
 ## v0.12.0
 
 - feat: retire a conflicting update-go dep-bump PR instead of trying to refresh it — `trySupersedeDepBump` closes it with a comment explaining the CHANGELOG fold race, so the update-go pipeline replaces it with a fresh PR off current master

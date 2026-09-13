@@ -265,6 +265,7 @@ func NewWatcher(
 	startTime libtime.DateTime,
 	scope string,
 	taskCreationFilter filter.TaskCreationFilter,
+	sideEffectFilter filter.TaskCreationFilter,
 	overrideLabel string,
 	autoMergeLabel string,
 	trivialAutoMergeEnabled bool,
@@ -278,6 +279,7 @@ func NewWatcher(
 		startTime:               startTime,
 		scope:                   scope,
 		taskCreationFilter:      taskCreationFilter,
+		sideEffectFilter:        sideEffectFilter,
 		overrideLabel:           overrideLabel,
 		autoMergeLabel:          autoMergeLabel,
 		trivialAutoMergeEnabled: trivialAutoMergeEnabled,
@@ -293,6 +295,13 @@ type watcher struct {
 	startTime          libtime.DateTime
 	scope              string
 	taskCreationFilter filter.TaskCreationFilter
+	// sideEffectFilter bounds the labeled side-effect pass (processLabeledPRs).
+	// Deliberately narrower than taskCreationFilter: the draft and repo-allowlist
+	// gates still apply — a dev watcher must not act on repos outside its
+	// allowlist, whatever labels they carry — but the age, bot-author and
+	// WIP-title gates do not, because those exist to bound review-task creation
+	// and the whole point of the pass is to reach PRs the cursor window aged out.
+	sideEffectFilter filter.TaskCreationFilter
 	// overrideLabel is the PR label that triggers an override task. Empty
 	// disables the override path entirely.
 	overrideLabel string
@@ -355,7 +364,15 @@ func (w *watcher) Poll(ctx context.Context) error {
 	default:
 	}
 
-	maxUpdatedAt := w.processPRs(ctx, &cursorState, allPRs)
+	maxUpdatedAt, sideEffectsRun := w.processPRs(ctx, &cursorState, allPRs)
+
+	// Side-effect pass, deliberately outside the cursor window above. That
+	// window is `updated:>=cursor` and the cursor only ever advances, so a PR
+	// that has stopped being updated — a stale branch, which is exactly the
+	// population these side effects exist for — is never fetched by the main
+	// loop again. Re-query by label so a labeled PR stays reachable however
+	// old it is. PRs already handled above are skipped, not re-run.
+	w.processLabeledPRs(ctx, sideEffectsRun)
 
 	if maxUpdatedAt.After(cursorState.LastUpdatedAt) {
 		cursorState.LastUpdatedAt = maxUpdatedAt
@@ -401,7 +418,9 @@ func (w *watcher) fetchAllPRs(
 	return allPRs, ""
 }
 
-// processPRs iterates over fetched PRs, publishes commands, and returns the max updated-at seen.
+// processPRs iterates over fetched PRs, publishes commands, and returns the max updated-at seen
+// plus the set of PRs whose side effects (update-branch, auto-merge, supersede) already ran this
+// poll — processLabeledPRs skips those so no side effect executes twice in one cycle.
 // It rebuilds HeadSHAs from only the current open-PR batch, pruning closed/merged PRs.
 // Each (PR, SHA) pair produces at most one CreateTaskCommand across all poll cycles.
 //
@@ -424,20 +443,23 @@ func (w *watcher) processPRs(
 	ctx context.Context,
 	cursorState *Cursor,
 	allPRs []PullRequest,
-) libtime.DateTime {
+) (libtime.DateTime, map[string]struct{}) {
 	maxUpdatedAt := cursorState.LastUpdatedAt
 	prDetailsCache := make(map[string]PRDetails)
 	newHeadSHAs := make(map[string]string, len(allPRs))
+	sideEffectsRun := make(map[string]struct{}, len(allPRs))
 
 	for _, pr := range allPRs {
 		select {
 		case <-ctx.Done():
 			glog.V(2).Infof("poll cancelled during processPRs at pr %d", pr.Number)
-			return maxUpdatedAt
+			return maxUpdatedAt, sideEffectsRun
 		default:
 		}
 
-		if updatedAt, ok := w.processPR(ctx, pr, cursorState, newHeadSHAs, prDetailsCache); ok {
+		if updatedAt, ok := w.processPR(
+			ctx, pr, cursorState, newHeadSHAs, prDetailsCache, sideEffectsRun,
+		); ok {
 			if updatedAt.After(maxUpdatedAt) {
 				maxUpdatedAt = updatedAt
 			}
@@ -445,7 +467,121 @@ func (w *watcher) processPRs(
 	}
 
 	cursorState.HeadSHAs = newHeadSHAs
-	return maxUpdatedAt
+	return maxUpdatedAt, sideEffectsRun
+}
+
+// prKey identifies a PR for the cursor and side-effect bookkeeping.
+func prKey(pr PullRequest) string {
+	return fmt.Sprintf("%s/%s#%d", pr.Owner, pr.Repo, pr.Number)
+}
+
+// processLabeledPRs runs the side-effect half of processPR over every open PR
+// carrying the auto-merge label, with no cursor bound.
+//
+// Why a separate pass: the main loop only sees PRs the search returns, and
+// that search is `updated:>=cursor` against a cursor that only ever advances
+// (see Poll). A branch goes stale precisely by not being touched, so its
+// updated-at falls behind the cursor and the PR leaves the window for good —
+// which makes update-branch, auto-merge and supersede unreachable for exactly
+// the population they exist to serve. Querying by label has no such blind
+// spot: a labeled PR stays reachable for as long as the label is present.
+//
+// sideEffectFilter — not taskCreationFilter — bounds this pass. The repo
+// allowlist and draft gates still apply, because a dev watcher must not act on
+// repos outside its allowlist however they are labeled; the age, bot-author and
+// WIP-title gates do not, since those bound review-task creation and reaching
+// cursor-aged PRs is the entire point. The trust gate inside each try* call
+// remains the boundary that decides whether anything actually happens.
+//
+// skip holds PRs whose side effects already ran in the main loop this poll;
+// they are not repeated. Failures never abort the poll.
+func (w *watcher) processLabeledPRs(
+	ctx context.Context,
+	skip map[string]struct{},
+) {
+	if w.autoMergeLabel == "" {
+		return
+	}
+	prs, reason := w.fetchLabeledPRs(ctx)
+	if reason != "" {
+		glog.Warningf("labeled pr fetch failed reason=%s", reason)
+		return
+	}
+	prDetailsCache := make(map[string]PRDetails)
+	for _, pr := range prs {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+		if _, ok := skip[prKey(pr)]; ok {
+			continue
+		}
+		if w.sideEffectFilter != nil && w.sideEffectFilter.Skip(filter.PR{
+			AuthorLogin: pr.AuthorLogin,
+			IsDraft:     pr.IsDraft,
+			Title:       pr.Title,
+			UpdatedAt:   pr.UpdatedAt,
+			RepoKey:     "github.com/" + pr.Owner + "/" + pr.Repo,
+		}) {
+			glog.V(3).Infof("labeled pass skipping pr=%s/%s#%d reason=filtered",
+				pr.Owner, pr.Repo, pr.Number)
+			continue
+		}
+		details, err := w.fetchPRDetails(ctx, pr, prDetailsCache)
+		if err != nil {
+			glog.Errorf(
+				"get pr details failed pr=%s/%s#%d err=%v",
+				pr.Owner,
+				pr.Repo,
+				pr.Number,
+				err,
+			)
+			continue
+		}
+		if details.HeadSHA == "" {
+			glog.Warningf(
+				"missing head SHA for pr=%s/%s#%d, skipping",
+				pr.Owner,
+				pr.Repo,
+				pr.Number,
+			)
+			continue
+		}
+		w.trySupersedeDepBump(ctx, pr, details)
+		w.tryUpdateBranch(ctx, pr, details)
+		w.tryAutoMerge(ctx, pr)
+	}
+}
+
+// fetchLabeledPRs paginates the labeled-PR search. Returns (prs, "") on
+// success, or (nil, reason) mirroring fetchAllPRs.
+func (w *watcher) fetchLabeledPRs(ctx context.Context) ([]PullRequest, string) {
+	page := 1
+	var allPRs []PullRequest
+
+	for {
+		select {
+		case <-ctx.Done():
+			glog.V(2).Infof("fetchLabeledPRs cancelled before page search")
+			return nil, ""
+		default:
+		}
+
+		result, err := w.ghClient.SearchLabeledPRs(ctx, w.scope, w.autoMergeLabel, page)
+		if err != nil {
+			glog.Errorf("github labeled search failed err=%v", err)
+			return nil, "github_error"
+		}
+
+		allPRs = append(allPRs, result.PullRequests...)
+
+		if !result.HasNextPage {
+			break
+		}
+		page = result.NextPage
+	}
+	return allPRs, ""
 }
 
 // processPR processes a single PR: filter → fetch details → override-or-review.
@@ -459,6 +595,7 @@ func (w *watcher) processPR(
 	cursorState *Cursor,
 	newHeadSHAs map[string]string,
 	prDetailsCache map[string]PRDetails,
+	sideEffectsRun map[string]struct{},
 ) (libtime.DateTime, bool) {
 	if w.taskCreationFilter.Skip(
 		filter.PR{
@@ -500,6 +637,11 @@ func (w *watcher) processPR(
 		w.maybeLabelTrivial(ctx, pr) {
 		pr.Labels = append(pr.Labels, w.autoMergeLabel)
 	}
+
+	// The side effects below are recorded so processLabeledPRs — which runs
+	// outside the cursor window and covers a superset of these PRs — does not
+	// repeat them in the same poll.
+	sideEffectsRun[prKey(pr)] = struct{}{}
 
 	// Supersession: a dep-bump PR that has gone dirty is retired rather than
 	// refreshed — see trySupersedeDepBump for why merging master in cannot
@@ -626,8 +768,8 @@ func staleMergeState(state MergeState) bool {
 }
 
 // tryUpdateBranch merges the base branch into the head branch of a labeled PR
-// from a trusted author whose branch has gone stale against its base. It
-// returns true when the branch was updated.
+// from a trusted author whose branch has gone stale against its base. Side
+// effect only — the caller continues regardless.
 //
 // This closes the residue the arming path cannot: a PR that was APPROVED and
 // green when opened turns `behind` (or `dirty`) as soon as master moves, and
@@ -641,8 +783,8 @@ func staleMergeState(state MergeState) bool {
 //
 // `dirty` means a real conflict, which update-branch cannot resolve — it
 // merges base into head, so a conflicting merge fails. A failure is logged and
-// returns false so the caller continues normally; the conflicting-dep-bump
-// case belongs to the update-go abort-and-reemit policy, not here.
+// the caller continues normally; the conflicting-dep-bump case belongs to the
+// update-go abort-and-reemit policy, not here.
 //
 // Failures never block the review path: like tryAutoMerge this is a side
 // effect, and the caller continues regardless.
@@ -650,30 +792,30 @@ func (w *watcher) tryUpdateBranch(
 	ctx context.Context,
 	pr PullRequest,
 	details PRDetails,
-) bool {
+) {
 	if w.autoMergeLabel == "" || !slices.Contains(pr.Labels, w.autoMergeLabel) {
-		return false
+		return
 	}
 	// A dirty dep-bump PR is the abort-and-reemit case, not a refresh case —
 	// merging master in cannot resolve it (see isSupersededDepBump). Let the
 	// abort path own that PR outright rather than attempting an update that
 	// will 422.
 	if isSupersededDepBump(pr, details) {
-		return false
+		return
 	}
 	if !staleMergeState(details.MergeableState) {
-		return false
+		return
 	}
 	trustResult, err := w.trustDecision.IsTrusted(ctx, trust.PR{AuthorLogin: pr.AuthorLogin})
 	if err != nil {
 		glog.Errorf("update-branch trust check failed pr=%s err=%v", pr.HTMLURL, err)
 		w.metrics.IncPRPublished("error")
-		return false
+		return
 	}
 	if !trustResult.Success() {
 		glog.V(2).Infof("update-branch skipped, untrusted author pr=%s", pr.HTMLURL)
 		w.metrics.IncPRPublished("update_branch_skipped")
-		return false
+		return
 	}
 	if err := w.ghClient.UpdateBranch(ctx, pr.Owner, pr.Repo, pr.Number); err != nil {
 		// Expected for a genuinely conflicting (`dirty`) PR — update-branch
@@ -681,12 +823,11 @@ func (w *watcher) tryUpdateBranch(
 		glog.V(2).Infof("update branch failed pr=%s/%s#%d state=%s err=%v",
 			pr.Owner, pr.Repo, pr.Number, details.MergeableState, err)
 		w.metrics.IncPRPublished("update_branch_failed")
-		return false
+		return
 	}
 	glog.V(2).Infof("updated branch pr=%s/%s#%d state=%s",
 		pr.Owner, pr.Repo, pr.Number, details.MergeableState)
 	w.metrics.IncPRPublished("update_branch")
-	return true
 }
 
 // updateGoBranchPrefix is the head-branch prefix the update-go agent gives its
@@ -736,7 +877,7 @@ func isSupersededDepBump(pr PullRequest, details PRDetails) bool {
 
 // trySupersedeDepBump retires a dep-bump PR that a conflicting merge has
 // stranded, so the update-go pipeline can replace it with a fresh one off
-// current master. Returns true when the PR was closed.
+// current master.
 //
 // Why close rather than refresh: the CHANGELOG fold race. A release renames
 // `## Unreleased`, and every open dep-bump PR edits that same region, so the
@@ -751,26 +892,25 @@ func isSupersededDepBump(pr PullRequest, details PRDetails) bool {
 // Gated on the same trusted-author check as the rest of the watcher — an
 // untrusted author's PR is left alone, never closed.
 //
-// Failures never block the review path: this returns false and the caller
-// continues.
+// Failures never block the review path: the caller continues regardless.
 func (w *watcher) trySupersedeDepBump(
 	ctx context.Context,
 	pr PullRequest,
 	details PRDetails,
-) bool {
+) {
 	if !isSupersededDepBump(pr, details) {
-		return false
+		return
 	}
 	trustResult, err := w.trustDecision.IsTrusted(ctx, trust.PR{AuthorLogin: pr.AuthorLogin})
 	if err != nil {
 		glog.Errorf("abort-and-reemit trust check failed pr=%s err=%v", pr.HTMLURL, err)
 		w.metrics.IncPRPublished("error")
-		return false
+		return
 	}
 	if !trustResult.Success() {
 		glog.V(2).Infof("abort-and-reemit skipped, untrusted author pr=%s", pr.HTMLURL)
 		w.metrics.IncPRPublished("dep_bump_skipped")
-		return false
+		return
 	}
 	if err := w.ghClient.ClosePR(
 		ctx, pr.Owner, pr.Repo, pr.Number, depBumpSupersededComment,
@@ -778,16 +918,14 @@ func (w *watcher) trySupersedeDepBump(
 		glog.Errorf("close superseded dep-bump pr failed pr=%s/%s#%d err=%v",
 			pr.Owner, pr.Repo, pr.Number, err)
 		w.metrics.IncPRPublished("error")
-		return false
+		return
 	}
 	glog.V(2).Infof("closed superseded dep-bump pr=%s/%s#%d", pr.Owner, pr.Repo, pr.Number)
 	w.metrics.IncPRPublished("dep_bump_superseded")
-	return true
 }
 
 // tryAutoMerge arms GitHub-native auto-merge for a labeled PR from a trusted
-// author. It returns true when the PR was armed (label present + trusted).
-// It returns false — leaving the caller to continue normally — when the
+// author. It does nothing — leaving the caller to continue normally — when the
 // auto-merge path is disabled (empty label), the label is absent, the author
 // is untrusted, or arming failed.
 //
@@ -801,30 +939,29 @@ func (w *watcher) trySupersedeDepBump(
 func (w *watcher) tryAutoMerge(
 	ctx context.Context,
 	pr PullRequest,
-) bool {
+) {
 	if w.autoMergeLabel == "" || !slices.Contains(pr.Labels, w.autoMergeLabel) {
-		return false
+		return
 	}
 	trustResult, err := w.trustDecision.IsTrusted(ctx, trust.PR{AuthorLogin: pr.AuthorLogin})
 	if err != nil {
 		glog.Errorf("auto-merge trust check failed pr=%s err=%v", pr.HTMLURL, err)
 		w.metrics.IncPRPublished("error")
-		return false
+		return
 	}
 	if !trustResult.Success() {
 		glog.V(2).Infof("auto-merge skipped, untrusted author pr=%s", pr.HTMLURL)
 		w.metrics.IncPRPublished("auto_merge_skipped")
-		return false
+		return
 	}
 	if err := w.ghClient.EnableAutoMerge(ctx, pr.Owner, pr.Repo, pr.Number); err != nil {
 		glog.Errorf("enable auto-merge failed pr=%s/%s#%d err=%v",
 			pr.Owner, pr.Repo, pr.Number, err)
 		w.metrics.IncPRPublished("error")
-		return false
+		return
 	}
 	glog.V(2).Infof("armed auto-merge pr=%s/%s#%d", pr.Owner, pr.Repo, pr.Number)
 	w.metrics.IncPRPublished("auto_merge")
-	return true
 }
 
 // maybeLabelTrivial applies the auto-merge label to a mechanically trivial PR

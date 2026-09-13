@@ -144,6 +144,22 @@ type GitHubClient struct {
 	rateLimitRemainingReturnsOnCall map[int]struct {
 		result1 int
 	}
+	SearchLabeledPRsStub        func(context.Context, string, string, int) (pkg.SearchResult, error)
+	searchLabeledPRsMutex       sync.RWMutex
+	searchLabeledPRsArgsForCall []struct {
+		arg1 context.Context
+		arg2 string
+		arg3 string
+		arg4 int
+	}
+	searchLabeledPRsReturns struct {
+		result1 pkg.SearchResult
+		result2 error
+	}
+	searchLabeledPRsReturnsOnCall map[int]struct {
+		result1 pkg.SearchResult
+		result2 error
+	}
 	SearchPRsStub        func(context.Context, string, time.DateTime, int) (pkg.SearchResult, error)
 	searchPRsMutex       sync.RWMutex
 	searchPRsArgsForCall []struct {
@@ -753,6 +769,73 @@ func (fake *GitHubClient) RateLimitRemainingReturnsOnCall(i int, result1 int) {
 	fake.rateLimitRemainingReturnsOnCall[i] = struct {
 		result1 int
 	}{result1}
+}
+
+func (fake *GitHubClient) SearchLabeledPRs(arg1 context.Context, arg2 string, arg3 string, arg4 int) (pkg.SearchResult, error) {
+	fake.searchLabeledPRsMutex.Lock()
+	ret, specificReturn := fake.searchLabeledPRsReturnsOnCall[len(fake.searchLabeledPRsArgsForCall)]
+	fake.searchLabeledPRsArgsForCall = append(fake.searchLabeledPRsArgsForCall, struct {
+		arg1 context.Context
+		arg2 string
+		arg3 string
+		arg4 int
+	}{arg1, arg2, arg3, arg4})
+	stub := fake.SearchLabeledPRsStub
+	fakeReturns := fake.searchLabeledPRsReturns
+	fake.recordInvocation("SearchLabeledPRs", []interface{}{arg1, arg2, arg3, arg4})
+	fake.searchLabeledPRsMutex.Unlock()
+	if stub != nil {
+		return stub(arg1, arg2, arg3, arg4)
+	}
+	if specificReturn {
+		return ret.result1, ret.result2
+	}
+	return fakeReturns.result1, fakeReturns.result2
+}
+
+func (fake *GitHubClient) SearchLabeledPRsCallCount() int {
+	fake.searchLabeledPRsMutex.RLock()
+	defer fake.searchLabeledPRsMutex.RUnlock()
+	return len(fake.searchLabeledPRsArgsForCall)
+}
+
+func (fake *GitHubClient) SearchLabeledPRsCalls(stub func(context.Context, string, string, int) (pkg.SearchResult, error)) {
+	fake.searchLabeledPRsMutex.Lock()
+	defer fake.searchLabeledPRsMutex.Unlock()
+	fake.SearchLabeledPRsStub = stub
+}
+
+func (fake *GitHubClient) SearchLabeledPRsArgsForCall(i int) (context.Context, string, string, int) {
+	fake.searchLabeledPRsMutex.RLock()
+	defer fake.searchLabeledPRsMutex.RUnlock()
+	argsForCall := fake.searchLabeledPRsArgsForCall[i]
+	return argsForCall.arg1, argsForCall.arg2, argsForCall.arg3, argsForCall.arg4
+}
+
+func (fake *GitHubClient) SearchLabeledPRsReturns(result1 pkg.SearchResult, result2 error) {
+	fake.searchLabeledPRsMutex.Lock()
+	defer fake.searchLabeledPRsMutex.Unlock()
+	fake.SearchLabeledPRsStub = nil
+	fake.searchLabeledPRsReturns = struct {
+		result1 pkg.SearchResult
+		result2 error
+	}{result1, result2}
+}
+
+func (fake *GitHubClient) SearchLabeledPRsReturnsOnCall(i int, result1 pkg.SearchResult, result2 error) {
+	fake.searchLabeledPRsMutex.Lock()
+	defer fake.searchLabeledPRsMutex.Unlock()
+	fake.SearchLabeledPRsStub = nil
+	if fake.searchLabeledPRsReturnsOnCall == nil {
+		fake.searchLabeledPRsReturnsOnCall = make(map[int]struct {
+			result1 pkg.SearchResult
+			result2 error
+		})
+	}
+	fake.searchLabeledPRsReturnsOnCall[i] = struct {
+		result1 pkg.SearchResult
+		result2 error
+	}{result1, result2}
 }
 
 func (fake *GitHubClient) SearchPRs(arg1 context.Context, arg2 string, arg3 time.DateTime, arg4 int) (pkg.SearchResult, error) {

@@ -57,6 +57,9 @@ func newTestWatcher(
 			filter.NewDraftFilter(),
 			filter.NewBotAuthorFilter([]string{"dependabot[bot]"}),
 		},
+		filter.TaskCreationFilters{
+			filter.NewDraftFilter(),
+		},
 		"",
 		"",
 		false,
@@ -95,6 +98,9 @@ func newTestWatcherWithOverride(
 		filter.TaskCreationFilters{
 			filter.NewDraftFilter(),
 			filter.NewBotAuthorFilter([]string{"dependabot[bot]"}),
+		},
+		filter.TaskCreationFilters{
+			filter.NewDraftFilter(),
 		},
 		overrideLabel,
 		"",
@@ -135,6 +141,9 @@ func newTestWatcherWithAutoMerge(
 			filter.NewDraftFilter(),
 			filter.NewBotAuthorFilter([]string{"dependabot[bot]"}),
 		},
+		filter.TaskCreationFilters{
+			filter.NewDraftFilter(),
+		},
 		"",
 		autoMergeLabel,
 		false,
@@ -173,6 +182,9 @@ func newTestWatcherWithTrivialAutoMerge(
 		filter.TaskCreationFilters{
 			filter.NewDraftFilter(),
 			filter.NewBotAuthorFilter([]string{"dependabot[bot]"}),
+		},
+		filter.TaskCreationFilters{
+			filter.NewDraftFilter(),
 		},
 		"",
 		autoMergeLabel,
@@ -1269,6 +1281,9 @@ var _ = Describe("pkg.Watcher", func() {
 					filter.NewDraftFilter(),
 					filter.NewBotAuthorFilter([]string{"dependabot[bot]"}),
 				},
+				filter.TaskCreationFilters{
+					filter.NewDraftFilter(),
+				},
 				"",
 				"",
 				false,
@@ -1710,6 +1725,153 @@ var _ = Describe("pkg.Watcher", func() {
 			Expect(createSender.SendCommandCallCount()).To(Equal(1))
 			_, cmd := createSender.SendCommandArgsForCall(0)
 			Expect(cmd.Frontmatter["task_type"]).To(Equal("pr-review"))
+		})
+	})
+
+	Describe("labeled side-effect pass", func() {
+		// The main poll window is `updated:>=cursor` against a cursor that only
+		// ever advances, so a PR that stops being updated — which is what a
+		// stale branch IS — leaves that window permanently. These specs pin the
+		// pass that keeps such PRs reachable for the side effects.
+		prLabeled := func(repo string, labels []string) pkg.PullRequest {
+			return pkg.PullRequest{
+				Number:      9,
+				Owner:       "bborbe",
+				Repo:        repo,
+				Title:       "bump deps",
+				HTMLURL:     "https://github.com/bborbe/" + repo + "/pull/9",
+				AuthorLogin: "alice",
+				IsDraft:     false,
+				UpdatedAt:   libtime.DateTime(time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC)),
+				Labels:      labels,
+			}
+		}
+		trustAlice := trust.NewAuthorAllowlist([]string{"alice"})
+		labeledResult := func(pr pkg.PullRequest) pkg.SearchResult {
+			return pkg.SearchResult{PullRequests: []pkg.PullRequest{pr}, RateRemaining: 100}
+		}
+		// pollWithSideEffectFilter builds a watcher with an explicit
+		// side-effect filter, so the repo-allowlist gate can be exercised.
+		pollWithSideEffectFilter := func(f filter.TaskCreationFilter) pkg.Watcher {
+			publisher := pkg.NewTaskPublisher(
+				createSender,
+				trustAlice,
+				fakeMetrics,
+				pkg.TaskConfig{
+					Stage:       "dev",
+					MaxSlugLen:  pkg.DefaultMaxSlugLen,
+					MaxTitleLen: pkg.DefaultMaxTitleLen,
+				},
+				ghClient,
+			)
+			return pkg.NewWatcher(
+				ghClient,
+				publisher,
+				fakeMetrics,
+				cursorPath,
+				startTime,
+				"bborbe",
+				filter.TaskCreationFilters{filter.NewDraftFilter()},
+				f,
+				"",
+				"auto-merge",
+				false,
+				trustAlice,
+			)
+		}
+
+		BeforeEach(func() {
+			ghClient.EnableAutoMergeReturns(nil)
+			ghClient.UpdateBranchReturns(nil)
+			ghClient.GetPRDetailsReturns(pkg.PRDetails{
+				HeadSHA:        "deadbeef",
+				CloneURL:       "https://github.com/bborbe/repo.git",
+				BaseRef:        "master",
+				MergeableState: pkg.MergeStateBehind,
+			}, nil)
+			// Main window returns nothing: the cursor has advanced past this PR.
+			ghClient.SearchPRsReturns(pkg.SearchResult{RateRemaining: 100}, nil)
+		})
+
+		It("updates a labeled PR the cursor window no longer returns", func() {
+			ghClient.SearchLabeledPRsReturns(labeledResult(
+				prLabeled("repo", []string{"auto-merge"}),
+			), nil)
+			w := newTestWatcherWithAutoMerge(
+				ghClient,
+				createSender,
+				cursorPath,
+				startTime,
+				fakeMetrics,
+				trustAlice,
+				"auto-merge",
+			)
+			Expect(w.Poll(ctx)).NotTo(HaveOccurred())
+			Expect(ghClient.UpdateBranchCallCount()).To(Equal(1))
+		})
+
+		It("does not repeat side effects for a PR the main loop already handled", func() {
+			pr := prLabeled("repo", []string{"auto-merge"})
+			ghClient.SearchPRsReturns(labeledResult(pr), nil)
+			ghClient.SearchLabeledPRsReturns(labeledResult(pr), nil)
+			w := newTestWatcherWithAutoMerge(
+				ghClient,
+				createSender,
+				cursorPath,
+				startTime,
+				fakeMetrics,
+				trustAlice,
+				"auto-merge",
+			)
+			Expect(w.Poll(ctx)).NotTo(HaveOccurred())
+			Expect(ghClient.UpdateBranchCallCount()).To(Equal(1))
+		})
+
+		It("does not query labeled PRs when the auto-merge label is disabled", func() {
+			w := newTestWatcherWithAutoMerge(
+				ghClient, createSender, cursorPath, startTime, fakeMetrics, trustAlice, "",
+			)
+			Expect(w.Poll(ctx)).NotTo(HaveOccurred())
+			Expect(ghClient.SearchLabeledPRsCallCount()).To(Equal(0))
+		})
+
+		It("continues the poll when the labeled search fails", func() {
+			ghClient.SearchLabeledPRsReturns(pkg.SearchResult{}, errors.New("boom"))
+			w := newTestWatcherWithAutoMerge(
+				ghClient,
+				createSender,
+				cursorPath,
+				startTime,
+				fakeMetrics,
+				trustAlice,
+				"auto-merge",
+			)
+			Expect(w.Poll(ctx)).NotTo(HaveOccurred())
+			Expect(ghClient.UpdateBranchCallCount()).To(Equal(0))
+		})
+
+		It("skips a labeled PR in a repo outside the side-effect allowlist", func() {
+			ghClient.SearchLabeledPRsReturns(labeledResult(
+				prLabeled("other-repo", []string{"auto-merge"}),
+			), nil)
+			w := pollWithSideEffectFilter(filter.TaskCreationFilters{
+				filter.NewDraftFilter(),
+				filter.NewRepoAllowlistFilter([]string{"github.com/bborbe/repo"}),
+			})
+			Expect(w.Poll(ctx)).NotTo(HaveOccurred())
+			Expect(ghClient.UpdateBranchCallCount()).To(Equal(0))
+		})
+
+		It("still reaches a labeled PR in an allowlisted repo", func() {
+			ghClient.SearchLabeledPRsReturns(labeledResult(
+				prLabeled("repo", []string{"auto-merge"}),
+			), nil)
+			w := pollWithSideEffectFilter(filter.TaskCreationFilters{
+				filter.NewDraftFilter(),
+				filter.NewRepoAllowlistFilter([]string{"github.com/bborbe/repo"}),
+			})
+			Expect(w.Poll(ctx)).NotTo(HaveOccurred())
+			Expect(ghClient.UpdateBranchCallCount()).To(Equal(1))
 		})
 	})
 

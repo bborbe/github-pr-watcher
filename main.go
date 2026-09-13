@@ -254,6 +254,18 @@ func (a *application) Run(ctx context.Context, _ libsentry.Client) error {
 		filter.NewRepoAllowlistFilter(repoAllowlist),
 	}
 
+	// sideEffectFilter bounds the labeled side-effect pass (update-branch,
+	// auto-merge, supersede). It keeps the repo-allowlist and draft gates — a
+	// dev watcher must not act on repos outside its allowlist, whatever labels
+	// they carry — and drops the age, bot-author and WIP-title gates, which
+	// exist to bound review-task creation. The age gate especially: a stale
+	// branch is stale precisely by not being updated, so an age bound would
+	// hide exactly the PRs the side effects are for.
+	sideEffectFilter := filter.TaskCreationFilters{
+		filter.NewDraftFilter(),
+		filter.NewRepoAllowlistFilter(repoAllowlist),
+	}
+
 	trustedAuthors := pkg.ParseTrustedAuthors(a.TrustedAuthors)
 	if len(trustedAuthors) == 0 {
 		return errors.Errorf(
@@ -296,6 +308,7 @@ func (a *application) Run(ctx context.Context, _ libsentry.Client) error {
 		startTime,
 		a.RepoScope,
 		taskCreationFilter,
+		sideEffectFilter,
 		a.Stage,
 		metrics,
 		trustDecision,
