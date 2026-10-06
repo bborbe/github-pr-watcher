@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+- feat: name the filter that skipped a PR in the `filtered` log line — one undifferentiated `trigger executor: filtered pr=…` served all five skip causes, so attributing a skip meant eliminating the other four by hand. The line now carries `reason=<draft|bot-author|wip-title|age|repo-allowlist>`, resolved through a new `TaskCreationFilters.SkippingFilter` that names the first voter — the only one the short-circuit chain can reach
+- feat: `Name() string` on the `TaskCreationFilter` interface, mandatory rather than an optional secondary interface, so a future filter cannot skip silently without naming itself — the exact defect this fixes
+
 ## v0.12.1
 
 - fix: run the auto-merge side effects — update-branch, auto-merge, supersede — over the auto-merge-labeled PRs each poll, not only over the PRs the cursor window returns. That window is `updated:>=cursor` and the cursor only ever advances, so a PR that stopped being updated (which is what a stale branch IS) left it permanently, making the side effects unreachable for exactly the population they exist to serve

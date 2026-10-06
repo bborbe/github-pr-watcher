@@ -22,6 +22,11 @@ import (
 // out of production builds.
 var RunTriggerPRReview = runTriggerPRReview
 
+// FilterSkipReason re-exports the private filterSkipReason for the external
+// test package, so the `reason=` identity of the skip log line can be
+// asserted directly (glog output is not capturable in this repo's style).
+var FilterSkipReason = filterSkipReason
+
 // Compile-time guard: keep the public surface tightly aligned with
 // the internal helper. If runTriggerPRReview's signature ever drifts,
 // this file fails to build and the test breakage is local.
