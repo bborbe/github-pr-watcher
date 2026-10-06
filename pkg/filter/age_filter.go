@@ -33,3 +33,8 @@ func (f *ageFilter) Skip(pr PR) bool {
 	cutoff := f.referenceTime.Add(-f.maxAge)
 	return pr.UpdatedAt.Before(cutoff)
 }
+
+// Name identifies this filter in the skip log line.
+func (f *ageFilter) Name() string {
+	return "age"
+}

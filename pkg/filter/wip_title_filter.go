@@ -28,3 +28,8 @@ type wipTitleFilter struct{}
 func (f *wipTitleFilter) Skip(pr PR) bool {
 	return wipTitleRegexp.MatchString(pr.Title)
 }
+
+// Name identifies this filter in the skip log line.
+func (f *wipTitleFilter) Name() string {
+	return "wip-title"
+}

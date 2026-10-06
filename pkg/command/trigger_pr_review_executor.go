@@ -190,8 +190,9 @@ func applyFilter(
 	}
 	metrics.IncPRPublished("skipped")
 	glog.V(2).Infof(
-		"trigger executor: filtered pr=%s/%s#%d",
+		"trigger executor: filtered pr=%s/%s#%d reason=%s",
 		prInfo.Owner, prInfo.Repo, prInfo.Number,
+		filterSkipReason(taskCreationFilter, filterPR),
 	)
 	return true, errors.Wrapf(
 		ctx,
@@ -199,6 +200,29 @@ func applyFilter(
 		"filter rejected pr=%s/%s#%d",
 		prInfo.Owner, prInfo.Repo, prInfo.Number,
 	)
+}
+
+// filterSkipReason resolves the identity of the filter that voted skip, so
+// the "filtered" log line names WHICH member of the chain fired rather than
+// logging one undifferentiated line for every skip cause.
+//
+// The chain is normally passed as a filter.TaskCreationFilters composite,
+// whose SkippingFilter names the first (and only reachable) voter. A bare
+// (non-chain) filter has no members, so we fall back to its own Name(). A
+// nil chain is guarded so the log path can never panic.
+func filterSkipReason(
+	taskCreationFilter filter.TaskCreationFilter,
+	pr filter.PR,
+) string {
+	if taskCreationFilter == nil {
+		return "unknown"
+	}
+	if chain, ok := taskCreationFilter.(filter.TaskCreationFilters); ok {
+		if skipping := chain.SkippingFilter(pr); skipping != nil {
+			return skipping.Name()
+		}
+	}
+	return taskCreationFilter.Name()
 }
 
 // applyTrust evaluates the trust decision for the PR author. Returns

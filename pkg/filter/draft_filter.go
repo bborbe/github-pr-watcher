@@ -17,3 +17,8 @@ type draftFilter struct{}
 func (f *draftFilter) Skip(pr PR) bool {
 	return pr.IsDraft
 }
+
+// Name identifies this filter in the skip log line.
+func (f *draftFilter) Name() string {
+	return "draft"
+}

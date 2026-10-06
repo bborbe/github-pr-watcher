@@ -23,3 +23,8 @@ func (f *botAuthorFilter) Skip(pr PR) bool {
 	}
 	return false
 }
+
+// Name identifies this filter in the skip log line.
+func (f *botAuthorFilter) Name() string {
+	return "bot-author"
+}

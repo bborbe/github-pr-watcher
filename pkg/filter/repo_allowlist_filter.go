@@ -43,3 +43,8 @@ type repoAllowlistFilter struct {
 func (f *repoAllowlistFilter) Skip(pr PR) bool {
 	return !repoallowlist.IsAllowed(f.allowlist, pr.RepoKey)
 }
+
+// Name identifies this filter in the skip log line.
+func (f *repoAllowlistFilter) Name() string {
+	return "repo-allowlist"
+}
