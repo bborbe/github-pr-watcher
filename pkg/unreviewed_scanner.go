@@ -37,23 +37,28 @@ type UnreviewedConfig struct {
 
 // ParseUnreviewedConfig parses the raw REVIEWER_BOT_LOGINS, UNREVIEWED_THRESHOLD
 // and UNREVIEWED_RETRY_MAX values into an UnreviewedConfig. Logins are split
-// like BOT_ALLOWLIST (trimmed, empties dropped); the threshold must parse as a
-// positive duration. No logins after parsing means the feature is disabled and
-// RetryMax is not range-validated — it is ignored.
+// like BOT_ALLOWLIST (trimmed, empties dropped). No logins after parsing means
+// the feature is disabled: the threshold is neither parsed nor validated and
+// RetryMax is not range-validated — both are ignored and the returned
+// Threshold is zero. With logins configured the threshold must parse as a
+// positive duration.
 func ParseUnreviewedConfig(
 	ctx context.Context,
 	rawLogins, rawThreshold string,
 	retryMax int,
 ) (UnreviewedConfig, error) {
-	threshold, err := parseUnreviewedThreshold(ctx, rawThreshold)
-	if err != nil {
-		return UnreviewedConfig{}, err
-	}
 	logins := ParseBotAllowlist(rawLogins)
-	if len(logins) > 0 && retryMax < 0 {
+	if len(logins) == 0 {
+		return UnreviewedConfig{RetryMax: retryMax}, nil
+	}
+	if retryMax < 0 {
 		return UnreviewedConfig{}, errors.Errorf(
 			ctx, "UNREVIEWED_RETRY_MAX must not be negative, got %d", retryMax,
 		)
+	}
+	threshold, err := parseUnreviewedThreshold(ctx, rawThreshold)
+	if err != nil {
+		return UnreviewedConfig{}, err
 	}
 	return UnreviewedConfig{
 		Logins:    logins,
@@ -69,7 +74,7 @@ func ParseUnreviewedConfig(
 func parseUnreviewedThreshold(ctx context.Context, raw string) (libtime.Duration, error) {
 	parsed, err := libtime.ParseDuration(ctx, raw)
 	if err != nil {
-		return 0, errors.Wrapf(ctx, err, "parse UNREVIEWED_THRESHOLD")
+		return 0, errors.Wrap(ctx, err, "parse UNREVIEWED_THRESHOLD")
 	}
 	if parsed == nil || *parsed <= 0 {
 		return 0, errors.Errorf(ctx, "UNREVIEWED_THRESHOLD must be positive, got %q", raw)
@@ -126,6 +131,7 @@ func NewUnreviewedScanner(
 		maxChangedFiles:    maxChangedFiles,
 		cfg:                cfg,
 		retryState:         make(map[string]unreviewedRetry),
+		reviewedCache:      make(map[string]libtime.DateTime),
 	}
 }
 
@@ -151,6 +157,8 @@ type unreviewedScanner struct {
 	// ParallelSkipper de-duplicates /check calls only, not /check against the
 	// ticker, so two scans could otherwise interleave, publish a mix of both
 	// results, and race on retryState (a fatal concurrent map write in Go).
+	// An overlapping Scan is skipped, not queued: the next ticker poll runs a
+	// fresh scan anyway, and queueing would only delay it.
 	mu                 sync.Mutex
 	ghClient           GitHubClient
 	publisher          TaskPublisher
@@ -167,6 +175,13 @@ type unreviewedScanner struct {
 	// (PR, head SHA). In-memory only: a pod restart can grant up to RetryMax
 	// more retries, which is acceptable. Guarded by mu.
 	retryState map[string]unreviewedRetry
+	// reviewedCache records PRs whose head SHA was confirmed reviewed by a
+	// configured login, keyed by prKey, holding the UpdatedAt seen at that
+	// confirmation. While UpdatedAt is unchanged, qualify skips the
+	// GetPRDetails and ListReviews calls for that PR. Any push, draft toggle,
+	// comment or label moves UpdatedAt, so a change always re-checks. Guarded
+	// by mu.
+	reviewedCache map[string]libtime.DateTime
 }
 
 // Scan fetches every open PR in scope, qualifies each one, and publishes the
@@ -177,7 +192,10 @@ func (s *unreviewedScanner) Scan(ctx context.Context) {
 	if len(s.cfg.Logins) == 0 {
 		return
 	}
-	s.mu.Lock()
+	if !s.mu.TryLock() {
+		glog.V(2).Infof("unreviewed scan already running, skipping")
+		return
+	}
 	defer s.mu.Unlock()
 
 	prs, ok := s.fetchAllOpenPRs(ctx)
@@ -221,11 +239,13 @@ func (s *unreviewedScanner) Scan(ctx context.Context) {
 	s.metrics.SetUnreviewedPRs(unreviewed, now)
 	// Prune only on a complete scan, and only entries whose PR left the full
 	// search result (closed or merged). Any other skip — threshold, filter,
-	// trust error, empty SHA, park, a review arriving — must NOT reset the
-	// budget, or the at-most-RetryMax-per-(PR, head SHA) bound breaks.
-	s.pruneRetryState(prs)
-	glog.V(2).Infof("unreviewed scan found %d prs: %s",
-		len(unreviewed), formatUnreviewedPRs(unreviewed))
+	// empty SHA, park, a review arriving — must NOT reset the budget, or the
+	// at-most-RetryMax-per-(PR, head SHA) bound breaks.
+	s.pruneState(prs)
+	if len(unreviewed) > 0 {
+		glog.V(2).Infof("unreviewed scan found %d prs: %s",
+			len(unreviewed), formatUnreviewedPRs(unreviewed))
+	}
 }
 
 // retry re-publishes the original review task for each still-unreviewed
@@ -284,10 +304,10 @@ func (s *unreviewedScanner) retriesExhausted(
 	return entry.attempts >= s.cfg.RetryMax && now.Sub(entry.lastAttempt) >= s.cfg.Threshold
 }
 
-// pruneRetryState drops retry entries whose PR is absent from this scan's full
-// open-PR result, i.e. closed or merged. Entries for PRs that merely stopped
-// qualifying this cycle are kept, so their budget survives.
-func (s *unreviewedScanner) pruneRetryState(prs []PullRequest) {
+// pruneState drops retry and reviewed-cache entries whose PR is absent from
+// this scan's full open-PR result, i.e. closed or merged. Entries for PRs that
+// merely stopped qualifying this cycle are kept, so their budget survives.
+func (s *unreviewedScanner) pruneState(prs []PullRequest) {
 	open := make(map[string]struct{}, len(prs))
 	for _, pr := range prs {
 		open[prKey(pr)] = struct{}{}
@@ -295,6 +315,11 @@ func (s *unreviewedScanner) pruneRetryState(prs []PullRequest) {
 	for taskID, entry := range s.retryState {
 		if _, ok := open[entry.prKey]; !ok {
 			delete(s.retryState, taskID)
+		}
+	}
+	for key := range s.reviewedCache {
+		if _, ok := open[key]; !ok {
+			delete(s.reviewedCache, key)
 		}
 	}
 }
@@ -331,8 +356,9 @@ func (s *unreviewedScanner) fetchAllOpenPRs(ctx context.Context) ([]PullRequest,
 // returning the fetched details so the retry pass can re-publish unchanged.
 // counted is true only when the PR is one PublishCreate would hand to the
 // reviewer AND no review by a configured reviewer login targets its current
-// head SHA. A non-nil error aborts the whole scan; a false counted with a nil
-// error means "not counted" and the scan continues.
+// head SHA. A non-nil error — a trust check, GetPRDetails or ListReviews
+// failure — aborts the whole scan; a false counted with a nil error means
+// "not counted" and the scan continues.
 func (s *unreviewedScanner) qualify(
 	ctx context.Context,
 	pr PullRequest,
@@ -354,8 +380,7 @@ func (s *unreviewedScanner) qualify(
 	}
 	trustResult, err := s.trustDecision.IsTrusted(ctx, trust.PR{AuthorLogin: pr.AuthorLogin})
 	if err != nil {
-		glog.Warningf("unreviewed scan: trust check failed pr=%s err=%v", pr.HTMLURL, err)
-		return PRDetails{}, false, nil
+		return PRDetails{}, false, err
 	}
 	if !trustResult.Success() {
 		return PRDetails{}, false, nil
@@ -363,6 +388,10 @@ func (s *unreviewedScanner) qualify(
 	// UpdatedAt is the reviewable-since clock: it moves on open, on a new push
 	// and on draft→ready, each of which restarts the wait.
 	if now.Sub(pr.UpdatedAt) < s.cfg.Threshold {
+		return PRDetails{}, false, nil
+	}
+	// A settled review costs no GitHub calls until the PR changes.
+	if s.cachedReviewed(pr) {
 		return PRDetails{}, false, nil
 	}
 	details, err := s.ghClient.GetPRDetails(ctx, pr.Owner, pr.Repo, pr.Number)
@@ -383,10 +412,29 @@ func (s *unreviewedScanner) qualify(
 	for _, review := range reviews {
 		if review.CommitID == details.HeadSHA &&
 			matchesReviewerLogin(review.AuthorLogin, s.cfg.Logins) {
+			s.reviewedCache[prKey(pr)] = pr.UpdatedAt
 			return PRDetails{}, false, nil
 		}
 	}
 	return details, true, nil
+}
+
+// cachedReviewed reports whether the PR's head SHA was already confirmed
+// reviewed at this exact UpdatedAt, so qualify must not spend GetPRDetails and
+// ListReviews on it again. A moved UpdatedAt invalidates the entry first, so
+// the PR is re-checked. Only a confirmed review is ever cached — an
+// unreviewed, skipped or errored PR is never recorded.
+func (s *unreviewedScanner) cachedReviewed(pr PullRequest) bool {
+	key := prKey(pr)
+	cached, ok := s.reviewedCache[key]
+	if !ok {
+		return false
+	}
+	if cached.Equal(pr.UpdatedAt) {
+		return true
+	}
+	delete(s.reviewedCache, key)
+	return false
 }
 
 // parked reports whether PublishCreate would park this PR at human_review

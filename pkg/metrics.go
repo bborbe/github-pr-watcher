@@ -164,9 +164,9 @@ func (m *prometheusMetrics) SetRateLimitRemaining(remaining int) {
 func (m *prometheusMetrics) SetUnreviewedPRs(prs []UnreviewedPR, scannedAt libtime.DateTime) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	// A late-finishing older scan can overwrite a newer result here. Both are
-	// read-only observations of the same PR population, so the stale write is
-	// corrected by the next scan; no extra sequencing is warranted.
+	// Scans are serialised by the scanner's mutex, so a late older scan cannot
+	// overwrite a newer result here. The lock is defence in depth against a
+	// concurrent Prometheus scrape observing the Reset+Set pair half-applied.
 	unreviewedPRs.Reset()
 	for _, pr := range prs {
 		unreviewedPRs.WithLabelValues(

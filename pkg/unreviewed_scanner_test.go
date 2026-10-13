@@ -242,25 +242,27 @@ var _ = Describe("pkg.UnreviewedScanner", func() {
 		Expect(prs).To(BeEmpty())
 	})
 
-	It("skips a PR whose trust check errors without aborting the scan", func() {
+	It("aborts the scan when a trust check errors", func() {
 		searchOpenReturns(
 			openPR(42, "alice", now.Add(-libtime.Hour)),
-			openPR(43, "alice", now.Add(-libtime.Hour)),
+			openPR(43, "bob", now.Add(-libtime.Hour)),
 		)
+		// The first PR's trust check errors; the second is trusted. The scan
+		// must abort on the first without publishing a partial set.
+		var calls int
 		trustErr := trust.Func(func(
 			_ context.Context,
-			pr trust.PR,
+			_ trust.PR,
 		) (trust.Result, error) {
-			if pr.AuthorLogin == "alice" {
+			calls++
+			if calls == 1 {
 				return nil, errors.Errorf(ctx, "trust backend down")
 			}
 			return trust.NewResult(true, "trusted"), nil
 		})
 		newScanner(qualifying(), defaultFilter(), trustErr).Scan(ctx)
-		// Both PRs error on trust → both skipped, scan completes with an empty set.
-		Expect(fakeMetrics.SetUnreviewedPRsCallCount()).To(Equal(1))
-		prs, _ := fakeMetrics.SetUnreviewedPRsArgsForCall(0)
-		Expect(prs).To(BeEmpty())
+		Expect(fakeMetrics.SetUnreviewedPRsCallCount()).To(Equal(0))
+		Expect(publisher.PublishCreateCallCount()).To(Equal(0))
 	})
 
 	It("skips a PR carrying the override label without fetching details", func() {
@@ -578,6 +580,8 @@ var _ = Describe("pkg.UnreviewedScanner", func() {
 			failTrust = true
 			s.Scan(ctx)
 			Expect(publisher.PublishCreateCallCount()).To(Equal(1))
+			// The aborted scan publishes nothing; only the first scan set the gauge.
+			Expect(fakeMetrics.SetUnreviewedPRsCallCount()).To(Equal(1))
 
 			failTrust = false
 			now = now.Add(30*libtime.Minute - libtime.Second)
@@ -646,22 +650,22 @@ var _ = Describe("pkg.UnreviewedScanner", func() {
 			}))
 		})
 
-		It("serialises concurrent scans so a retry is published once", func() {
+		It("skips an overlapping scan instead of queueing it", func() {
 			searchOpenReturns(openPR(42, "alice", now.Add(-libtime.Hour)))
 			entered := make(chan struct{})
-			secondCall := make(chan struct{})
+			secondDone := make(chan struct{})
 			var calls int32
 			publisher.PublishCreateStub = func(
 				context.Context, pkg.PullRequest, string, pkg.PRDetails,
 			) bool {
 				if atomic.AddInt32(&calls, 1) == 1 {
 					close(entered)
+					// Hold the scanner mutex until the second Scan has returned,
+					// so it provably hits TryLock while the first holds it.
 					select {
-					case <-secondCall:
-					case <-time.After(200 * time.Millisecond):
+					case <-secondDone:
+					case <-time.After(5 * time.Second):
 					}
-				} else {
-					close(secondCall)
 				}
 				return true
 			}
@@ -671,10 +675,77 @@ var _ = Describe("pkg.UnreviewedScanner", func() {
 			wg.Add(2)
 			go func() { defer wg.Done(); s.Scan(ctx) }()
 			<-entered
-			go func() { defer wg.Done(); s.Scan(ctx) }()
+			go func() { defer wg.Done(); s.Scan(ctx); close(secondDone) }()
 			wg.Wait()
 
 			Expect(publisher.PublishCreateCallCount()).To(Equal(1))
+			Expect(fakeMetrics.SetUnreviewedPRsCallCount()).To(Equal(1))
+		})
+	})
+
+	Describe("caching settled reviews", func() {
+		reviewed := func() []pkg.Review {
+			return []pkg.Review{
+				{AuthorLogin: "octopus-pr-reviewer[bot]", CommitID: "sha-head"},
+			}
+		}
+
+		It("skips the GitHub calls once a PR is reviewed at the same UpdatedAt", func() {
+			searchOpenReturns(openPR(42, "alice", now.Add(-libtime.Hour)))
+			ghClient.ListReviewsReturns(reviewed(), nil)
+			s := newScanner(qualifying(), defaultFilter(), trustAlice())
+
+			s.Scan(ctx)
+			Expect(ghClient.GetPRDetailsCallCount()).To(Equal(1))
+			Expect(ghClient.ListReviewsCallCount()).To(Equal(1))
+			prs, _ := fakeMetrics.SetUnreviewedPRsArgsForCall(0)
+			Expect(prs).To(BeEmpty())
+
+			s.Scan(ctx)
+			Expect(ghClient.GetPRDetailsCallCount()).To(Equal(1))
+			Expect(ghClient.ListReviewsCallCount()).To(Equal(1))
+			prs, _ = fakeMetrics.SetUnreviewedPRsArgsForCall(1)
+			Expect(prs).To(BeEmpty())
+		})
+
+		It("re-checks a reviewed PR once its UpdatedAt moves", func() {
+			searchOpenReturns(openPR(42, "alice", now.Add(-libtime.Hour)))
+			ghClient.ListReviewsReturns(reviewed(), nil)
+			s := newScanner(qualifying(), defaultFilter(), trustAlice())
+			s.Scan(ctx)
+			Expect(ghClient.GetPRDetailsCallCount()).To(Equal(1))
+
+			searchOpenReturns(openPR(42, "alice", now.Add(-30*libtime.Minute)))
+			s.Scan(ctx)
+			Expect(ghClient.GetPRDetailsCallCount()).To(Equal(2))
+			Expect(ghClient.ListReviewsCallCount()).To(Equal(2))
+		})
+
+		It("never caches an unreviewed PR", func() {
+			searchOpenReturns(openPR(42, "alice", now.Add(-libtime.Hour)))
+			s := newScanner(qualifying(), defaultFilter(), trustAlice())
+			s.Scan(ctx)
+			s.Scan(ctx)
+			Expect(ghClient.GetPRDetailsCallCount()).To(Equal(2))
+			Expect(ghClient.ListReviewsCallCount()).To(Equal(2))
+		})
+
+		It("re-checks a reviewed PR after it leaves and re-enters the open set", func() {
+			pr := openPR(42, "alice", now.Add(-libtime.Hour))
+			searchOpenReturns(pr)
+			ghClient.ListReviewsReturns(reviewed(), nil)
+			s := newScanner(qualifying(), defaultFilter(), trustAlice())
+			s.Scan(ctx)
+			Expect(ghClient.GetPRDetailsCallCount()).To(Equal(1))
+
+			// Closed or merged — absent for one complete scan prunes the entry.
+			searchOpenReturns()
+			s.Scan(ctx)
+
+			searchOpenReturns(pr)
+			s.Scan(ctx)
+			Expect(ghClient.GetPRDetailsCallCount()).To(Equal(2))
+			Expect(ghClient.ListReviewsCallCount()).To(Equal(2))
 		})
 	})
 
@@ -683,8 +754,19 @@ var _ = Describe("pkg.UnreviewedScanner", func() {
 			cfg, err := pkg.ParseUnreviewedConfig(ctx, " , ", "30m", 3)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(cfg.Logins).To(BeEmpty())
-			Expect(cfg.Threshold).To(Equal(30 * libtime.Minute))
 		})
+
+		DescribeTable("ignores and does not validate the threshold when disabled",
+			func(rawLogins, rawThreshold string, retryMax int) {
+				cfg, err := pkg.ParseUnreviewedConfig(ctx, rawLogins, rawThreshold, retryMax)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(cfg.Logins).To(BeEmpty())
+				Expect(cfg.Threshold).To(BeZero())
+				Expect(cfg.RetryMax).To(Equal(retryMax))
+			},
+			Entry("zero threshold and negative retry max", " , ", "0s", -1),
+			Entry("unparseable threshold", " , ", "abc", 3),
+		)
 
 		It("parses a comma-separated login list", func() {
 			cfg, err := pkg.ParseUnreviewedConfig(
