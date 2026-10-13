@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## Unreleased
+## v0.13.1
 
 - chore: add dark-factory setup (`.dark-factory.yaml`, `docs/dod.md`, `prompts/` + `specs/` dirs, `.gitignore` lock/log entries) copied from `go-skeleton`, and align `.maintainer.yaml` with it (`release.changelogRewrite: false`) — code changes now go through the prompt flow like the rest of the fleet
 - feat: report open PRs still waiting for a reviewer-bot review on a new `github_pr_watcher_unreviewed_prs` gauge (labels `repo`, `pr`), rescanned once per poll over every open PR the watcher would publish — the end-to-end "review never arrived" signal missing from the 2026-10-12 incident, where two review commands were lost downstream and every existing counter still looked healthy. Adds `github_pr_watcher_unreviewed_scan_last_success_timestamp_seconds` so a scan that keeps failing is visible, and configures the reviewer identities and wait via `REVIEWER_BOT_LOGINS` (empty disables the scan entirely) and `UNREVIEWED_THRESHOLD` (default `30m`)
