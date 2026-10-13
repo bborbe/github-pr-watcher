@@ -1,7 +1,12 @@
 ---
-status: approved
+status: completed
+summary: Added a bounded unreviewed-PR retry pass to UnreviewedScanner that re-publishes the original review task via TaskPublisher.PublishCreate/DeriveTaskID up to UNREVIEWED_RETRY_MAX times per (PR, head SHA), with a new retries_total counter, a retries_exhausted gauge label, config/docs/tests.
+execution_id: github-pr-watcher-unreviewed-gauge-exec-003-unreviewed-pr-retry
+dark-factory-version: v0.198.7
 created: "2026-10-13T09:38:09Z"
 queued: "2026-10-13T09:42:47Z"
+started: "2026-10-13T09:56:41Z"
+completed: "2026-10-13T10:07:31Z"
 ---
 
 # Retry a lost review by re-publishing the same task, at most three times

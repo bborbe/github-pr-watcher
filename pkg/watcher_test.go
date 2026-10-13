@@ -203,6 +203,7 @@ func newTestWatcherWithTrivialAutoMerge(
 func newDisabledUnreviewedScanner() pkg.UnreviewedScanner {
 	return pkg.NewUnreviewedScanner(
 		new(mocks.GitHubClient),
+		new(mocks.TaskPublisher),
 		new(mocks.Metrics),
 		libtime.CurrentDateTimeGetterFunc(func() libtime.DateTime {
 			return libtime.DateTime(time.Time{})

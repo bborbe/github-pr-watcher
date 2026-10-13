@@ -142,6 +142,7 @@ type application struct {
 	TrivialAutoMerge    bool             `required:"false" arg:"trivial-auto-merge"   env:"TRIVIAL_AUTO_MERGE"    usage:"Automatically apply the auto-merge label to mechanically trivial PRs (go.mod / Dockerfile / CHANGELOG / workflow bumps) on repos opted in via .maintainer.yaml autoMerge.trivial. Stage-1 allow-list; the LLM stage-2 fallback is a follow-up. Off by default; the per-repo .maintainer.yaml flag is the kill switch."`
 	ReviewerBotLogins   string           `required:"false" arg:"reviewer-bot-logins"  env:"REVIEWER_BOT_LOGINS"   usage:"Comma-separated GitHub logins of the reviewer bots; a publishable PR whose head SHA has no review from one of them is reported on the github_pr_watcher_unreviewed_prs gauge. Empty disables the scan."`
 	UnreviewedThreshold string           `required:"false" arg:"unreviewed-threshold" env:"UNREVIEWED_THRESHOLD"  usage:"How long a PR must wait without a reviewer-bot review before it is reported (Go duration; must be positive)"                                                                                                                                                                                                           default:"30m"`
+	UnreviewedRetryMax  int              `required:"false" arg:"unreviewed-retry-max" env:"UNREVIEWED_RETRY_MAX"  usage:"How many times the scan re-publishes the original review task for a still-unreviewed PR, one threshold apart, before marking it retries_exhausted; 0 disables retrying"                                                                                                                                                default:"3"`
 
 	// TopicPrefix selects the Kafka topic prefix used for CQRS topic construction
 	// (e.g. "develop" / "master"); independent of Stage, which remains the
@@ -206,7 +207,7 @@ func (a *application) validateConfig(ctx context.Context) error {
 	return nil
 }
 
-//nolint:funlen // wires Run from validated config — extracting any chunk hurts readability without reducing complexity. 168 lines, 88 over the 80-line cap; the body is linear composition, not branching logic.
+//nolint:funlen // wires Run from validated config — extracting any chunk hurts readability without reducing complexity. 169 lines, 89 over the 80-line cap; the body is linear composition, not branching logic.
 func (a *application) Run(ctx context.Context, _ libsentry.Client) error {
 	if err := a.validateConfig(ctx); err != nil {
 		return errors.Wrap(ctx, err, "validate config")
@@ -235,6 +236,7 @@ func (a *application) Run(ctx context.Context, _ libsentry.Client) error {
 		ctx,
 		a.ReviewerBotLogins,
 		a.UnreviewedThreshold,
+		a.UnreviewedRetryMax,
 	)
 	if err != nil {
 		return errors.Wrap(ctx, err, "parse unreviewed config")

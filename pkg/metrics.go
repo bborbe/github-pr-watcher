@@ -38,6 +38,9 @@ type Metrics interface {
 	// last-successful-scan timestamp gauge. The slice is the complete result
 	// of one scan, so an empty slice clears the gauge.
 	SetUnreviewedPRs(prs []UnreviewedPR, scannedAt libtime.DateTime)
+	// IncUnreviewedRetry increments the retry counter with the given repo label.
+	// repo: `owner/repo`
+	IncUnreviewedRetry(repo string)
 }
 
 // UnreviewedPR identifies one open pull request reported as unreviewed.
@@ -46,6 +49,10 @@ type UnreviewedPR struct {
 	Repo string
 	// Number is the pull-request number, rendered as the gauge's pr label.
 	Number int
+	// RetriesExhausted marks a PR whose retry budget is used up and whose last
+	// retry has had a full threshold without a review, so the scan gave up on
+	// it. Rendered as the gauge's retries_exhausted label.
+	RetriesExhausted bool
 }
 
 var (
@@ -82,8 +89,13 @@ var (
 
 	unreviewedPRs = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "github_pr_watcher_unreviewed_prs",
-		Help: "Open pull requests the watcher would hand to the reviewer whose current head SHA has no review from a configured reviewer bot after waiting longer than the unreviewed threshold. Value 1 per such PR.",
-	}, []string{"repo", "pr"})
+		Help: "Open pull requests the watcher would hand to the reviewer whose current head SHA has no review from a configured reviewer bot after waiting longer than the unreviewed threshold. Value 1 per such PR; retries_exhausted is true once the bounded re-publish budget is used up and the last retry has had a full threshold without a review.",
+	}, []string{"repo", "pr", "retries_exhausted"})
+
+	unreviewedRetriesTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "github_pr_watcher_unreviewed_retries_total",
+		Help: "Total number of review tasks re-published by the unreviewed-PR retry pass, by repo. Bounded by UNREVIEWED_RETRY_MAX per (PR, head SHA) per process lifetime.",
+	}, []string{"repo"})
 
 	unreviewedScanLastSuccess = prometheus.NewGauge(prometheus.GaugeOpts{
 		Name: "github_pr_watcher_unreviewed_scan_last_success_timestamp_seconds",
@@ -101,6 +113,7 @@ func init() {
 		rateLimitRemaining,
 		unreviewedPRs,
 		unreviewedScanLastSuccess,
+		unreviewedRetriesTotal,
 	)
 	for _, result := range []string{"success", "rate_limited", "github_error"} {
 		pollCyclesTotal.WithLabelValues(result).Add(0)
@@ -156,7 +169,15 @@ func (m *prometheusMetrics) SetUnreviewedPRs(prs []UnreviewedPR, scannedAt libti
 	// corrected by the next scan; no extra sequencing is warranted.
 	unreviewedPRs.Reset()
 	for _, pr := range prs {
-		unreviewedPRs.WithLabelValues(pr.Repo, strconv.Itoa(pr.Number)).Set(1)
+		unreviewedPRs.WithLabelValues(
+			pr.Repo,
+			strconv.Itoa(pr.Number),
+			strconv.FormatBool(pr.RetriesExhausted),
+		).Set(1)
 	}
 	unreviewedScanLastSuccess.Set(float64(scannedAt.Unix()))
+}
+
+func (m *prometheusMetrics) IncUnreviewedRetry(repo string) {
+	unreviewedRetriesTotal.WithLabelValues(repo).Inc()
 }

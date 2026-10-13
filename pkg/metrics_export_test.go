@@ -27,3 +27,11 @@ func UnreviewedPRsForTest() *prometheus.GaugeVec {
 func UnreviewedScanLastSuccessForTest() prometheus.Gauge {
 	return unreviewedScanLastSuccess
 }
+
+// UnreviewedRetriesTotalForTest returns the unreviewed-retries CounterVec so
+// external test packages can read it via prometheus/testutil. Reading the
+// accessor bypasses the registry, so a test proving init() registration must
+// also gather the DefaultGatherer.
+func UnreviewedRetriesTotalForTest() *prometheus.CounterVec {
+	return unreviewedRetriesTotal
+}

@@ -22,6 +22,11 @@ type Metrics struct {
 	incPollCycleArgsForCall []struct {
 		arg1 string
 	}
+	IncUnreviewedRetryStub        func(string)
+	incUnreviewedRetryMutex       sync.RWMutex
+	incUnreviewedRetryArgsForCall []struct {
+		arg1 string
+	}
 	IncWebhookDeliveryStub        func(string)
 	incWebhookDeliveryMutex       sync.RWMutex
 	incWebhookDeliveryArgsForCall []struct {
@@ -112,6 +117,38 @@ func (fake *Metrics) IncPollCycleArgsForCall(i int) string {
 	fake.incPollCycleMutex.RLock()
 	defer fake.incPollCycleMutex.RUnlock()
 	argsForCall := fake.incPollCycleArgsForCall[i]
+	return argsForCall.arg1
+}
+
+func (fake *Metrics) IncUnreviewedRetry(arg1 string) {
+	fake.incUnreviewedRetryMutex.Lock()
+	fake.incUnreviewedRetryArgsForCall = append(fake.incUnreviewedRetryArgsForCall, struct {
+		arg1 string
+	}{arg1})
+	stub := fake.IncUnreviewedRetryStub
+	fake.recordInvocation("IncUnreviewedRetry", []interface{}{arg1})
+	fake.incUnreviewedRetryMutex.Unlock()
+	if stub != nil {
+		fake.IncUnreviewedRetryStub(arg1)
+	}
+}
+
+func (fake *Metrics) IncUnreviewedRetryCallCount() int {
+	fake.incUnreviewedRetryMutex.RLock()
+	defer fake.incUnreviewedRetryMutex.RUnlock()
+	return len(fake.incUnreviewedRetryArgsForCall)
+}
+
+func (fake *Metrics) IncUnreviewedRetryCalls(stub func(string)) {
+	fake.incUnreviewedRetryMutex.Lock()
+	defer fake.incUnreviewedRetryMutex.Unlock()
+	fake.IncUnreviewedRetryStub = stub
+}
+
+func (fake *Metrics) IncUnreviewedRetryArgsForCall(i int) string {
+	fake.incUnreviewedRetryMutex.RLock()
+	defer fake.incUnreviewedRetryMutex.RUnlock()
+	argsForCall := fake.incUnreviewedRetryArgsForCall[i]
 	return argsForCall.arg1
 }
 

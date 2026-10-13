@@ -92,6 +92,7 @@ func CreateWatcher(
 	)
 	unreviewedScanner := pkg.NewUnreviewedScanner(
 		ghClient,
+		publisher,
 		metrics,
 		currentDateTime,
 		scope,
