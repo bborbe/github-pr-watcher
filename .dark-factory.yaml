@@ -1,6 +1,10 @@
 autoRelease: false
 autoGeneratePrompts: true
 validationPrompt: docs/dod.md
+# Makefile.precommit includes $(ROOTDIR)/tools.env and ROOTDIR defaults to
+# `git rev-parse`, which is empty when .git is masked (hideGit / worktree runs).
+validationCommand: ROOTDIR=/workspace make precommit
+testCommand: ROOTDIR=/workspace make test
 workflow: direct
 env:
   GOPATH: /home/node/go
