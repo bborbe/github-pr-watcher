@@ -165,8 +165,9 @@ func (m *prometheusMetrics) SetUnreviewedPRs(prs []UnreviewedPR, scannedAt libti
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	// Scans are serialised by the scanner's mutex, so a late older scan cannot
-	// overwrite a newer result here. The lock is defence in depth against a
-	// concurrent Prometheus scrape observing the Reset+Set pair half-applied.
+	// overwrite a newer result. m.mu only serialises concurrent SetUnreviewedPRs
+	// callers — Prometheus scrapes do not take it, so a scrape can observe the
+	// Reset+Set pair half-applied; the next scrape sees the full set.
 	unreviewedPRs.Reset()
 	for _, pr := range prs {
 		unreviewedPRs.WithLabelValues(

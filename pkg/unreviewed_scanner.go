@@ -185,9 +185,11 @@ type unreviewedScanner struct {
 }
 
 // Scan fetches every open PR in scope, qualifies each one, and publishes the
-// resulting set — possibly empty — on the unreviewed-PR gauge. Any failure or
-// cancellation returns without touching the metric, leaving the previous
-// values in place.
+// resulting set — possibly empty — on the unreviewed-PR gauge. A lookup
+// failure (PR search, trust check, PR details or reviews), or cancellation
+// before every PR is qualified, returns without touching the metric, leaving
+// the previous values in place. Cancellation during the retry pass stops
+// retrying but the completed scan still publishes its gauge.
 func (s *unreviewedScanner) Scan(ctx context.Context) {
 	if len(s.cfg.Logins) == 0 {
 		return
@@ -380,7 +382,7 @@ func (s *unreviewedScanner) qualify(
 	}
 	trustResult, err := s.trustDecision.IsTrusted(ctx, trust.PR{AuthorLogin: pr.AuthorLogin})
 	if err != nil {
-		return PRDetails{}, false, err
+		return PRDetails{}, false, errors.Wrapf(ctx, err, "trust check %s", prKey(pr))
 	}
 	if !trustResult.Success() {
 		return PRDetails{}, false, nil
