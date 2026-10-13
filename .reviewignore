@@ -6,3 +6,8 @@
 # never hand-edited, so there is nothing to review — and they are the
 # largest single block in any PR that touches an interface.
 mocks/
+
+# dark-factory pipeline state (executed prompts, specs) — the code they
+# produced is in the diff; the instructions are not code to review.
+prompts/
+specs/
