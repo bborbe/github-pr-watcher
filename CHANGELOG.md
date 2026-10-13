@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+- chore: add dark-factory setup (`.dark-factory.yaml`, `docs/dod.md`, `prompts/` + `specs/` dirs, `.gitignore` lock/log entries) copied from `go-skeleton`, and align `.maintainer.yaml` with it (`release.changelogRewrite: false`) — code changes now go through the prompt flow like the rest of the fleet
+- chore: sync `tools.env` with the canonical `go-skeleton` copy (`golangci-lint` v2.13.1 → v2.14.0, `osv-scanner` v2.3.1 → v2.6.0) — v2.13.1 fails `make lint` under Go 1.27.2 with `export data version 5 is greater than maximum supported version 4`, which would also fail the dark-factory daemon's precommit baseline
+- fix: bump `golang.org/x/net` v0.58.0 → v0.60.0 (with `x/sync`, `x/sys`, `x/term`, `x/text`) for GO-2026-6603, GO-2026-6610, GO-2026-6611, GO-2026-6612 and GO-2026-6617 (HTTP/2 memory exhaustion, malformed framing headers, CPU exhaustion, double flow-control refund, HPACK encoder race), which `make vulncheck` reports
+
 ## v0.13.0
 
 - feat: name the filter that skipped a PR in the `filtered` log line — one undifferentiated `trigger executor: filtered pr=…` served all five skip causes, so attributing a skip meant eliminating the other four by hand. The line now carries `reason=<draft|bot-author|wip-title|age|repo-allowlist>`, resolved through a new `TaskCreationFilters.SkippingFilter` that names the first voter — the only one the short-circuit chain can reach

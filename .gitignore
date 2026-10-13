@@ -6,3 +6,10 @@
 /github-pr
 /vendor/
 /github-pr-watcher
+/.dark-factory.lock
+/.dark-factory.log
+/.dark-factory.daemon.out
+/prompts/log
+/specs/log
+/prompts/in-progress/*.lock
+/specs/in-progress/*.lock
