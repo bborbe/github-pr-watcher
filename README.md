@@ -45,6 +45,8 @@ Two independent decision chains run per PR — see [`docs/watcher-decision-chain
 | `MAX_CHANGED_FILES` | no | `0` | Park PRs touching more files than this at `human_review` instead of spawning a review pod; `0` disables |
 | `MAX_PR_AGE` | no | `2160h` (90d) | Skip PRs older than this; empty disables |
 | `BACKFILL_DURATION` | no | `720h` (30d) | On cold start, backdate the initial cursor by this; empty disables |
+| `REVIEWER_BOT_LOGINS` | no | — | Comma-separated GitHub logins of the reviewer bots. A publishable PR whose current head SHA has no review from one of them, after waiting longer than `UNREVIEWED_THRESHOLD`, is reported on `github_pr_watcher_unreviewed_prs`. Empty disables the scan (no extra GitHub calls) |
+| `UNREVIEWED_THRESHOLD` | no | `30m` | How long a PR must wait without a reviewer-bot review before it is reported (Go duration; must be positive) |
 | `SENTRY_DSN` | no | — | Sentry DSN for error tracking |
 | `SENTRY_PROXY` | no | — | HTTP proxy URL for Sentry transport |
 
@@ -123,6 +125,28 @@ This is worth stating because the Go gitignore library backing the size gate doe
 restore it. The size gate and the reviewer prompt (which drives git's own ignore
 engine) must agree about the same file — otherwise a path the gate counts as
 reviewable would be withheld from the reviewer.
+
+## Metrics
+
+All metrics use the `github_pr_watcher_` prefix and are exposed on `/metrics`.
+
+| Metric | Type | Labels | Meaning |
+|---|---|---|---|
+| `github_pr_watcher_unreviewed_prs` | gauge | `repo` (`owner/repo`), `pr` (number) | `1` for every open, publishable, trusted-author PR whose current head SHA has no review from a configured reviewer bot after waiting longer than `UNREVIEWED_THRESHOLD`. The PR leaves the gauge as soon as a matching review lands on its head SHA, or when it stops qualifying (closed, drafted, untrusted, oversized-parked, …) |
+| `github_pr_watcher_unreviewed_scan_last_success_timestamp_seconds` | gauge | — | Unix seconds of the last complete unreviewed-PR scan. `0` until the first one — alert rules on it must guard `> 0`, which is how a scan that keeps failing becomes visible |
+
+The scan runs once per poll cycle, after the cursor is saved and before the cycle
+is counted successful, so a slow or failing scan never changes the poll result.
+A failed or interrupted scan leaves the previous gauge values in place; only a
+complete scan replaces them (an empty result clears the gauge). With
+`REVIEWER_BOT_LOGINS` empty the feature is off: no extra GitHub calls, no
+`github_pr_watcher_unreviewed_prs` series, and the timestamp gauge stays `0`.
+
+Known limitation: `UpdatedAt` moves on comments and label changes too — including
+the watcher's own trivial-PR label — which restarts the wait and can delay a
+report. Cost: about two core API calls per qualifying open PR (PR details +
+reviews), more for raw-oversized PRs that need the `.reviewignore` lookup, all on
+the shared App token.
 
 ## HTTP Endpoints
 

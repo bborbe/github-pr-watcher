@@ -64,6 +64,7 @@ func newTestWatcher(
 		"",
 		false,
 		trustDecision,
+		newDisabledUnreviewedScanner(),
 	)
 }
 
@@ -106,6 +107,7 @@ func newTestWatcherWithOverride(
 		"",
 		false,
 		trustDecision,
+		newDisabledUnreviewedScanner(),
 	)
 }
 
@@ -148,6 +150,7 @@ func newTestWatcherWithAutoMerge(
 		autoMergeLabel,
 		false,
 		trustDecision,
+		newDisabledUnreviewedScanner(),
 	)
 }
 
@@ -190,6 +193,27 @@ func newTestWatcherWithTrivialAutoMerge(
 		autoMergeLabel,
 		true,
 		trustDecision,
+		newDisabledUnreviewedScanner(),
+	)
+}
+
+// newDisabledUnreviewedScanner returns a real scanner with no configured
+// logins, so Scan is a no-op. Existing poll assertions keep their GitHub-call
+// counts unchanged.
+func newDisabledUnreviewedScanner() pkg.UnreviewedScanner {
+	return pkg.NewUnreviewedScanner(
+		new(mocks.GitHubClient),
+		new(mocks.Metrics),
+		libtime.CurrentDateTimeGetterFunc(func() libtime.DateTime {
+			return libtime.DateTime(time.Time{})
+		}),
+		"bborbe",
+		filter.TaskCreationFilters{},
+		trust.NewAuthorAllowlist(nil),
+		"",
+		0,
+		0,
+		pkg.UnreviewedConfig{},
 	)
 }
 
@@ -1288,6 +1312,7 @@ var _ = Describe("pkg.Watcher", func() {
 				"",
 				false,
 				trust.NewAuthorAllowlist(nil),
+				newDisabledUnreviewedScanner(),
 			)
 			err := w.Poll(ctx)
 			Expect(err).NotTo(HaveOccurred())
@@ -1777,6 +1802,7 @@ var _ = Describe("pkg.Watcher", func() {
 				"auto-merge",
 				false,
 				trustAlice,
+				newDisabledUnreviewedScanner(),
 			)
 		}
 

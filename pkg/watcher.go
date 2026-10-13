@@ -270,6 +270,7 @@ func NewWatcher(
 	autoMergeLabel string,
 	trivialAutoMergeEnabled bool,
 	trustDecision trust.Trust,
+	unreviewedScanner UnreviewedScanner,
 ) Watcher {
 	return &watcher{
 		ghClient:                ghClient,
@@ -284,6 +285,7 @@ func NewWatcher(
 		autoMergeLabel:          autoMergeLabel,
 		trivialAutoMergeEnabled: trivialAutoMergeEnabled,
 		trustDecision:           trustDecision,
+		unreviewedScanner:       unreviewedScanner,
 	}
 }
 
@@ -321,6 +323,10 @@ type watcher struct {
 	// alone is insufficient — an untrusted author must not be able to opt
 	// any PR into auto-merge).
 	trustDecision trust.Trust
+	// unreviewedScanner reports open PRs still waiting for a reviewer-bot
+	// review. It runs once per poll, after the cursor is saved, and never
+	// fails the poll — see UnreviewedScanner.
+	unreviewedScanner UnreviewedScanner
 }
 
 // rateLimitRemainingForGauge returns the value to publish to the gauge at the
@@ -381,6 +387,12 @@ func (w *watcher) Poll(ctx context.Context) error {
 	if err := SaveCursor(ctx, w.cursorPath, cursorState); err != nil {
 		glog.Errorf("failed to save cursor err=%v", err)
 	}
+	// Unreviewed-PR scan runs after the cursor is persisted so a slow scan
+	// never delays it, and before the cycle is counted successful so the
+	// scan's outcome never changes the poll result. A scan skipped here (a
+	// main-search abort returns earlier) is intended: the previous gauge
+	// values stay in place.
+	w.unreviewedScanner.Scan(ctx)
 	w.metrics.IncPollCycle("success")
 	return nil
 }

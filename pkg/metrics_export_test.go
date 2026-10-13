@@ -14,3 +14,16 @@ import (
 func PRPublishedTotalForTest() *prometheus.CounterVec {
 	return prPublishedTotal
 }
+
+// UnreviewedPRsForTest returns the unreviewed-PR GaugeVec so external test
+// packages can read it. Never read a removed series back via WithLabelValues —
+// that re-creates it; assert removal via testutil.GatherAndCount instead.
+func UnreviewedPRsForTest() *prometheus.GaugeVec {
+	return unreviewedPRs
+}
+
+// UnreviewedScanLastSuccessForTest returns the last-successful-scan timestamp
+// gauge so external test packages can read it via testutil.ToFloat64.
+func UnreviewedScanLastSuccessForTest() prometheus.Gauge {
+	return unreviewedScanLastSuccess
+}

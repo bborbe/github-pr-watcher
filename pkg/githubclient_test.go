@@ -312,4 +312,124 @@ var _ = Describe("pkg.GitHubClient", func() {
 			Expect(err).To(HaveOccurred())
 		})
 	})
+
+	Describe("SearchOpenPRs", func() {
+		It("queries open PRs with no updated bound and reports pagination", func() {
+			callCount := 0
+			var serverURL string
+			server := httptest.NewServer(
+				http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					callCount++
+					Expect(r.URL.Path).To(Equal("/search/issues"))
+					q := r.URL.Query().Get("q")
+					Expect(q).To(ContainSubstring("is:open"))
+					Expect(q).To(ContainSubstring("user:org"))
+					Expect(q).NotTo(ContainSubstring("updated:"))
+					w.Header().Set("X-RateLimit-Remaining", "100")
+					w.Header().Set("Content-Type", "application/json")
+					if r.URL.Query().Get("page") == "2" {
+						fmt.Fprintf(w, `{
+						"total_count": 2,
+						"incomplete_results": false,
+						"items": [
+							{
+								"id": 2,
+								"number": 2,
+								"title": "PR 2",
+								"html_url": "https://github.com/org/r/pull/2",
+								"repository_url": "https://api.github.com/repos/org/r",
+								"user": {"login": "carol"},
+								"draft": false,
+								"updated_at": "2026-02-01T00:00:00Z"
+							}
+						]
+					}`)
+						return
+					}
+					w.Header().Set("Link",
+						fmt.Sprintf(`<%s/search/issues?page=2>; rel="next"`, serverURL))
+					fmt.Fprintf(w, `{
+					"total_count": 2,
+					"incomplete_results": false,
+					"items": [
+						{
+							"id": 1,
+							"number": 1,
+							"title": "PR 1",
+							"html_url": "https://github.com/org/r/pull/1",
+							"repository_url": "https://api.github.com/repos/org/r",
+							"user": {"login": "dave"},
+							"draft": false,
+							"updated_at": "2026-01-15T00:00:00Z"
+						}
+					]
+				}`)
+				}),
+			)
+			serverURL = server.URL
+			defer server.Close()
+
+			client := buildClient(server)
+			result, err := client.SearchOpenPRs(ctx, "org", 1)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.HasNextPage).To(BeTrue())
+			Expect(result.NextPage).To(Equal(2))
+			Expect(result.PullRequests).To(HaveLen(1))
+			Expect(callCount).To(Equal(1))
+		})
+	})
+
+	Describe("ListReviews", func() {
+		It("paginates and maps a null user to an empty login", func() {
+			callCount := 0
+			var serverURL string
+			server := httptest.NewServer(
+				http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					callCount++
+					Expect(r.URL.Path).To(Equal("/repos/owner/repo/pulls/42/reviews"))
+					w.Header().Set("Content-Type", "application/json")
+					if r.URL.Query().Get("page") == "2" {
+						fmt.Fprintf(w, `[
+						{"id":2,"user":{"login":"reviewer-bot[bot]"},"commit_id":"sha2","state":"APPROVED"}
+					]`)
+						return
+					}
+					w.Header().Set("Link", fmt.Sprintf(
+						`<%s/repos/owner/repo/pulls/42/reviews?page=2>; rel="next"`,
+						serverURL,
+					))
+					fmt.Fprintf(w, `[
+					{"id":1,"user":null,"commit_id":"sha1","state":"COMMENTED"}
+				]`)
+				}),
+			)
+			serverURL = server.URL
+			defer server.Close()
+
+			client := buildClient(server)
+			reviews, err := client.ListReviews(ctx, "owner", "repo", 42)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(reviews).To(HaveLen(2))
+			Expect(reviews[0].AuthorLogin).To(Equal(""))
+			Expect(reviews[0].CommitID).To(Equal("sha1"))
+			Expect(reviews[1].AuthorLogin).To(Equal("reviewer-bot[bot]"))
+			Expect(reviews[1].CommitID).To(Equal("sha2"))
+			Expect(callCount).To(Equal(2))
+		})
+
+		It("returns an error on HTTP 500", func() {
+			server := httptest.NewServer(
+				http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					w.Header().Set("Content-Type", "application/json")
+					w.WriteHeader(http.StatusInternalServerError)
+					fmt.Fprintf(w, `{"message":"boom"}`)
+				}),
+			)
+			defer server.Close()
+
+			client := buildClient(server)
+			_, err := client.ListReviews(ctx, "owner", "repo", 42)
+			Expect(err).To(HaveOccurred())
+		})
+	})
 })

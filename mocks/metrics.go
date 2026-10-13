@@ -8,6 +8,7 @@ import (
 	"sync"
 
 	"github.com/bborbe/github-pr-watcher/pkg"
+	"github.com/bborbe/time"
 )
 
 type Metrics struct {
@@ -39,6 +40,12 @@ type Metrics struct {
 	setRateLimitRemainingMutex       sync.RWMutex
 	setRateLimitRemainingArgsForCall []struct {
 		arg1 int
+	}
+	SetUnreviewedPRsStub        func([]pkg.UnreviewedPR, time.DateTime)
+	setUnreviewedPRsMutex       sync.RWMutex
+	setUnreviewedPRsArgsForCall []struct {
+		arg1 []pkg.UnreviewedPR
+		arg2 time.DateTime
 	}
 	invocations      map[string][][]interface{}
 	invocationsMutex sync.RWMutex
@@ -226,6 +233,44 @@ func (fake *Metrics) SetRateLimitRemainingArgsForCall(i int) int {
 	defer fake.setRateLimitRemainingMutex.RUnlock()
 	argsForCall := fake.setRateLimitRemainingArgsForCall[i]
 	return argsForCall.arg1
+}
+
+func (fake *Metrics) SetUnreviewedPRs(arg1 []pkg.UnreviewedPR, arg2 time.DateTime) {
+	var arg1Copy []pkg.UnreviewedPR
+	if arg1 != nil {
+		arg1Copy = make([]pkg.UnreviewedPR, len(arg1))
+		copy(arg1Copy, arg1)
+	}
+	fake.setUnreviewedPRsMutex.Lock()
+	fake.setUnreviewedPRsArgsForCall = append(fake.setUnreviewedPRsArgsForCall, struct {
+		arg1 []pkg.UnreviewedPR
+		arg2 time.DateTime
+	}{arg1Copy, arg2})
+	stub := fake.SetUnreviewedPRsStub
+	fake.recordInvocation("SetUnreviewedPRs", []interface{}{arg1Copy, arg2})
+	fake.setUnreviewedPRsMutex.Unlock()
+	if stub != nil {
+		fake.SetUnreviewedPRsStub(arg1, arg2)
+	}
+}
+
+func (fake *Metrics) SetUnreviewedPRsCallCount() int {
+	fake.setUnreviewedPRsMutex.RLock()
+	defer fake.setUnreviewedPRsMutex.RUnlock()
+	return len(fake.setUnreviewedPRsArgsForCall)
+}
+
+func (fake *Metrics) SetUnreviewedPRsCalls(stub func([]pkg.UnreviewedPR, time.DateTime)) {
+	fake.setUnreviewedPRsMutex.Lock()
+	defer fake.setUnreviewedPRsMutex.Unlock()
+	fake.SetUnreviewedPRsStub = stub
+}
+
+func (fake *Metrics) SetUnreviewedPRsArgsForCall(i int) ([]pkg.UnreviewedPR, time.DateTime) {
+	fake.setUnreviewedPRsMutex.RLock()
+	defer fake.setUnreviewedPRsMutex.RUnlock()
+	argsForCall := fake.setUnreviewedPRsArgsForCall[i]
+	return argsForCall.arg1, argsForCall.arg2
 }
 
 func (fake *Metrics) Invocations() map[string][][]interface{} {

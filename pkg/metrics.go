@@ -4,7 +4,13 @@
 
 package pkg
 
-import "github.com/prometheus/client_golang/prometheus"
+import (
+	"strconv"
+	"sync"
+
+	libtime "github.com/bborbe/time"
+	"github.com/prometheus/client_golang/prometheus"
+)
 
 //counterfeiter:generate -o ../mocks/metrics.go --fake-name Metrics . Metrics
 
@@ -27,6 +33,19 @@ type Metrics interface {
 	// requests (shared App token). The alert rule on this gauge fires BEFORE
 	// quota exhaustion, catching the 2026-08-23 silent fleet-wide stall.
 	SetRateLimitRemaining(remaining int)
+	// SetUnreviewedPRs replaces the set of PRs reported on the
+	// github_pr_watcher_unreviewed_prs gauge and records scannedAt on the
+	// last-successful-scan timestamp gauge. The slice is the complete result
+	// of one scan, so an empty slice clears the gauge.
+	SetUnreviewedPRs(prs []UnreviewedPR, scannedAt libtime.DateTime)
+}
+
+// UnreviewedPR identifies one open pull request reported as unreviewed.
+type UnreviewedPR struct {
+	// Repo is the `owner/repo` pair, matching the gauge's repo label.
+	Repo string
+	// Number is the pull-request number, rendered as the gauge's pr label.
+	Number int
 }
 
 var (
@@ -60,6 +79,16 @@ var (
 		Name: "github_pr_watcher_rate_limit_remaining",
 		Help: "Requests remaining in the GitHub primary rate-limit window (shared App token). Zero until the first API response populates it.",
 	})
+
+	unreviewedPRs = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "github_pr_watcher_unreviewed_prs",
+		Help: "Open pull requests the watcher would hand to the reviewer whose current head SHA has no review from a configured reviewer bot after waiting longer than the unreviewed threshold. Value 1 per such PR.",
+	}, []string{"repo", "pr"})
+
+	unreviewedScanLastSuccess = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "github_pr_watcher_unreviewed_scan_last_success_timestamp_seconds",
+		Help: "Unix timestamp of the last complete unreviewed-PR scan. Zero until the first successful scan; alerts on it must guard > 0.",
+	})
 )
 
 func init() {
@@ -70,6 +99,8 @@ func init() {
 		webhookSignatureRejectionsTotal,
 		webhookDispatchLatencySeconds,
 		rateLimitRemaining,
+		unreviewedPRs,
+		unreviewedScanLastSuccess,
 	)
 	for _, result := range []string{"success", "rate_limited", "github_error"} {
 		pollCyclesTotal.WithLabelValues(result).Add(0)
@@ -82,7 +113,11 @@ func init() {
 	}
 }
 
-type prometheusMetrics struct{}
+type prometheusMetrics struct {
+	// mu serialises SetUnreviewedPRs: /check can run Poll concurrently with
+	// the ticker, and the Reset()+Set() pair must not interleave.
+	mu sync.Mutex
+}
 
 // NewMetrics returns a Metrics implementation backed by Prometheus counters.
 func NewMetrics() Metrics {
@@ -111,4 +146,17 @@ func (m *prometheusMetrics) ObserveWebhookDispatchLatency(seconds float64) {
 
 func (m *prometheusMetrics) SetRateLimitRemaining(remaining int) {
 	rateLimitRemaining.Set(float64(remaining))
+}
+
+func (m *prometheusMetrics) SetUnreviewedPRs(prs []UnreviewedPR, scannedAt libtime.DateTime) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	// A late-finishing older scan can overwrite a newer result here. Both are
+	// read-only observations of the same PR population, so the stale write is
+	// corrected by the next scan; no extra sequencing is warranted.
+	unreviewedPRs.Reset()
+	for _, pr := range prs {
+		unreviewedPRs.WithLabelValues(pr.Repo, strconv.Itoa(pr.Number)).Set(1)
+	}
+	unreviewedScanLastSuccess.Set(float64(scannedAt.Unix()))
 }
