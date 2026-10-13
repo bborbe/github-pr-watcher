@@ -140,10 +140,24 @@ type GitHubClient interface {
 		page int,
 	) (SearchResult, error)
 
+	// SearchOpenPRs issues a GitHub Search query for every open PR in scope,
+	// with NO `updated:` bound. Used by the unreviewed-PR scan, which must see
+	// a PR whose review was lost long ago and whose updated-at has since
+	// fallen behind the cursor. page=1 for the first call; use
+	// SearchResult.NextPage for subsequent calls.
+	//
+	// PullRequest.HeadSHA in the result is empty — call GetPRDetails to fetch it.
+	SearchOpenPRs(ctx context.Context, scope string, page int) (SearchResult, error)
+
 	// GetPRDetails fetches the head SHA, clone URL, and base ref for a single PR.
 	// The Search API does NOT return any of these, so the poll loop must call
 	// this for every PR before publishing a task command.
 	GetPRDetails(ctx context.Context, owner, repo string, number int) (PRDetails, error)
+
+	// ListReviews returns the PR's reviews, paginated to exhaustion. Used by
+	// the unreviewed-PR scan to decide whether a configured reviewer bot has
+	// reviewed the PR's current head SHA. A review in any state counts.
+	ListReviews(ctx context.Context, owner, repo string, number int) ([]Review, error)
 
 	// EnableAutoMerge arms GitHub-native auto-merge on a PR: when all merge
 	// requirements (required status checks + required reviews per the repo
@@ -217,6 +231,15 @@ type GitHubClient interface {
 	// cycles with no open PRs would otherwise leave the gauge at 0 — the
 	// "unpopulated" sentinel — which falsely reads as quota exhaustion).
 	GetRateLimitCoreRemaining(ctx context.Context) (int, error)
+}
+
+// Review is a single PR review, reduced to the fields the unreviewed-PR scan
+// needs: who reviewed, and which commit they reviewed.
+type Review struct {
+	// AuthorLogin is the reviewer's GitHub login; empty for a deleted account.
+	AuthorLogin string
+	// CommitID is the head SHA the review was posted against.
+	CommitID string
 }
 
 // PRFile is a single changed file in a PR with its patch, as returned by the
@@ -353,6 +376,17 @@ func (c *githubClient) SearchLabeledPRs(
 		scope,
 		label,
 	)
+	return c.searchIssuePRs(ctx, scope, query, page)
+}
+
+// SearchOpenPRs searches every open PR in scope with no updated bound — see
+// the interface doc for why the scan cannot use SearchPRs' cursor window.
+func (c *githubClient) SearchOpenPRs(
+	ctx context.Context,
+	scope string,
+	page int,
+) (SearchResult, error) {
+	query := fmt.Sprintf("is:pr is:open archived:false user:%s", scope)
 	return c.searchIssuePRs(ctx, scope, query, page)
 }
 
@@ -707,6 +741,41 @@ func (c *githubClient) ListPRFiles(
 		opts.Page = resp.NextPage
 	}
 	return files, nil
+}
+
+// ListReviews pages through the PR's reviews. Pagination is followed to
+// exhaustion, mirroring ListPRFiles. Every review state counts (APPROVED,
+// CHANGES_REQUESTED, COMMENTED, DISMISSED) — the scan only cares whether the
+// configured reviewer bot has looked at this head SHA at all.
+func (c *githubClient) ListReviews(
+	ctx context.Context,
+	owner, repo string,
+	number int,
+) ([]Review, error) {
+	var reviews []Review
+	opts := &gogithub.ListOptions{PerPage: 100}
+	for {
+		select {
+		case <-ctx.Done():
+			return nil, errors.Wrapf(ctx, ctx.Err(), "list reviews %s/%s#%d", owner, repo, number)
+		default:
+		}
+		page, resp, err := c.client.PullRequests.ListReviews(ctx, owner, repo, number, opts)
+		if err != nil {
+			return nil, errors.Wrapf(ctx, err, "list reviews %s/%s#%d", owner, repo, number)
+		}
+		for _, r := range page {
+			reviews = append(reviews, Review{
+				AuthorLogin: r.GetUser().GetLogin(),
+				CommitID:    r.GetCommitID(),
+			})
+		}
+		if resp.NextPage == 0 {
+			break
+		}
+		opts.Page = resp.NextPage
+	}
+	return reviews, nil
 }
 
 // AddLabel adds a label to a PR. Adding an already-present label is a no-op on

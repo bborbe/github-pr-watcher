@@ -64,6 +64,7 @@ func newTestWatcher(
 		"",
 		false,
 		trustDecision,
+		newDisabledUnreviewedScanner(),
 	)
 }
 
@@ -106,6 +107,7 @@ func newTestWatcherWithOverride(
 		"",
 		false,
 		trustDecision,
+		newDisabledUnreviewedScanner(),
 	)
 }
 
@@ -148,6 +150,7 @@ func newTestWatcherWithAutoMerge(
 		autoMergeLabel,
 		false,
 		trustDecision,
+		newDisabledUnreviewedScanner(),
 	)
 }
 
@@ -190,6 +193,28 @@ func newTestWatcherWithTrivialAutoMerge(
 		autoMergeLabel,
 		true,
 		trustDecision,
+		newDisabledUnreviewedScanner(),
+	)
+}
+
+// newDisabledUnreviewedScanner returns a real scanner with no configured
+// logins, so Scan is a no-op. Existing poll assertions keep their GitHub-call
+// counts unchanged.
+func newDisabledUnreviewedScanner() pkg.UnreviewedScanner {
+	return pkg.NewUnreviewedScanner(
+		new(mocks.GitHubClient),
+		new(mocks.TaskPublisher),
+		new(mocks.Metrics),
+		libtime.CurrentDateTimeGetterFunc(func() libtime.DateTime {
+			return libtime.DateTime(time.Time{})
+		}),
+		"bborbe",
+		filter.TaskCreationFilters{},
+		trust.NewAuthorAllowlist(nil),
+		"",
+		0,
+		0,
+		pkg.UnreviewedConfig{},
 	)
 }
 
@@ -1288,6 +1313,7 @@ var _ = Describe("pkg.Watcher", func() {
 				"",
 				false,
 				trust.NewAuthorAllowlist(nil),
+				newDisabledUnreviewedScanner(),
 			)
 			err := w.Poll(ctx)
 			Expect(err).NotTo(HaveOccurred())
@@ -1777,6 +1803,7 @@ var _ = Describe("pkg.Watcher", func() {
 				"auto-merge",
 				false,
 				trustAlice,
+				newDisabledUnreviewedScanner(),
 			)
 		}
 
@@ -2132,6 +2159,49 @@ var _ = Describe("pkg.Watcher", func() {
 			Expect(w.Poll(ctx)).NotTo(HaveOccurred())
 
 			Expect(ghClient.AddLabelCallCount()).To(Equal(0))
+		})
+	})
+
+	Describe("unreviewed scan wiring", func() {
+		// newWiringWatcher builds a watcher with a mock scanner, so the
+		// Poll→Scan call is observable. The newTestWatcher* helpers hard-code a
+		// disabled scanner and are left untouched.
+		newWiringWatcher := func(scanner pkg.UnreviewedScanner) pkg.Watcher {
+			return pkg.NewWatcher(
+				ghClient,
+				new(mocks.TaskPublisher),
+				fakeMetrics,
+				cursorPath,
+				startTime,
+				"bborbe",
+				filter.TaskCreationFilters{filter.NewDraftFilter()},
+				filter.TaskCreationFilters{filter.NewDraftFilter()},
+				"",
+				"",
+				false,
+				trust.NewAuthorAllowlist([]string{"alice"}),
+				scanner,
+			)
+		}
+
+		It("calls Scan exactly once on a successful poll", func() {
+			ghClient.SearchPRsReturns(pkg.SearchResult{RateRemaining: 100}, nil)
+			scanner := new(mocks.UnreviewedScanner)
+
+			Expect(newWiringWatcher(scanner).Poll(ctx)).To(Succeed())
+			Expect(scanner.ScanCallCount()).To(Equal(1))
+			Expect(fakeMetrics.IncPollCycleArgsForCall(0)).To(Equal("success"))
+		})
+
+		It("does not call Scan when the main search aborts the poll", func() {
+			ghClient.SearchPRsReturns(pkg.SearchResult{}, errors.New("boom"))
+			scanner := new(mocks.UnreviewedScanner)
+
+			Expect(newWiringWatcher(scanner).Poll(ctx)).To(Succeed())
+			// The abort branch was taken: the cycle is counted github_error and
+			// the poll returns before processPRs, SaveCursor and Scan.
+			Expect(fakeMetrics.IncPollCycleArgsForCall(0)).To(Equal("github_error"))
+			Expect(scanner.ScanCallCount()).To(Equal(0))
 		})
 	})
 })

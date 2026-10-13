@@ -8,6 +8,7 @@ import (
 	"sync"
 
 	"github.com/bborbe/github-pr-watcher/pkg"
+	"github.com/bborbe/time"
 )
 
 type Metrics struct {
@@ -19,6 +20,11 @@ type Metrics struct {
 	IncPollCycleStub        func(string)
 	incPollCycleMutex       sync.RWMutex
 	incPollCycleArgsForCall []struct {
+		arg1 string
+	}
+	IncUnreviewedRetryStub        func(string)
+	incUnreviewedRetryMutex       sync.RWMutex
+	incUnreviewedRetryArgsForCall []struct {
 		arg1 string
 	}
 	IncWebhookDeliveryStub        func(string)
@@ -39,6 +45,12 @@ type Metrics struct {
 	setRateLimitRemainingMutex       sync.RWMutex
 	setRateLimitRemainingArgsForCall []struct {
 		arg1 int
+	}
+	SetUnreviewedPRsStub        func([]pkg.UnreviewedPR, time.DateTime)
+	setUnreviewedPRsMutex       sync.RWMutex
+	setUnreviewedPRsArgsForCall []struct {
+		arg1 []pkg.UnreviewedPR
+		arg2 time.DateTime
 	}
 	invocations      map[string][][]interface{}
 	invocationsMutex sync.RWMutex
@@ -105,6 +117,38 @@ func (fake *Metrics) IncPollCycleArgsForCall(i int) string {
 	fake.incPollCycleMutex.RLock()
 	defer fake.incPollCycleMutex.RUnlock()
 	argsForCall := fake.incPollCycleArgsForCall[i]
+	return argsForCall.arg1
+}
+
+func (fake *Metrics) IncUnreviewedRetry(arg1 string) {
+	fake.incUnreviewedRetryMutex.Lock()
+	fake.incUnreviewedRetryArgsForCall = append(fake.incUnreviewedRetryArgsForCall, struct {
+		arg1 string
+	}{arg1})
+	stub := fake.IncUnreviewedRetryStub
+	fake.recordInvocation("IncUnreviewedRetry", []interface{}{arg1})
+	fake.incUnreviewedRetryMutex.Unlock()
+	if stub != nil {
+		fake.IncUnreviewedRetryStub(arg1)
+	}
+}
+
+func (fake *Metrics) IncUnreviewedRetryCallCount() int {
+	fake.incUnreviewedRetryMutex.RLock()
+	defer fake.incUnreviewedRetryMutex.RUnlock()
+	return len(fake.incUnreviewedRetryArgsForCall)
+}
+
+func (fake *Metrics) IncUnreviewedRetryCalls(stub func(string)) {
+	fake.incUnreviewedRetryMutex.Lock()
+	defer fake.incUnreviewedRetryMutex.Unlock()
+	fake.IncUnreviewedRetryStub = stub
+}
+
+func (fake *Metrics) IncUnreviewedRetryArgsForCall(i int) string {
+	fake.incUnreviewedRetryMutex.RLock()
+	defer fake.incUnreviewedRetryMutex.RUnlock()
+	argsForCall := fake.incUnreviewedRetryArgsForCall[i]
 	return argsForCall.arg1
 }
 
@@ -226,6 +270,44 @@ func (fake *Metrics) SetRateLimitRemainingArgsForCall(i int) int {
 	defer fake.setRateLimitRemainingMutex.RUnlock()
 	argsForCall := fake.setRateLimitRemainingArgsForCall[i]
 	return argsForCall.arg1
+}
+
+func (fake *Metrics) SetUnreviewedPRs(arg1 []pkg.UnreviewedPR, arg2 time.DateTime) {
+	var arg1Copy []pkg.UnreviewedPR
+	if arg1 != nil {
+		arg1Copy = make([]pkg.UnreviewedPR, len(arg1))
+		copy(arg1Copy, arg1)
+	}
+	fake.setUnreviewedPRsMutex.Lock()
+	fake.setUnreviewedPRsArgsForCall = append(fake.setUnreviewedPRsArgsForCall, struct {
+		arg1 []pkg.UnreviewedPR
+		arg2 time.DateTime
+	}{arg1Copy, arg2})
+	stub := fake.SetUnreviewedPRsStub
+	fake.recordInvocation("SetUnreviewedPRs", []interface{}{arg1Copy, arg2})
+	fake.setUnreviewedPRsMutex.Unlock()
+	if stub != nil {
+		fake.SetUnreviewedPRsStub(arg1, arg2)
+	}
+}
+
+func (fake *Metrics) SetUnreviewedPRsCallCount() int {
+	fake.setUnreviewedPRsMutex.RLock()
+	defer fake.setUnreviewedPRsMutex.RUnlock()
+	return len(fake.setUnreviewedPRsArgsForCall)
+}
+
+func (fake *Metrics) SetUnreviewedPRsCalls(stub func([]pkg.UnreviewedPR, time.DateTime)) {
+	fake.setUnreviewedPRsMutex.Lock()
+	defer fake.setUnreviewedPRsMutex.Unlock()
+	fake.SetUnreviewedPRsStub = stub
+}
+
+func (fake *Metrics) SetUnreviewedPRsArgsForCall(i int) ([]pkg.UnreviewedPR, time.DateTime) {
+	fake.setUnreviewedPRsMutex.RLock()
+	defer fake.setUnreviewedPRsMutex.RUnlock()
+	argsForCall := fake.setUnreviewedPRsArgsForCall[i]
+	return argsForCall.arg1, argsForCall.arg2
 }
 
 func (fake *Metrics) Invocations() map[string][][]interface{} {

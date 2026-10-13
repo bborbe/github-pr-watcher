@@ -45,6 +45,9 @@ Two independent decision chains run per PR — see [`docs/watcher-decision-chain
 | `MAX_CHANGED_FILES` | no | `0` | Park PRs touching more files than this at `human_review` instead of spawning a review pod; `0` disables |
 | `MAX_PR_AGE` | no | `2160h` (90d) | Skip PRs older than this; empty disables |
 | `BACKFILL_DURATION` | no | `720h` (30d) | On cold start, backdate the initial cursor by this; empty disables |
+| `REVIEWER_BOT_LOGINS` | no | — | Comma-separated GitHub logins of the reviewer bots. A publishable PR whose current head SHA has no review from one of them, after waiting longer than `UNREVIEWED_THRESHOLD`, is reported on `github_pr_watcher_unreviewed_prs`. Empty disables the scan (no extra GitHub calls) |
+| `UNREVIEWED_THRESHOLD` | no | `30m` | How long a PR must wait without a reviewer-bot review before it is reported (Go duration; must be positive), and how long to wait between retries of an unreviewed PR. Ignored (and not validated) when `REVIEWER_BOT_LOGINS` is empty |
+| `UNREVIEWED_RETRY_MAX` | no | `3` | How many times the scan re-publishes the original review task for a still-unreviewed PR, one threshold apart, before marking it `retries_exhausted`; `0` disables retrying. Ignored (and not range-validated) when `REVIEWER_BOT_LOGINS` is empty |
 | `SENTRY_DSN` | no | — | Sentry DSN for error tracking |
 | `SENTRY_PROXY` | no | — | HTTP proxy URL for Sentry transport |
 
@@ -123,6 +126,61 @@ This is worth stating because the Go gitignore library backing the size gate doe
 restore it. The size gate and the reviewer prompt (which drives git's own ignore
 engine) must agree about the same file — otherwise a path the gate counts as
 reviewable would be withheld from the reviewer.
+
+## Metrics
+
+All metrics use the `github_pr_watcher_` prefix and are exposed on `/metrics`.
+
+| Metric | Type | Labels | Meaning |
+|---|---|---|---|
+| `github_pr_watcher_unreviewed_prs` | gauge | `repo` (`owner/repo`), `pr` (number), `retries_exhausted` (`true`/`false`) | `1` for every open, publishable, trusted-author PR whose current head SHA has no review from a configured reviewer bot after waiting longer than `UNREVIEWED_THRESHOLD`. The PR leaves the gauge as soon as a matching review lands on its head SHA, or when it stops qualifying (closed, drafted, untrusted, oversized-parked, …). `retries_exhausted="true"` means the retry budget is used up AND the last retry has had a full threshold without a review — the alert fires on that |
+| `github_pr_watcher_unreviewed_scan_last_success_timestamp_seconds` | gauge | — | Unix seconds of the last complete unreviewed-PR scan. `0` until the first one — alert rules on it must guard `> 0`, which is how a scan that keeps failing becomes visible |
+| `github_pr_watcher_unreviewed_retries_total` | counter | `repo` (`owner/repo`) | Review tasks re-published by the retry pass. Bounded by `UNREVIEWED_RETRY_MAX` per (PR, head SHA) per process lifetime. A retry is a re-send, not proof the review arrived — pair it with the gauge |
+
+The scan runs once per poll cycle, after the cursor is saved and before the cycle
+is counted successful, so a slow or failing scan never changes the poll result.
+A failed or interrupted scan leaves the previous gauge values in place; only a
+complete scan replaces them (an empty result clears the gauge). With
+`REVIEWER_BOT_LOGINS` empty the feature is off: no extra GitHub calls, no
+`github_pr_watcher_unreviewed_prs` series, and the timestamp gauge stays `0`.
+
+A PR whose head SHA has been confirmed reviewed is remembered until it changes,
+so a settled PR costs no `GetPRDetails`/`ListReviews` calls on later scans. Any
+push, draft toggle, comment or label moves the PR's `UpdatedAt` and forces a
+fresh check.
+
+### Unreviewed retry
+
+When a scan finds a PR still unreviewed, it re-publishes that PR's original
+review task — the same `DeriveTaskID` and the same create command the poll would
+send — up to `UNREVIEWED_RETRY_MAX` times per (PR, head SHA), one
+`UNREVIEWED_THRESHOLD` apart. A new commit is a new head SHA and starts a fresh
+budget; a pod restart can grant up to `UNREVIEWED_RETRY_MAX` more. The retry
+only ever re-sends the create command: it never forces a re-review, never
+mutates GitHub, and only fires after a complete, successful scan. Each retry
+logs one `unreviewed retry …` line and increments
+`github_pr_watcher_unreviewed_retries_total`.
+
+Known limits:
+
+- A retry cannot revive a task that already exists but never dispatched — only a
+  new commit does. An exhausted PR needs a human.
+- The agent controller dedups on the task **title path**, which embeds the
+  slugified PR title, so editing a PR's title between the original publish and a
+  retry can produce a second review task for the same commit.
+- Each retry also increments `github_pr_watcher_prs_total{command="create"}` and
+  may cost 1–2 extra GitHub calls (`PublishCreate`'s `.reviewignore` lookup).
+- On a cold start the poll can publish a PR and the scan can retry it in the
+  same cycle — harmless (the controller dedups), but it counts as a retry.
+- If `PublishCreate` keeps returning `false` (e.g. Kafka down), attempts never
+  reach the budget, so `retries_exhausted` never flips — watch
+  `github_pr_watcher_prs_total{command="error"}` for that case.
+
+Known limitation: `UpdatedAt` moves on comments and label changes too — including
+the watcher's own trivial-PR label — which restarts the wait and can delay a
+report. Cost: about two core API calls per qualifying open PR (PR details +
+reviews), more for raw-oversized PRs that need the `.reviewignore` lookup, all on
+the shared App token.
 
 ## HTTP Endpoints
 

@@ -134,6 +134,22 @@ type GitHubClient struct {
 		result1 []pkg.PRFile
 		result2 error
 	}
+	ListReviewsStub        func(context.Context, string, string, int) ([]pkg.Review, error)
+	listReviewsMutex       sync.RWMutex
+	listReviewsArgsForCall []struct {
+		arg1 context.Context
+		arg2 string
+		arg3 string
+		arg4 int
+	}
+	listReviewsReturns struct {
+		result1 []pkg.Review
+		result2 error
+	}
+	listReviewsReturnsOnCall map[int]struct {
+		result1 []pkg.Review
+		result2 error
+	}
 	RateLimitRemainingStub        func() int
 	rateLimitRemainingMutex       sync.RWMutex
 	rateLimitRemainingArgsForCall []struct {
@@ -157,6 +173,21 @@ type GitHubClient struct {
 		result2 error
 	}
 	searchLabeledPRsReturnsOnCall map[int]struct {
+		result1 pkg.SearchResult
+		result2 error
+	}
+	SearchOpenPRsStub        func(context.Context, string, int) (pkg.SearchResult, error)
+	searchOpenPRsMutex       sync.RWMutex
+	searchOpenPRsArgsForCall []struct {
+		arg1 context.Context
+		arg2 string
+		arg3 int
+	}
+	searchOpenPRsReturns struct {
+		result1 pkg.SearchResult
+		result2 error
+	}
+	searchOpenPRsReturnsOnCall map[int]struct {
 		result1 pkg.SearchResult
 		result2 error
 	}
@@ -718,6 +749,73 @@ func (fake *GitHubClient) ListPRFilesReturnsOnCall(i int, result1 []pkg.PRFile, 
 	}{result1, result2}
 }
 
+func (fake *GitHubClient) ListReviews(arg1 context.Context, arg2 string, arg3 string, arg4 int) ([]pkg.Review, error) {
+	fake.listReviewsMutex.Lock()
+	ret, specificReturn := fake.listReviewsReturnsOnCall[len(fake.listReviewsArgsForCall)]
+	fake.listReviewsArgsForCall = append(fake.listReviewsArgsForCall, struct {
+		arg1 context.Context
+		arg2 string
+		arg3 string
+		arg4 int
+	}{arg1, arg2, arg3, arg4})
+	stub := fake.ListReviewsStub
+	fakeReturns := fake.listReviewsReturns
+	fake.recordInvocation("ListReviews", []interface{}{arg1, arg2, arg3, arg4})
+	fake.listReviewsMutex.Unlock()
+	if stub != nil {
+		return stub(arg1, arg2, arg3, arg4)
+	}
+	if specificReturn {
+		return ret.result1, ret.result2
+	}
+	return fakeReturns.result1, fakeReturns.result2
+}
+
+func (fake *GitHubClient) ListReviewsCallCount() int {
+	fake.listReviewsMutex.RLock()
+	defer fake.listReviewsMutex.RUnlock()
+	return len(fake.listReviewsArgsForCall)
+}
+
+func (fake *GitHubClient) ListReviewsCalls(stub func(context.Context, string, string, int) ([]pkg.Review, error)) {
+	fake.listReviewsMutex.Lock()
+	defer fake.listReviewsMutex.Unlock()
+	fake.ListReviewsStub = stub
+}
+
+func (fake *GitHubClient) ListReviewsArgsForCall(i int) (context.Context, string, string, int) {
+	fake.listReviewsMutex.RLock()
+	defer fake.listReviewsMutex.RUnlock()
+	argsForCall := fake.listReviewsArgsForCall[i]
+	return argsForCall.arg1, argsForCall.arg2, argsForCall.arg3, argsForCall.arg4
+}
+
+func (fake *GitHubClient) ListReviewsReturns(result1 []pkg.Review, result2 error) {
+	fake.listReviewsMutex.Lock()
+	defer fake.listReviewsMutex.Unlock()
+	fake.ListReviewsStub = nil
+	fake.listReviewsReturns = struct {
+		result1 []pkg.Review
+		result2 error
+	}{result1, result2}
+}
+
+func (fake *GitHubClient) ListReviewsReturnsOnCall(i int, result1 []pkg.Review, result2 error) {
+	fake.listReviewsMutex.Lock()
+	defer fake.listReviewsMutex.Unlock()
+	fake.ListReviewsStub = nil
+	if fake.listReviewsReturnsOnCall == nil {
+		fake.listReviewsReturnsOnCall = make(map[int]struct {
+			result1 []pkg.Review
+			result2 error
+		})
+	}
+	fake.listReviewsReturnsOnCall[i] = struct {
+		result1 []pkg.Review
+		result2 error
+	}{result1, result2}
+}
+
 func (fake *GitHubClient) RateLimitRemaining() int {
 	fake.rateLimitRemainingMutex.Lock()
 	ret, specificReturn := fake.rateLimitRemainingReturnsOnCall[len(fake.rateLimitRemainingArgsForCall)]
@@ -833,6 +931,72 @@ func (fake *GitHubClient) SearchLabeledPRsReturnsOnCall(i int, result1 pkg.Searc
 		})
 	}
 	fake.searchLabeledPRsReturnsOnCall[i] = struct {
+		result1 pkg.SearchResult
+		result2 error
+	}{result1, result2}
+}
+
+func (fake *GitHubClient) SearchOpenPRs(arg1 context.Context, arg2 string, arg3 int) (pkg.SearchResult, error) {
+	fake.searchOpenPRsMutex.Lock()
+	ret, specificReturn := fake.searchOpenPRsReturnsOnCall[len(fake.searchOpenPRsArgsForCall)]
+	fake.searchOpenPRsArgsForCall = append(fake.searchOpenPRsArgsForCall, struct {
+		arg1 context.Context
+		arg2 string
+		arg3 int
+	}{arg1, arg2, arg3})
+	stub := fake.SearchOpenPRsStub
+	fakeReturns := fake.searchOpenPRsReturns
+	fake.recordInvocation("SearchOpenPRs", []interface{}{arg1, arg2, arg3})
+	fake.searchOpenPRsMutex.Unlock()
+	if stub != nil {
+		return stub(arg1, arg2, arg3)
+	}
+	if specificReturn {
+		return ret.result1, ret.result2
+	}
+	return fakeReturns.result1, fakeReturns.result2
+}
+
+func (fake *GitHubClient) SearchOpenPRsCallCount() int {
+	fake.searchOpenPRsMutex.RLock()
+	defer fake.searchOpenPRsMutex.RUnlock()
+	return len(fake.searchOpenPRsArgsForCall)
+}
+
+func (fake *GitHubClient) SearchOpenPRsCalls(stub func(context.Context, string, int) (pkg.SearchResult, error)) {
+	fake.searchOpenPRsMutex.Lock()
+	defer fake.searchOpenPRsMutex.Unlock()
+	fake.SearchOpenPRsStub = stub
+}
+
+func (fake *GitHubClient) SearchOpenPRsArgsForCall(i int) (context.Context, string, int) {
+	fake.searchOpenPRsMutex.RLock()
+	defer fake.searchOpenPRsMutex.RUnlock()
+	argsForCall := fake.searchOpenPRsArgsForCall[i]
+	return argsForCall.arg1, argsForCall.arg2, argsForCall.arg3
+}
+
+func (fake *GitHubClient) SearchOpenPRsReturns(result1 pkg.SearchResult, result2 error) {
+	fake.searchOpenPRsMutex.Lock()
+	defer fake.searchOpenPRsMutex.Unlock()
+	fake.SearchOpenPRsStub = nil
+	fake.searchOpenPRsReturns = struct {
+		result1 pkg.SearchResult
+		result2 error
+	}{result1, result2}
+}
+
+func (fake *GitHubClient) SearchOpenPRsReturnsOnCall(i int, result1 pkg.SearchResult, result2 error) {
+	fake.searchOpenPRsMutex.Lock()
+	defer fake.searchOpenPRsMutex.Unlock()
+	fake.SearchOpenPRsStub = nil
+	if fake.searchOpenPRsReturnsOnCall == nil {
+		fake.searchOpenPRsReturnsOnCall = make(map[int]struct {
+			result1 pkg.SearchResult
+			result2 error
+		})
+	}
+	fake.searchOpenPRsReturnsOnCall[i] = struct {
 		result1 pkg.SearchResult
 		result2 error
 	}{result1, result2}

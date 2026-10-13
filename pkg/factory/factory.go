@@ -72,6 +72,8 @@ func CreateWatcher(
 	overrideLabel string,
 	autoMergeLabel string,
 	trivialAutoMergeEnabled bool,
+	unreviewedConfig pkg.UnreviewedConfig,
+	currentDateTime libtime.CurrentDateTimeGetter,
 ) pkg.Watcher {
 	publisher := pkg.NewTaskPublisher(
 		createSender,
@@ -88,6 +90,19 @@ func CreateWatcher(
 		},
 		ghClient,
 	)
+	unreviewedScanner := pkg.NewUnreviewedScanner(
+		ghClient,
+		publisher,
+		metrics,
+		currentDateTime,
+		scope,
+		taskCreationFilter,
+		trustDecision,
+		overrideLabel,
+		maxAdditions,
+		maxChangedFiles,
+		unreviewedConfig,
+	)
 	return pkg.NewWatcher(
 		ghClient,
 		publisher,
@@ -101,6 +116,7 @@ func CreateWatcher(
 		autoMergeLabel,
 		trivialAutoMergeEnabled,
 		trustDecision,
+		unreviewedScanner,
 	)
 }
 
