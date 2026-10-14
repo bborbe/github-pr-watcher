@@ -6,17 +6,17 @@ require (
 	github.com/bborbe/agent v0.100.0
 	github.com/bborbe/cqrs v0.6.12
 	github.com/bborbe/errors v1.6.3
-	github.com/bborbe/http v1.26.28
-	github.com/bborbe/kafka v1.27.0
-	github.com/bborbe/kv v1.21.17
+	github.com/bborbe/http v1.26.29
+	github.com/bborbe/kafka v1.27.1
+	github.com/bborbe/kv v1.21.18
 	github.com/bborbe/log v1.7.4
-	github.com/bborbe/maintainer v0.50.9
-	github.com/bborbe/parse v1.12.2
+	github.com/bborbe/maintainer v0.50.11
+	github.com/bborbe/parse v1.12.3
 	github.com/bborbe/run v1.11.2
-	github.com/bborbe/sentry v1.10.3
-	github.com/bborbe/service v1.10.15
+	github.com/bborbe/sentry v1.10.4
+	github.com/bborbe/service v1.10.16
 	github.com/bborbe/time v1.27.16
-	github.com/bborbe/validation v1.5.3
+	github.com/bborbe/validation v1.5.4
 	github.com/golang/glog v1.2.5
 	github.com/google/go-github/v62 v62.0.0
 	github.com/google/uuid v1.6.0
@@ -32,9 +32,9 @@ require (
 	github.com/Masterminds/semver/v3 v3.5.0 // indirect
 	github.com/a2aproject/a2a-go/v2 v2.6.0 // indirect
 	github.com/bborbe/argument/v2 v2.13.6 // indirect
-	github.com/bborbe/collection v1.21.1 // indirect
-	github.com/bborbe/k8s v1.14.21 // indirect
-	github.com/bborbe/math v1.4.12 // indirect
+	github.com/bborbe/collection v1.21.2 // indirect
+	github.com/bborbe/k8s v1.14.22 // indirect
+	github.com/bborbe/math v1.4.14 // indirect
 	github.com/bborbe/strimzi v1.8.20 // indirect
 	github.com/bborbe/vault-cli v0.168.4 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
@@ -99,7 +99,7 @@ require (
 	k8s.io/apimachinery v0.38.0-alpha.2 // indirect
 	k8s.io/client-go v0.38.0-alpha.2 // indirect
 	k8s.io/klog/v2 v2.140.0 // indirect
-	k8s.io/kube-openapi v0.0.0-20261007072838-e2e80c32a35f // indirect
+	k8s.io/kube-openapi v0.0.0-20261014044854-ca3452a79603 // indirect
 	k8s.io/utils v0.0.0-20260707023825-cf1189d6abe3 // indirect
 	sigs.k8s.io/json v0.0.0-20260909141634-11ed52e25bc5 // indirect
 	sigs.k8s.io/randfill v1.0.0 // indirect
