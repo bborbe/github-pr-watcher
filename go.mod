@@ -1,22 +1,22 @@
 module github.com/bborbe/github-pr-watcher
 
-go 1.27.2
+go 1.27.3
 
 require (
-	github.com/bborbe/agent v0.101.0
+	github.com/bborbe/agent v0.112.0
 	github.com/bborbe/cqrs v0.6.12
 	github.com/bborbe/errors v1.6.3
 	github.com/bborbe/http v1.26.30
-	github.com/bborbe/kafka v1.27.1
+	github.com/bborbe/kafka v1.28.4
 	github.com/bborbe/kv v1.21.18
 	github.com/bborbe/log v1.7.4
-	github.com/bborbe/maintainer v0.50.11
+	github.com/bborbe/maintainer v0.50.12
 	github.com/bborbe/parse v1.12.3
 	github.com/bborbe/run v1.11.2
-	github.com/bborbe/sentry v1.10.4
-	github.com/bborbe/service v1.10.16
-	github.com/bborbe/time v1.27.16
-	github.com/bborbe/validation v1.5.4
+	github.com/bborbe/sentry v1.10.5
+	github.com/bborbe/service v1.11.0
+	github.com/bborbe/time v1.27.17
+	github.com/bborbe/validation v1.5.5
 	github.com/golang/glog v1.2.5
 	github.com/google/go-github/v62 v62.0.0
 	github.com/google/uuid v1.6.0
@@ -33,10 +33,10 @@ require (
 	github.com/a2aproject/a2a-go/v2 v2.6.0 // indirect
 	github.com/bborbe/argument/v2 v2.13.6 // indirect
 	github.com/bborbe/collection v1.21.2 // indirect
-	github.com/bborbe/k8s v1.14.22 // indirect
+	github.com/bborbe/k8s v1.14.23 // indirect
 	github.com/bborbe/math v1.4.15 // indirect
-	github.com/bborbe/strimzi v1.8.20 // indirect
-	github.com/bborbe/vault-cli v0.169.4 // indirect
+	github.com/bborbe/strimzi v1.8.21 // indirect
+	github.com/bborbe/vault-cli v0.177.0 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/bradleyfalzon/ghinstallation/v2 v2.19.0 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
