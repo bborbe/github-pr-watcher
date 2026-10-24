@@ -41,6 +41,7 @@ Two independent decision chains run per PR — see [`docs/watcher-decision-chain
 | `REPO_ALLOWLIST` | no | — | Comma-separated host-qualified repo allowlist (`host/owner/repo`); empty means allow-all |
 | `BOT_ALLOWLIST` | no | `dependabot[bot],renovate[bot]` | Comma-separated bot author logins to skip |
 | `AUTO_MERGE_LABEL` | no | `auto-merge` | PR label that opts the PR into GitHub-native auto-merge for trusted authors (watcher arms `EnableAutoMerge`; GitHub merges once checks + required reviews are green). Empty disables the auto-merge path. Requires the watcher GitHub App to hold Pull requests: Write. **Arming only works while the PR is still blocked** — see below |
+| `MECHANICAL_OVERRIDE_AUTHORS` | no | — | Comma-separated GitHub logins that may be approved without an LLM review on a repo that opts in through **both** `.maintainer.yaml` flags (`autoMerge.trivial` + `prReviewer.autoApprove`). Exact, case-sensitive match. Empty disables the path. Not the same list as `BOT_ALLOWLIST` (skip) or `TRUSTED_AUTHORS` (may be reviewed) — a login here must also be trusted |
 | `MAX_ADDITIONS` | no | `0` | Park PRs with more added lines than this at `human_review` instead of spawning a review pod (an oversized diff overflows the reviewer's context window — `claude CLI failed: Prompt is too long`); `0` disables |
 | `MAX_CHANGED_FILES` | no | `0` | Park PRs touching more files than this at `human_review` instead of spawning a review pod; `0` disables |
 | `MAX_PR_AGE` | no | `2160h` (90d) | Skip PRs older than this; empty disables |
@@ -226,6 +227,46 @@ See [`docs/architecture.md`](https://github.com/bborbe/maintainer/blob/master/do
 ## License
 
 BSD 2-Clause License. See [LICENSE](LICENSE).
+
+## Mechanical override for trivial bot bumps
+
+A pull request can be approved without an LLM review when the watcher can prove it is
+a trivial bot dependency bump. A PR qualifies when all of the following hold:
+
+- its author is listed in `MECHANICAL_OVERRIDE_AUTHORS` (exact, case-sensitive match);
+- the author is trusted (`TRUSTED_AUTHORS`);
+- the repo opts in through **both** `.maintainer.yaml` flags: `autoMerge.trivial` and
+  `prReviewer.autoApprove`;
+- every changed file is mechanical per `ClassifyTrivial` (no hand-written code);
+- the PR is not a draft and carries no override label.
+
+In the poll that qualifies, the watcher applies the auto-merge label, arms
+GitHub-native auto-merge, and publishes one `pr-override` task with
+`override_reason: trivial-bot-bump` whose body states that no LLM review ran. No
+review task is published for that head SHA. The watcher never merges: GitHub
+performs the merge once the required checks are green.
+
+Dedupe is per (PR, head SHA) and shared with the label override — both override
+kinds use the same override task-id, so a SHA is approved at most once.
+
+**Release ordering.** `bborbe/github-pr-review-agent` must understand
+`override_reason: trivial-bot-bump` before this watcher is deployed; otherwise the
+agent falls back to the label wording. The `go.sum` classifier change must ship in
+the same watcher release — without it `ClassifyTrivial` rejects every real bump and
+the feature stays dark.
+
+**Kill switch.** `TRIVIAL_AUTO_MERGE` governs only the labelling path. Mechanical
+approvals are switched off by emptying `MECHANICAL_OVERRIDE_AUTHORS` — an incident
+that must stop unattended approvals clears that list, not the flag.
+
+**Failure fall-throughs.** A config or file-listing error means "review this poll".
+A failed label write also means "review this poll" — an approve never lands without
+its arming. A failed arming after a successful label write still publishes the
+approve; the label is now present, so the next poll's auto-merge path retries the
+arming.
+
+An empty `MECHANICAL_OVERRIDE_AUTHORS` list is the off switch; there is no separate
+enable flag.
 
 ## Auto-merge arming window
 

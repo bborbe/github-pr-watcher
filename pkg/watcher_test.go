@@ -63,6 +63,7 @@ func newTestWatcher(
 		"",
 		"",
 		false,
+		nil,
 		trustDecision,
 		newDisabledUnreviewedScanner(),
 	)
@@ -106,6 +107,7 @@ func newTestWatcherWithOverride(
 		overrideLabel,
 		"",
 		false,
+		nil,
 		trustDecision,
 		newDisabledUnreviewedScanner(),
 	)
@@ -149,6 +151,7 @@ func newTestWatcherWithAutoMerge(
 		"",
 		autoMergeLabel,
 		false,
+		nil,
 		trustDecision,
 		newDisabledUnreviewedScanner(),
 	)
@@ -192,6 +195,53 @@ func newTestWatcherWithTrivialAutoMerge(
 		"",
 		autoMergeLabel,
 		true,
+		nil,
+		trustDecision,
+		newDisabledUnreviewedScanner(),
+	)
+}
+
+func newTestWatcherWithMechanicalOverride(
+	ghClient pkg.GitHubClient,
+	createSender task.CreateCommandSender,
+	cursorPath string,
+	startTime libtime.DateTime,
+	fakeMetrics *mocks.Metrics,
+	trustDecision trust.Trust,
+	autoMergeLabel string,
+	mechanicalOverrideAuthors []string,
+	overrideLabel string,
+) pkg.Watcher {
+	publisher := pkg.NewTaskPublisher(
+		createSender,
+		trustDecision,
+		fakeMetrics,
+		pkg.TaskConfig{
+			Stage:       "dev",
+			MaxSlugLen:  pkg.DefaultMaxSlugLen,
+			MaxTitleLen: pkg.DefaultMaxTitleLen,
+			TaskSuffix:  "",
+		},
+		ghClient,
+	)
+	return pkg.NewWatcher(
+		ghClient,
+		publisher,
+		fakeMetrics,
+		cursorPath,
+		startTime,
+		"bborbe",
+		filter.TaskCreationFilters{
+			filter.NewDraftFilter(),
+			filter.NewBotAuthorFilter([]string{"dependabot[bot]"}),
+		},
+		filter.TaskCreationFilters{
+			filter.NewDraftFilter(),
+		},
+		overrideLabel,
+		autoMergeLabel,
+		false,
+		mechanicalOverrideAuthors,
 		trustDecision,
 		newDisabledUnreviewedScanner(),
 	)
@@ -1312,6 +1362,7 @@ var _ = Describe("pkg.Watcher", func() {
 				"",
 				"",
 				false,
+				nil,
 				trust.NewAuthorAllowlist(nil),
 				newDisabledUnreviewedScanner(),
 			)
@@ -1802,6 +1853,7 @@ var _ = Describe("pkg.Watcher", func() {
 				"",
 				"auto-merge",
 				false,
+				nil,
 				trustAlice,
 				newDisabledUnreviewedScanner(),
 			)
@@ -2162,6 +2214,561 @@ var _ = Describe("pkg.Watcher", func() {
 		})
 	})
 
+	Describe("Mechanical override for trivial bot bumps", func() {
+		prBot := func() pkg.PullRequest {
+			return pkg.PullRequest{
+				Number:      10,
+				Owner:       "bborbe",
+				Repo:        "repo",
+				Title:       "bump deps",
+				HTMLURL:     "https://github.com/bborbe/repo/pull/10",
+				AuthorLogin: "ben-s-go-updater-dev[bot]",
+				IsDraft:     false,
+				UpdatedAt:   libtime.DateTime(time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC)),
+			}
+		}
+		trustBot := trust.NewAuthorAllowlist([]string{"ben-s-go-updater-dev[bot]"})
+		optedIn := maintainerconfig.MaintainerConfig{
+			AutoMerge:  maintainerconfig.AutoMergeConfig{Trivial: true},
+			PrReviewer: maintainerconfig.PrReviewerConfig{AutoApprove: true},
+		}
+		mechanical := []pkg.PRFile{
+			{
+				Filename: "go.mod",
+				Patch:    "--- a/go.mod\n+++ b/go.mod\n@@ -1,3 +1,3 @@\n-\tgo 1.26.5\n+\tgo 1.26.6\n",
+			},
+		}
+		nonMechanical := []pkg.PRFile{
+			{
+				Filename: "pkg/watcher.go",
+				Patch:    "--- a/pkg/watcher.go\n+++ b/pkg/watcher.go\n@@ -1,3 +1,3 @@\n-package pkg\n+package pkg2\n",
+			},
+		}
+		mechanicalAuthors := []string{"ben-s-go-updater-dev[bot]"}
+
+		newWatcher := func(
+			authors []string,
+			trustDecision trust.Trust,
+		) pkg.Watcher {
+			return newTestWatcherWithMechanicalOverride(
+				ghClient,
+				createSender,
+				cursorPath,
+				startTime,
+				fakeMetrics,
+				trustDecision,
+				"auto-merge",
+				authors,
+				"",
+			)
+		}
+		pollWith := func(pr pkg.PullRequest, authors []string, trustDecision trust.Trust) {
+			ghClient.SearchPRsReturns(pkg.SearchResult{
+				PullRequests:  []pkg.PullRequest{pr},
+				RateRemaining: 100,
+			}, nil)
+			Expect(newWatcher(authors, trustDecision).Poll(ctx)).NotTo(HaveOccurred())
+		}
+		expectReviewOnly := func() {
+			Expect(createSender.SendCommandCallCount()).To(Equal(1))
+			_, cmd := createSender.SendCommandArgsForCall(0)
+			Expect(cmd.Frontmatter["task_type"]).To(Equal("pr-review"))
+		}
+
+		BeforeEach(func() {
+			ghClient.GetPRDetailsReturns(pkg.PRDetails{
+				HeadSHA:  "deadbeef",
+				CloneURL: "https://github.com/bborbe/repo.git",
+				BaseRef:  "master",
+			}, nil)
+			ghClient.GetMaintainerConfigReturns(optedIn, nil)
+			ghClient.ListPRFilesReturns(mechanical, nil)
+			createSender.SendCommandReturns(nil)
+		})
+
+		It("non-trivial files -> review only", func() {
+			ghClient.ListPRFilesReturns(nonMechanical, nil)
+			pollWith(prBot(), mechanicalAuthors, trustBot)
+
+			expectReviewOnly()
+			Expect(ghClient.GetMaintainerConfigCallCount()).To(Equal(1))
+			Expect(ghClient.ListPRFilesCallCount()).To(Equal(1))
+		})
+
+		It("author not on mechanical list -> review only", func() {
+			pollWith(prBot(), []string{"someone-else[bot]"}, trustBot)
+
+			expectReviewOnly()
+			Expect(ghClient.GetMaintainerConfigCallCount()).To(Equal(0))
+			Expect(ghClient.ListPRFilesCallCount()).To(Equal(0))
+		})
+
+		It("author not trusted -> review only", func() {
+			pollWith(prBot(), mechanicalAuthors, trust.NewAuthorAllowlist([]string{"alice"}))
+
+			Expect(createSender.SendCommandCallCount()).To(Equal(1))
+			_, cmd := createSender.SendCommandArgsForCall(0)
+			Expect(cmd.Frontmatter["task_type"]).To(Equal("pr-review"))
+			Expect(cmd.Frontmatter["phase"]).To(Equal("human_review"))
+			Expect(ghClient.GetMaintainerConfigCallCount()).To(Equal(0))
+		})
+
+		It("author case differs -> review only", func() {
+			pr := prBot()
+			pr.AuthorLogin = "Ben-S-Go-Updater-Dev[bot]"
+			pollWith(
+				pr,
+				[]string{"ben-s-go-updater-dev[bot]"},
+				trust.NewAuthorAllowlist([]string{"Ben-S-Go-Updater-Dev[bot]"}),
+			)
+
+			expectReviewOnly()
+			Expect(ghClient.GetMaintainerConfigCallCount()).To(Equal(0))
+		})
+
+		It("autoMerge.trivial false -> review only", func() {
+			ghClient.GetMaintainerConfigReturns(maintainerconfig.MaintainerConfig{
+				PrReviewer: maintainerconfig.PrReviewerConfig{AutoApprove: true},
+			}, nil)
+			pollWith(prBot(), mechanicalAuthors, trustBot)
+
+			expectReviewOnly()
+			Expect(ghClient.ListPRFilesCallCount()).To(Equal(0))
+		})
+
+		It("prReviewer.autoApprove false -> review only", func() {
+			ghClient.GetMaintainerConfigReturns(maintainerconfig.MaintainerConfig{
+				AutoMerge: maintainerconfig.AutoMergeConfig{Trivial: true},
+			}, nil)
+			pollWith(prBot(), mechanicalAuthors, trustBot)
+
+			expectReviewOnly()
+			Expect(ghClient.ListPRFilesCallCount()).To(Equal(0))
+		})
+
+		It("draft -> no publication", func() {
+			pr := prBot()
+			pr.IsDraft = true
+			pollWith(pr, mechanicalAuthors, trustBot)
+
+			Expect(createSender.SendCommandCallCount()).To(Equal(0))
+		})
+
+		It("config read fails -> review only", func() {
+			ghClient.GetMaintainerConfigReturns(
+				maintainerconfig.MaintainerConfig{},
+				errors.New("boom"),
+			)
+			pollWith(prBot(), mechanicalAuthors, trustBot)
+
+			expectReviewOnly()
+			Expect(ghClient.ListPRFilesCallCount()).To(Equal(0))
+		})
+
+		It("file listing fails -> review only", func() {
+			ghClient.ListPRFilesReturns(nil, errors.New("boom"))
+			pollWith(prBot(), mechanicalAuthors, trustBot)
+
+			expectReviewOnly()
+			Expect(ghClient.ListPRFilesCallCount()).To(Equal(1))
+		})
+
+		It("trust check fails -> no publication", func() {
+			failingTrust := trust.Func(func(
+				_ context.Context,
+				_ trust.PR,
+			) (trust.Result, error) {
+				return nil, errors.New("trust backend down")
+			})
+			pollWith(prBot(), mechanicalAuthors, failingTrust)
+
+			Expect(createSender.SendCommandCallCount()).To(Equal(0))
+		})
+
+		It("qualifying bump -> override task with rule body", func() {
+			pollWith(prBot(), mechanicalAuthors, trustBot)
+
+			Expect(createSender.SendCommandCallCount()).To(Equal(1))
+			_, cmd := createSender.SendCommandArgsForCall(0)
+			Expect(cmd.Frontmatter["task_type"]).To(Equal("pr-override"))
+			Expect(cmd.Frontmatter["override_reason"]).To(Equal("trivial-bot-bump"))
+			Expect(cmd.Frontmatter["ref"]).To(Equal("deadbeef"))
+			Expect(cmd.Frontmatter["task_identifier"]).To(Equal(
+				pkg.DeriveTaskIDOverride("bborbe", "repo", 10, "deadbeef").String()))
+			Expect(cmd.Title).To(HavePrefix("PR Override github - bborbe-repo - 10 - deadbeef"))
+			Expect(cmd.Body).To(ContainSubstring("trivial-bot-bump"))
+			Expect(cmd.Body).To(ContainSubstring("No LLM review ran"))
+			Expect(cmd.Body).NotTo(ContainSubstring("override-review"))
+			Expect(cmd.Body).NotTo(
+				ContainSubstring("A trusted author applied the override label."))
+		})
+
+		It("qualifying bump -> label present and auto-merge armed", func() {
+			// trivialAutoMergeEnabled is false in this helper, which proves the
+			// mechanical path arms independently of TRIVIAL_AUTO_MERGE.
+			pollWith(prBot(), mechanicalAuthors, trustBot)
+
+			Expect(ghClient.AddLabelCallCount()).To(Equal(1))
+			_, owner, repo, number, label := ghClient.AddLabelArgsForCall(0)
+			Expect(owner).To(Equal("bborbe"))
+			Expect(repo).To(Equal("repo"))
+			Expect(number).To(Equal(10))
+			Expect(label).To(Equal("auto-merge"))
+			Expect(ghClient.EnableAutoMergeCallCount()).To(Equal(1))
+
+			Expect(createSender.SendCommandCallCount()).To(Equal(1))
+			_, cmd := createSender.SendCommandArgsForCall(0)
+			Expect(cmd.Frontmatter["task_type"]).To(Equal("pr-override"))
+		})
+
+		It("override label present -> label override only", func() {
+			pr := prBot()
+			pr.Labels = []string{"override-review"}
+			ghClient.SearchPRsReturns(pkg.SearchResult{
+				PullRequests:  []pkg.PullRequest{pr},
+				RateRemaining: 100,
+			}, nil)
+			w := newTestWatcherWithMechanicalOverride(
+				ghClient,
+				createSender,
+				cursorPath,
+				startTime,
+				fakeMetrics,
+				trustBot,
+				"auto-merge",
+				mechanicalAuthors,
+				"override-review",
+			)
+			Expect(w.Poll(ctx)).NotTo(HaveOccurred())
+
+			Expect(createSender.SendCommandCallCount()).To(Equal(1))
+			_, cmd := createSender.SendCommandArgsForCall(0)
+			Expect(cmd.Frontmatter["task_type"]).To(Equal("pr-override"))
+			_, hasReason := cmd.Frontmatter["override_reason"]
+			Expect(hasReason).To(BeFalse())
+			Expect(cmd.Body).To(ContainSubstring("A trusted author applied the override label."))
+			Expect(ghClient.GetMaintainerConfigCallCount()).To(Equal(0))
+			Expect(ghClient.ListPRFilesCallCount()).To(Equal(0))
+		})
+
+		It("dedupe per head SHA", func() {
+			pollWith(prBot(), mechanicalAuthors, trustBot)
+			Expect(createSender.SendCommandCallCount()).To(Equal(1))
+
+			// Same head SHA: no second emission.
+			pollWith(prBot(), mechanicalAuthors, trustBot)
+			Expect(createSender.SendCommandCallCount()).To(Equal(1))
+
+			ghClient.GetPRDetailsReturns(pkg.PRDetails{
+				HeadSHA:  "cafebabe",
+				CloneURL: "https://github.com/bborbe/repo.git",
+				BaseRef:  "master",
+			}, nil)
+			pollWith(prBot(), mechanicalAuthors, trustBot)
+			Expect(createSender.SendCommandCallCount()).To(Equal(2))
+
+			_, cmd := createSender.SendCommandArgsForCall(1)
+			Expect(cmd.Frontmatter["ref"]).To(Equal("cafebabe"))
+			Expect(cmd.Frontmatter["task_identifier"]).To(Equal(
+				pkg.DeriveTaskIDOverride("bborbe", "repo", 10, "cafebabe").String()))
+		})
+
+		It("emitting poll records override_mechanical", func() {
+			pollWith(prBot(), mechanicalAuthors, trustBot)
+
+			count := 0
+			for i := 0; i < fakeMetrics.IncPRPublishedCallCount(); i++ {
+				if fakeMetrics.IncPRPublishedArgsForCall(i) == "override_mechanical" {
+					count++
+				}
+			}
+			Expect(count).To(Equal(1))
+		})
+	})
+
+	Describe("Gate error paths", func() {
+		It("empty auto-merge label -> review only", func() {
+			pr := pkg.PullRequest{
+				Number:      10,
+				Owner:       "bborbe",
+				Repo:        "repo",
+				Title:       "bump deps",
+				HTMLURL:     "https://github.com/bborbe/repo/pull/10",
+				AuthorLogin: "ben-s-go-updater-dev[bot]",
+				IsDraft:     false,
+				UpdatedAt:   libtime.DateTime(time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC)),
+			}
+			trustBot := trust.NewAuthorAllowlist([]string{"ben-s-go-updater-dev[bot]"})
+			optedIn := maintainerconfig.MaintainerConfig{
+				AutoMerge:  maintainerconfig.AutoMergeConfig{Trivial: true},
+				PrReviewer: maintainerconfig.PrReviewerConfig{AutoApprove: true},
+			}
+
+			ghClient.GetPRDetailsReturns(pkg.PRDetails{
+				HeadSHA:  "deadbeef",
+				CloneURL: "https://github.com/bborbe/repo.git",
+				BaseRef:  "master",
+			}, nil)
+			ghClient.GetMaintainerConfigReturns(optedIn, nil)
+			ghClient.ListPRFilesReturns([]pkg.PRFile{
+				{
+					Filename: "go.mod",
+					Patch:    "--- a/go.mod\n+++ b/go.mod\n@@ -1,3 +1,3 @@\n-\tgo 1.26.5\n+\tgo 1.26.6\n",
+				},
+			}, nil)
+			ghClient.SearchPRsReturns(pkg.SearchResult{
+				PullRequests:  []pkg.PullRequest{pr},
+				RateRemaining: 100,
+			}, nil)
+			createSender.SendCommandReturns(nil)
+
+			w := newTestWatcherWithMechanicalOverride(
+				ghClient,
+				createSender,
+				cursorPath,
+				startTime,
+				fakeMetrics,
+				trustBot,
+				"",
+				[]string{"ben-s-go-updater-dev[bot]"},
+				"",
+			)
+			Expect(w.Poll(ctx)).NotTo(HaveOccurred())
+
+			Expect(createSender.SendCommandCallCount()).To(Equal(1))
+			_, cmd := createSender.SendCommandArgsForCall(0)
+			Expect(cmd.Frontmatter["task_type"]).To(Equal("pr-review"))
+			Expect(ghClient.GetMaintainerConfigCallCount()).To(Equal(0))
+		})
+
+		It("send fails -> override retried, no review", func() {
+			pr := pkg.PullRequest{
+				Number:      10,
+				Owner:       "bborbe",
+				Repo:        "repo",
+				Title:       "bump deps",
+				HTMLURL:     "https://github.com/bborbe/repo/pull/10",
+				AuthorLogin: "ben-s-go-updater-dev[bot]",
+				IsDraft:     false,
+				UpdatedAt:   libtime.DateTime(time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC)),
+			}
+			trustBot := trust.NewAuthorAllowlist([]string{"ben-s-go-updater-dev[bot]"})
+			optedIn := maintainerconfig.MaintainerConfig{
+				AutoMerge:  maintainerconfig.AutoMergeConfig{Trivial: true},
+				PrReviewer: maintainerconfig.PrReviewerConfig{AutoApprove: true},
+			}
+
+			ghClient.GetPRDetailsReturns(pkg.PRDetails{
+				HeadSHA:  "deadbeef",
+				CloneURL: "https://github.com/bborbe/repo.git",
+				BaseRef:  "master",
+			}, nil)
+			ghClient.GetMaintainerConfigReturns(optedIn, nil)
+			ghClient.ListPRFilesReturns([]pkg.PRFile{
+				{
+					Filename: "go.mod",
+					Patch:    "--- a/go.mod\n+++ b/go.mod\n@@ -1,3 +1,3 @@\n-\tgo 1.26.5\n+\tgo 1.26.6\n",
+				},
+			}, nil)
+			ghClient.SearchPRsReturns(pkg.SearchResult{
+				PullRequests:  []pkg.PullRequest{pr},
+				RateRemaining: 100,
+			}, nil)
+
+			w := newTestWatcherWithMechanicalOverride(
+				ghClient,
+				createSender,
+				cursorPath,
+				startTime,
+				fakeMetrics,
+				trustBot,
+				"auto-merge",
+				[]string{"ben-s-go-updater-dev[bot]"},
+				"",
+			)
+
+			createSender.SendCommandReturnsOnCall(0, errors.New("kafka down"))
+			Expect(w.Poll(ctx)).NotTo(HaveOccurred())
+			Expect(createSender.SendCommandCallCount()).To(Equal(1))
+			_, failedCmd := createSender.SendCommandArgsForCall(0)
+			Expect(failedCmd.Frontmatter["task_type"]).To(Equal("pr-override"))
+
+			// No cursor entry was recorded on the failure, so the next poll retries.
+			createSender.SendCommandReturns(nil)
+			Expect(w.Poll(ctx)).NotTo(HaveOccurred())
+			Expect(createSender.SendCommandCallCount()).To(Equal(2))
+			_, retriedCmd := createSender.SendCommandArgsForCall(1)
+			Expect(retriedCmd.Frontmatter["task_type"]).To(Equal("pr-override"))
+		})
+
+		It("add label fails -> review only", func() {
+			pr := pkg.PullRequest{
+				Number:      10,
+				Owner:       "bborbe",
+				Repo:        "repo",
+				Title:       "bump deps",
+				HTMLURL:     "https://github.com/bborbe/repo/pull/10",
+				AuthorLogin: "ben-s-go-updater-dev[bot]",
+				IsDraft:     false,
+				UpdatedAt:   libtime.DateTime(time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC)),
+			}
+			trustBot := trust.NewAuthorAllowlist([]string{"ben-s-go-updater-dev[bot]"})
+			optedIn := maintainerconfig.MaintainerConfig{
+				AutoMerge:  maintainerconfig.AutoMergeConfig{Trivial: true},
+				PrReviewer: maintainerconfig.PrReviewerConfig{AutoApprove: true},
+			}
+			ghClient.GetPRDetailsReturns(pkg.PRDetails{
+				HeadSHA:  "deadbeef",
+				CloneURL: "https://github.com/bborbe/repo.git",
+				BaseRef:  "master",
+			}, nil)
+			ghClient.GetMaintainerConfigReturns(optedIn, nil)
+			ghClient.ListPRFilesReturns([]pkg.PRFile{
+				{
+					Filename: "go.mod",
+					Patch:    "--- a/go.mod\n+++ b/go.mod\n@@ -1,3 +1,3 @@\n-\tgo 1.26.5\n+\tgo 1.26.6\n",
+				},
+			}, nil)
+			ghClient.AddLabelReturns(errors.New("label write failed"))
+			ghClient.SearchPRsReturns(pkg.SearchResult{
+				PullRequests:  []pkg.PullRequest{pr},
+				RateRemaining: 100,
+			}, nil)
+			createSender.SendCommandReturns(nil)
+
+			w := newTestWatcherWithMechanicalOverride(
+				ghClient,
+				createSender,
+				cursorPath,
+				startTime,
+				fakeMetrics,
+				trustBot,
+				"auto-merge",
+				[]string{"ben-s-go-updater-dev[bot]"},
+				"",
+			)
+			Expect(w.Poll(ctx)).NotTo(HaveOccurred())
+
+			Expect(ghClient.AddLabelCallCount()).To(Equal(1))
+			Expect(ghClient.EnableAutoMergeCallCount()).To(Equal(0))
+			Expect(createSender.SendCommandCallCount()).To(Equal(1))
+			_, cmd := createSender.SendCommandArgsForCall(0)
+			Expect(cmd.Frontmatter["task_type"]).To(Equal("pr-review"))
+		})
+
+		It("enable auto-merge fails -> override still published", func() {
+			pr := pkg.PullRequest{
+				Number:      10,
+				Owner:       "bborbe",
+				Repo:        "repo",
+				Title:       "bump deps",
+				HTMLURL:     "https://github.com/bborbe/repo/pull/10",
+				AuthorLogin: "ben-s-go-updater-dev[bot]",
+				IsDraft:     false,
+				UpdatedAt:   libtime.DateTime(time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC)),
+			}
+			trustBot := trust.NewAuthorAllowlist([]string{"ben-s-go-updater-dev[bot]"})
+			optedIn := maintainerconfig.MaintainerConfig{
+				AutoMerge:  maintainerconfig.AutoMergeConfig{Trivial: true},
+				PrReviewer: maintainerconfig.PrReviewerConfig{AutoApprove: true},
+			}
+			ghClient.GetPRDetailsReturns(pkg.PRDetails{
+				HeadSHA:  "deadbeef",
+				CloneURL: "https://github.com/bborbe/repo.git",
+				BaseRef:  "master",
+			}, nil)
+			ghClient.GetMaintainerConfigReturns(optedIn, nil)
+			ghClient.ListPRFilesReturns([]pkg.PRFile{
+				{
+					Filename: "go.mod",
+					Patch:    "--- a/go.mod\n+++ b/go.mod\n@@ -1,3 +1,3 @@\n-\tgo 1.26.5\n+\tgo 1.26.6\n",
+				},
+			}, nil)
+			ghClient.AddLabelReturns(nil)
+			ghClient.EnableAutoMergeReturns(errors.New("clean status"))
+			ghClient.SearchPRsReturns(pkg.SearchResult{
+				PullRequests:  []pkg.PullRequest{pr},
+				RateRemaining: 100,
+			}, nil)
+			createSender.SendCommandReturns(nil)
+
+			w := newTestWatcherWithMechanicalOverride(
+				ghClient,
+				createSender,
+				cursorPath,
+				startTime,
+				fakeMetrics,
+				trustBot,
+				"auto-merge",
+				[]string{"ben-s-go-updater-dev[bot]"},
+				"",
+			)
+			Expect(w.Poll(ctx)).NotTo(HaveOccurred())
+
+			Expect(ghClient.EnableAutoMergeCallCount()).To(Equal(1))
+			Expect(createSender.SendCommandCallCount()).To(Equal(1))
+			_, cmd := createSender.SendCommandArgsForCall(0)
+			Expect(cmd.Frontmatter["task_type"]).To(Equal("pr-override"))
+			Expect(cmd.Frontmatter["override_reason"]).To(Equal("trivial-bot-bump"))
+		})
+
+		It("pre-labeled qualifying bump -> no second label or arming", func() {
+			pr := pkg.PullRequest{
+				Number:      10,
+				Owner:       "bborbe",
+				Repo:        "repo",
+				Title:       "bump deps",
+				HTMLURL:     "https://github.com/bborbe/repo/pull/10",
+				AuthorLogin: "ben-s-go-updater-dev[bot]",
+				IsDraft:     false,
+				UpdatedAt:   libtime.DateTime(time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC)),
+				Labels:      []string{"auto-merge"},
+			}
+			trustBot := trust.NewAuthorAllowlist([]string{"ben-s-go-updater-dev[bot]"})
+			optedIn := maintainerconfig.MaintainerConfig{
+				AutoMerge:  maintainerconfig.AutoMergeConfig{Trivial: true},
+				PrReviewer: maintainerconfig.PrReviewerConfig{AutoApprove: true},
+			}
+			ghClient.GetPRDetailsReturns(pkg.PRDetails{
+				HeadSHA:  "deadbeef",
+				CloneURL: "https://github.com/bborbe/repo.git",
+				BaseRef:  "master",
+			}, nil)
+			ghClient.GetMaintainerConfigReturns(optedIn, nil)
+			ghClient.ListPRFilesReturns([]pkg.PRFile{
+				{
+					Filename: "go.mod",
+					Patch:    "--- a/go.mod\n+++ b/go.mod\n@@ -1,3 +1,3 @@\n-\tgo 1.26.5\n+\tgo 1.26.6\n",
+				},
+			}, nil)
+			ghClient.SearchPRsReturns(pkg.SearchResult{
+				PullRequests:  []pkg.PullRequest{pr},
+				RateRemaining: 100,
+			}, nil)
+			createSender.SendCommandReturns(nil)
+
+			w := newTestWatcherWithMechanicalOverride(
+				ghClient,
+				createSender,
+				cursorPath,
+				startTime,
+				fakeMetrics,
+				trustBot,
+				"auto-merge",
+				[]string{"ben-s-go-updater-dev[bot]"},
+				"",
+			)
+			Expect(w.Poll(ctx)).NotTo(HaveOccurred())
+
+			Expect(ghClient.AddLabelCallCount()).To(Equal(0))
+			// The one call comes from the earlier tryAutoMerge, not the mechanical path.
+			Expect(ghClient.EnableAutoMergeCallCount()).To(Equal(1))
+			Expect(createSender.SendCommandCallCount()).To(Equal(1))
+			_, cmd := createSender.SendCommandArgsForCall(0)
+			Expect(cmd.Frontmatter["task_type"]).To(Equal("pr-override"))
+		})
+	})
+
 	Describe("unreviewed scan wiring", func() {
 		// newWiringWatcher builds a watcher with a mock scanner, so the
 		// Poll→Scan call is observable. The newTestWatcher* helpers hard-code a
@@ -2179,6 +2786,7 @@ var _ = Describe("pkg.Watcher", func() {
 				"",
 				"",
 				false,
+				nil,
 				trust.NewAuthorAllowlist([]string{"alice"}),
 				scanner,
 			)

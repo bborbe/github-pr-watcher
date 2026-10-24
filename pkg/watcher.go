@@ -69,6 +69,19 @@ type TaskPublisher interface {
 		taskIDStr string,
 		details PRDetails,
 	) (handled, emitted bool)
+	// PublishMechanicalOverride publishes the mechanical `pr-override` task for
+	// a qualifying trivial bot bump. The caller (the watcher's mechanical gate)
+	// has already evaluated the author list, trust, the repo's two opt-in flags
+	// and the file classifier, so this method performs no trust check of its
+	// own. Returns true when the command was sent; false when the send failed,
+	// in which case the caller records nothing so the emission is retried on
+	// the next poll.
+	PublishMechanicalOverride(
+		ctx context.Context,
+		pr PullRequest,
+		taskIDStr string,
+		details PRDetails,
+	) bool
 }
 
 // NewTaskPublisher returns a TaskPublisher that performs trust evaluation
@@ -256,6 +269,39 @@ func (p *taskPublisher) PublishOverride(
 	return true, true
 }
 
+// PublishMechanicalOverride implements TaskPublisher. The watcher's mechanical
+// gate has already evaluated every qualifying condition, so this method only
+// builds and sends the command — there is no second trust check.
+func (p *taskPublisher) PublishMechanicalOverride(
+	ctx context.Context,
+	pr PullRequest,
+	taskIDStr string,
+	details PRDetails,
+) bool {
+	cmd := BuildMechanicalOverrideCommand(
+		pr,
+		details,
+		taskIDStr,
+		p.cfg.Stage,
+		p.cfg.MaxSlugLen,
+		p.cfg.MaxTitleLen,
+		p.cfg.TaskSuffix,
+		p.cfg.TargetVault,
+	)
+
+	if err := p.createSender.SendCommand(ctx, cmd); err != nil {
+		glog.Errorf("publish mechanical override task failed pr=%s err=%v", pr.HTMLURL, err)
+		p.metrics.IncPRPublished("error")
+		return false
+	}
+	// Deliberately not V-gated: the spec's post-deploy check greps for this
+	// line, so it must be emitted at the default log level.
+	glog.Infof("mechanical override pr=%s/%s#%d sha=%s rule=%s",
+		pr.Owner, pr.Repo, pr.Number, details.HeadSHA, overrideReasonTrivialBotBump)
+	p.metrics.IncPRPublished("override_mechanical")
+	return true
+}
+
 // NewWatcher returns a Watcher that polls GitHub and publishes commands.
 func NewWatcher(
 	ghClient GitHubClient,
@@ -269,23 +315,25 @@ func NewWatcher(
 	overrideLabel string,
 	autoMergeLabel string,
 	trivialAutoMergeEnabled bool,
+	mechanicalOverrideAuthors []string,
 	trustDecision trust.Trust,
 	unreviewedScanner UnreviewedScanner,
 ) Watcher {
 	return &watcher{
-		ghClient:                ghClient,
-		publisher:               publisher,
-		metrics:                 metrics,
-		cursorPath:              cursorPath,
-		startTime:               startTime,
-		scope:                   scope,
-		taskCreationFilter:      taskCreationFilter,
-		sideEffectFilter:        sideEffectFilter,
-		overrideLabel:           overrideLabel,
-		autoMergeLabel:          autoMergeLabel,
-		trivialAutoMergeEnabled: trivialAutoMergeEnabled,
-		trustDecision:           trustDecision,
-		unreviewedScanner:       unreviewedScanner,
+		ghClient:                  ghClient,
+		publisher:                 publisher,
+		metrics:                   metrics,
+		cursorPath:                cursorPath,
+		startTime:                 startTime,
+		scope:                     scope,
+		taskCreationFilter:        taskCreationFilter,
+		sideEffectFilter:          sideEffectFilter,
+		overrideLabel:             overrideLabel,
+		autoMergeLabel:            autoMergeLabel,
+		trivialAutoMergeEnabled:   trivialAutoMergeEnabled,
+		mechanicalOverrideAuthors: mechanicalOverrideAuthors,
+		trustDecision:             trustDecision,
+		unreviewedScanner:         unreviewedScanner,
 	}
 }
 
@@ -317,8 +365,19 @@ type watcher struct {
 	// mechanically trivial (stage-1 allow-list; the LLM stage-2 fallback is a
 	// follow-up), the watcher applies the auto-merge label itself instead of
 	// waiting for the author to. Off by default; the flag is the fleet-wide
-	// kill switch in addition to the per-repo `.maintainer.yaml` gate.
+	// kill switch for the LABELLING path in addition to the per-repo
+	// `.maintainer.yaml` gate. It does not govern the mechanical override:
+	// that path labels and arms itself, and its only switch is an empty
+	// MECHANICAL_OVERRIDE_AUTHORS list — an operator stopping mechanical
+	// approvals in an incident must empty that list, not clear this flag.
 	trivialAutoMergeEnabled bool
+	// mechanicalOverrideAuthors is the exact, case-sensitive set of GitHub
+	// logins that may be approved without an LLM review when the repo has
+	// opted in. It is NOT BOT_ALLOWLIST (which means "skip entirely") and NOT
+	// the trusted-authors list (which means "may be reviewed and may be
+	// armed"). Empty means nobody qualifies — the off switch, with no
+	// separate enable flag.
+	mechanicalOverrideAuthors []string
 	// trustDecision gates auto-merge arming to trusted authors (the label
 	// alone is insufficient — an untrusted author must not be able to opt
 	// any PR into auto-merge).
@@ -684,6 +743,13 @@ func (w *watcher) processPR(
 		return pr.UpdatedAt, true
 	}
 
+	// Mechanical override: a qualifying trivial bot bump gets an approve instead
+	// of a review for this SHA. Emitting both would race — a review could post
+	// CHANGES_REQUESTED after the override's APPROVE and re-block merge.
+	if w.tryMechanicalOverride(ctx, pr, details, cursorState.HeadSHAs, newHeadSHAs) {
+		return pr.UpdatedAt, true
+	}
+
 	taskIDStr := DeriveTaskID(pr.Owner, pr.Repo, pr.Number, details.HeadSHA).String()
 
 	if _, exists := cursorState.HeadSHAs[taskIDStr]; exists {
@@ -743,6 +809,94 @@ func (w *watcher) tryOverride(
 		newHeadSHAs[overrideID] = details.HeadSHA
 	}
 	return handled
+}
+
+// tryMechanicalOverride emits the mechanical override task for a qualifying
+// trivial bot bump. It returns true when the PR is handled (override emitted,
+// already emitted for this SHA, or the send failed) — the caller then skips the
+// review path for this SHA, preserving the override-only invariant that avoids
+// the APPROVE-vs-CHANGES_REQUESTED race. It returns false when the PR does not
+// qualify, so the caller falls through to the normal review.
+//
+// The override task-id is the same one tryOverride uses, so both override kinds
+// share one dedupe entry per (PR, head SHA). A failed send records nothing, so
+// the emission retries on the next poll.
+//
+// A qualifying PR is labelled with the auto-merge label and armed for
+// GitHub-native auto-merge in the same poll that publishes the approve. A
+// failed label write returns false so the caller reviews the PR this poll
+// instead — an approve never lands without its arming. A failed arming after a
+// successful label write does not change the return value: the label is
+// present, so the next poll's tryAutoMerge retries the arming.
+func (w *watcher) tryMechanicalOverride(
+	ctx context.Context,
+	pr PullRequest,
+	details PRDetails,
+	cursorHeadSHAs map[string]string,
+	newHeadSHAs map[string]string,
+) bool {
+	overrideID := DeriveTaskIDOverride(pr.Owner, pr.Repo, pr.Number, details.HeadSHA).String()
+	if _, exists := cursorHeadSHAs[overrideID]; exists {
+		glog.V(3).Infof(
+			"mechanical override already emitted, skipping pr=%s/%s#%d sha=%s",
+			pr.Owner, pr.Repo, pr.Number, details.HeadSHA,
+		)
+		newHeadSHAs[overrideID] = details.HeadSHA
+		return true
+	}
+	// Dedupe is checked before the gate: the gate costs two uncached GitHub
+	// reads, and a SHA that was already handled must not pay for them on every
+	// poll. The only ordering the design needs is label-before-publish.
+	//
+	// A SHA that already carries a review task is never overridden afterwards:
+	// a review and an override for the same commit race, and the review could
+	// post CHANGES_REQUESTED after the approve. This is reachable through a
+	// transient label-write failure on an earlier poll.
+	if _, exists := cursorHeadSHAs[DeriveTaskID(pr.Owner, pr.Repo, pr.Number, details.HeadSHA).String()]; exists {
+		glog.V(3).Infof(
+			"mechanical override skipped, review already emitted pr=%s/%s#%d sha=%s",
+			pr.Owner, pr.Repo, pr.Number, details.HeadSHA,
+		)
+		return false
+	}
+	if !w.qualifiesForMechanicalOverride(ctx, pr) {
+		return false
+	}
+	// Label and arm before publishing the approve: an approve that can never
+	// merge because nothing armed the PR is the stranded-approve failure this
+	// feature exists to remove. The gate guarantees a non-empty auto-merge
+	// label, so no second emptiness check is needed.
+	//
+	// A failed label write returns false so the caller falls through to a
+	// normal review this poll — an approve must never land without its arming.
+	// That fall-through cannot later become an override of the same SHA: the
+	// review-task cursor entry makes tryMechanicalOverride skip it.
+	// A failed arming after a successful label write is tolerated: the label is
+	// now present, so the next poll's tryAutoMerge path retries and succeeds.
+	// When the label is already present, tryAutoMerge already ran earlier in
+	// this poll and armed the PR; re-arming is skipped here for the same reason.
+	if !slices.Contains(pr.Labels, w.autoMergeLabel) {
+		if err := w.ghClient.AddLabel(
+			ctx, pr.Owner, pr.Repo, pr.Number, w.autoMergeLabel,
+		); err != nil {
+			glog.Errorf("mechanical override: add label failed pr=%s err=%v", pr.HTMLURL, err)
+			w.metrics.IncPRPublished("error")
+			return false
+		}
+		// Arm through the one arming path, so the trust check, the log line and
+		// the auto_merge counter stay in a single place. The label is present by
+		// now, which is exactly what tryAutoMerge requires. A failure here is
+		// tolerated: the label persists, so the next poll retries the arming.
+		pr.Labels = append(pr.Labels, w.autoMergeLabel)
+		w.tryAutoMerge(ctx, pr)
+	}
+	if w.publisher.PublishMechanicalOverride(ctx, pr, overrideID, details) {
+		cursorHeadSHAs[overrideID] = details.HeadSHA
+		newHeadSHAs[overrideID] = details.HeadSHA
+	}
+	// Handled whether or not the send succeeded: a failed send must not fall
+	// through to a review for this SHA, and the unset cursor retries next poll.
+	return true
 }
 
 // MergeState is a GitHub REST merge-state value, typed so a state-name typo is
@@ -1020,6 +1174,77 @@ func (w *watcher) maybeLabelTrivial(ctx context.Context, pr PullRequest) bool {
 	return true
 }
 
+// qualifiesForMechanicalOverride reports whether pr is a trivial bot bump the
+// operator has explicitly allowed to be approved without an LLM review.
+//
+// Every condition must hold, evaluated in this order with short-circuiting:
+//  1. the auto-merge label is configured — an approve that cannot be armed is
+//     the stranded-approve failure this feature exists to remove;
+//  2. the author is on the mechanical-override list (exact, case-sensitive);
+//  3. the author is trusted;
+//  4. the repo opted in via both `.maintainer.yaml` flags
+//     (`autoMerge.trivial` and `prReviewer.autoApprove`);
+//  5. every changed file is mechanical per ClassifyTrivial.
+//
+// Conditions 1 and 2 precede every GitHub read, so a PR whose author is not on
+// the list costs no extra API call. A config or file-listing failure means
+// "does not qualify" and is counted as an error, so the PR still gets a
+// review; a trust-check error publishes nothing, exactly as the review path
+// does today. The function never mutates pr, writes to GitHub, or publishes a
+// command.
+func (w *watcher) qualifiesForMechanicalOverride(
+	ctx context.Context,
+	pr PullRequest,
+) bool {
+	if w.autoMergeLabel == "" {
+		return false
+	}
+	if !slices.Contains(w.mechanicalOverrideAuthors, pr.AuthorLogin) {
+		glog.V(3).Infof(
+			"mechanical override: author not listed pr=%s/%s#%d login=%s",
+			pr.Owner, pr.Repo, pr.Number, pr.AuthorLogin,
+		)
+		return false
+	}
+	trustResult, err := w.trustDecision.IsTrusted(ctx, trust.PR{AuthorLogin: pr.AuthorLogin})
+	if err != nil {
+		glog.Errorf("mechanical override trust check failed pr=%s err=%v", pr.HTMLURL, err)
+		return false
+	}
+	if !trustResult.Success() {
+		glog.V(2).Infof("mechanical override skipped, untrusted author pr=%s", pr.HTMLURL)
+		return false
+	}
+	cfg, err := w.ghClient.GetMaintainerConfig(ctx, pr.Owner, pr.Repo)
+	if err != nil {
+		glog.Errorf("mechanical override: get maintainer config failed pr=%s err=%v",
+			pr.HTMLURL, err)
+		w.metrics.IncPRPublished("error")
+		return false
+	}
+	if !cfg.AutoMerge.Trivial || !cfg.PrReviewer.AutoApprove {
+		glog.V(3).Infof(
+			"mechanical override: repo not opted in pr=%s/%s",
+			pr.Owner, pr.Repo,
+		)
+		return false
+	}
+	files, err := w.ghClient.ListPRFiles(ctx, pr.Owner, pr.Repo, pr.Number)
+	if err != nil {
+		glog.Errorf("mechanical override: list pr files failed pr=%s err=%v", pr.HTMLURL, err)
+		w.metrics.IncPRPublished("error")
+		return false
+	}
+	if !ClassifyTrivial(files) {
+		glog.V(3).Infof(
+			"mechanical override: not trivial pr=%s/%s#%d",
+			pr.Owner, pr.Repo, pr.Number,
+		)
+		return false
+	}
+	return true
+}
+
 // BuildCreateCommand builds a CreateTaskCommand for a PR given its details and trust result.
 // It is used by both the poll path (via PublishCreate) and the single-PR trigger handler.
 //
@@ -1161,6 +1386,29 @@ func BuildOverrideCommand(
 		Frontmatter:    buildOverrideFrontmatter(pr, taskIDStr, stage, details),
 		Body:           buildOverrideBody(pr),
 	}
+}
+
+// BuildMechanicalOverrideCommand builds the `pr-override` CreateTaskCommand for
+// a qualifying mechanical override. It reuses BuildOverrideCommand for the
+// title, task identifier, phase and clone fields — so the task path stays
+// identical to the label override and the controller's title-path dedupe
+// collapses the two — then stamps the reason and replaces the body.
+func BuildMechanicalOverrideCommand(
+	pr PullRequest,
+	details PRDetails,
+	taskIDStr string,
+	stage string,
+	maxSlugLen int,
+	maxTitleLen int,
+	taskSuffix string,
+	targetVault string,
+) task.CreateCommand {
+	cmd := BuildOverrideCommand(
+		pr, details, taskIDStr, stage, maxSlugLen, maxTitleLen, taskSuffix, targetVault,
+	)
+	cmd.Frontmatter["override_reason"] = overrideReasonTrivialBotBump
+	cmd.Body = buildMechanicalOverrideBody(pr)
+	return cmd
 }
 
 func (w *watcher) fetchPRDetails(
@@ -1391,6 +1639,30 @@ func buildOverrideBody(pr PullRequest) string {
 		"# PR Override: %s\n\n%s\n\nA trusted author applied the override label. "+
 			"The agent will post an APPROVE at head SHA so the false-positive review no longer blocks merge.\n\n"+
 			"**Repo:** [%s/%s](%s)\n",
+		pr.Title,
+		pr.HTMLURL,
+		pr.Owner,
+		pr.Repo,
+		repoLink,
+	)
+}
+
+// overrideReasonTrivialBotBump is the frontmatter `override_reason` value that
+// tells the review agent this override is mechanical: no LLM review ran, and
+// the body names the rule. It is the only reason the watcher emits today.
+const overrideReasonTrivialBotBump = "trivial-bot-bump"
+
+// buildMechanicalOverrideBody renders the body for a mechanical override. It
+// deliberately never mentions the override label: no human applied it, so
+// reusing the label wording would misreport why the approve was posted.
+func buildMechanicalOverrideBody(pr PullRequest) string {
+	repoLink := fmt.Sprintf("https://github.com/%s/%s", pr.Owner, pr.Repo)
+	return fmt.Sprintf(
+		"# PR Override: %s\n\n%s\n\nMechanical approve: this PR qualifies as a "+
+			"`trivial-bot-bump` — a bot dependency bump whose changed files are all "+
+			"mechanical. No LLM review ran. The watcher applied the auto-merge label "+
+			"and armed GitHub-native auto-merge; GitHub merges once required checks "+
+			"are green.\n\n**Repo:** [%s/%s](%s)\n",
 		pr.Title,
 		pr.HTMLURL,
 		pr.Owner,

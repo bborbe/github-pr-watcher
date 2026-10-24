@@ -43,6 +43,36 @@ var _ = Describe("Filter", func() {
 		})
 	})
 
+	Describe("ParseMechanicalOverrideAuthors", func() {
+		It("returns nil for empty string", func() {
+			Expect(pkg.ParseMechanicalOverrideAuthors("")).To(BeNil())
+		})
+
+		It("returns single entry", func() {
+			Expect(
+				pkg.ParseMechanicalOverrideAuthors("ben-s-go-updater-dev[bot]"),
+			).To(Equal([]string{"ben-s-go-updater-dev[bot]"}))
+		})
+
+		It("returns multiple comma-separated entries trimmed", func() {
+			Expect(
+				pkg.ParseMechanicalOverrideAuthors("alice , ben-s-go-updater-dev[bot]"),
+			).To(Equal([]string{"alice", "ben-s-go-updater-dev[bot]"}))
+		})
+
+		It("filters out whitespace-only entries", func() {
+			Expect(
+				pkg.ParseMechanicalOverrideAuthors("alice,  ,bob"),
+			).To(Equal([]string{"alice", "bob"}))
+		})
+
+		It("filters out trailing empty entry from trailing comma", func() {
+			Expect(
+				pkg.ParseMechanicalOverrideAuthors("alice,"),
+			).To(Equal([]string{"alice"}))
+		})
+	})
+
 	Describe("ParseTrustedAuthors", func() {
 		It("returns nil for empty string", func() {
 			Expect(pkg.ParseTrustedAuthors("")).To(BeNil())

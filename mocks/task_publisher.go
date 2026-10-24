@@ -26,6 +26,20 @@ type TaskPublisher struct {
 	publishCreateReturnsOnCall map[int]struct {
 		result1 bool
 	}
+	PublishMechanicalOverrideStub        func(context.Context, pkg.PullRequest, string, pkg.PRDetails) bool
+	publishMechanicalOverrideMutex       sync.RWMutex
+	publishMechanicalOverrideArgsForCall []struct {
+		arg1 context.Context
+		arg2 pkg.PullRequest
+		arg3 string
+		arg4 pkg.PRDetails
+	}
+	publishMechanicalOverrideReturns struct {
+		result1 bool
+	}
+	publishMechanicalOverrideReturnsOnCall map[int]struct {
+		result1 bool
+	}
 	PublishOverrideStub        func(context.Context, pkg.PullRequest, string, pkg.PRDetails) (bool, bool)
 	publishOverrideMutex       sync.RWMutex
 	publishOverrideArgsForCall []struct {
@@ -106,6 +120,70 @@ func (fake *TaskPublisher) PublishCreateReturnsOnCall(i int, result1 bool) {
 		})
 	}
 	fake.publishCreateReturnsOnCall[i] = struct {
+		result1 bool
+	}{result1}
+}
+
+func (fake *TaskPublisher) PublishMechanicalOverride(arg1 context.Context, arg2 pkg.PullRequest, arg3 string, arg4 pkg.PRDetails) bool {
+	fake.publishMechanicalOverrideMutex.Lock()
+	ret, specificReturn := fake.publishMechanicalOverrideReturnsOnCall[len(fake.publishMechanicalOverrideArgsForCall)]
+	fake.publishMechanicalOverrideArgsForCall = append(fake.publishMechanicalOverrideArgsForCall, struct {
+		arg1 context.Context
+		arg2 pkg.PullRequest
+		arg3 string
+		arg4 pkg.PRDetails
+	}{arg1, arg2, arg3, arg4})
+	stub := fake.PublishMechanicalOverrideStub
+	fakeReturns := fake.publishMechanicalOverrideReturns
+	fake.recordInvocation("PublishMechanicalOverride", []interface{}{arg1, arg2, arg3, arg4})
+	fake.publishMechanicalOverrideMutex.Unlock()
+	if stub != nil {
+		return stub(arg1, arg2, arg3, arg4)
+	}
+	if specificReturn {
+		return ret.result1
+	}
+	return fakeReturns.result1
+}
+
+func (fake *TaskPublisher) PublishMechanicalOverrideCallCount() int {
+	fake.publishMechanicalOverrideMutex.RLock()
+	defer fake.publishMechanicalOverrideMutex.RUnlock()
+	return len(fake.publishMechanicalOverrideArgsForCall)
+}
+
+func (fake *TaskPublisher) PublishMechanicalOverrideCalls(stub func(context.Context, pkg.PullRequest, string, pkg.PRDetails) bool) {
+	fake.publishMechanicalOverrideMutex.Lock()
+	defer fake.publishMechanicalOverrideMutex.Unlock()
+	fake.PublishMechanicalOverrideStub = stub
+}
+
+func (fake *TaskPublisher) PublishMechanicalOverrideArgsForCall(i int) (context.Context, pkg.PullRequest, string, pkg.PRDetails) {
+	fake.publishMechanicalOverrideMutex.RLock()
+	defer fake.publishMechanicalOverrideMutex.RUnlock()
+	argsForCall := fake.publishMechanicalOverrideArgsForCall[i]
+	return argsForCall.arg1, argsForCall.arg2, argsForCall.arg3, argsForCall.arg4
+}
+
+func (fake *TaskPublisher) PublishMechanicalOverrideReturns(result1 bool) {
+	fake.publishMechanicalOverrideMutex.Lock()
+	defer fake.publishMechanicalOverrideMutex.Unlock()
+	fake.PublishMechanicalOverrideStub = nil
+	fake.publishMechanicalOverrideReturns = struct {
+		result1 bool
+	}{result1}
+}
+
+func (fake *TaskPublisher) PublishMechanicalOverrideReturnsOnCall(i int, result1 bool) {
+	fake.publishMechanicalOverrideMutex.Lock()
+	defer fake.publishMechanicalOverrideMutex.Unlock()
+	fake.PublishMechanicalOverrideStub = nil
+	if fake.publishMechanicalOverrideReturnsOnCall == nil {
+		fake.publishMechanicalOverrideReturnsOnCall = make(map[int]struct {
+			result1 bool
+		})
+	}
+	fake.publishMechanicalOverrideReturnsOnCall[i] = struct {
 		result1 bool
 	}{result1}
 }

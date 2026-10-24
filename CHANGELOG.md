@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+- feat: mechanically approve trivial bot dependency bumps on opted-in repos, replacing the LLM review for that change class. A pull request qualifies when its author is on `MECHANICAL_OVERRIDE_AUTHORS`, the author is trusted, the repo's `.maintainer.yaml` carries `autoMerge.trivial` + `prReviewer.autoApprove`, and every changed file is mechanical; a qualifying PR gets the auto-merge label, has native auto-merge armed, and receives one `pr-override` task carrying `override_reason: trivial-bot-bump` and a body naming the rule and stating that no LLM review ran — deduplicated per (PR, head SHA) on the existing override cursor entry, never alongside a review task for that SHA, retried next poll when the send fails, and recorded under the new `override_mechanical` label on `github_pr_watcher_prs_total` (pre-created at zero). A PR carrying the override label keeps the label override, which takes precedence
+- fix: classify a dependency bump whose only changes are paired go.sum hash lines, go.mod version lines and an appended CHANGELOG line as trivial
+- feat: classify a single-hash homebrew cask bump whose only changes are one paired `version` line and one paired `sha256` line as trivial, while multi-architecture casks and any other cask edit stay non-mechanical
+
 ## v0.14.3
 
 - chore: update Go to 1.27.3 and github.com/bborbe/agent to v0.112.0, github.com/bborbe/kafka to v1.28.4, github.com/bborbe/maintainer to v0.50.12, github.com/bborbe/sentry to v1.10.5, github.com/bborbe/service to v1.11.0, github.com/bborbe/time to v1.27.17, github.com/bborbe/validation to v1.5.5
