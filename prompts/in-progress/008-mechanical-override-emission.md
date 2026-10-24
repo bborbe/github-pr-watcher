@@ -1,7 +1,8 @@
 ---
-spec: ["002-mechanical-approve-trivial-bot-bumps"]
-status: draft
+status: approved
+spec: [002-mechanical-approve-trivial-bot-bumps]
 created: "2026-10-24T08:31:00Z"
+queued: "2026-10-24T09:13:04Z"
 ---
 
 # Publish one mechanical `pr-override` task for a qualifying trivial bot bump
@@ -176,7 +177,7 @@ func (w *watcher) tryMechanicalOverride(
    - `It("dedupe per head SHA", ...)` — poll once (one command), poll again with the same details (still one command), then `ghClient.GetPRDetailsReturns(pkg.PRDetails{HeadSHA: "cafebabe", CloneURL: "https://github.com/bborbe/repo.git", BaseRef: "master"}, nil)` and poll a third time (two commands). Assert the second command's `Frontmatter["ref"]` is `"cafebabe"` and its `task_identifier` equals `pkg.DeriveTaskIDOverride("bborbe", "repo", 10, "cafebabe").String()`.
    - `It("emitting poll records override_mechanical", ...)` — one poll on a qualifying PR. Iterate `fakeMetrics.IncPRPublishedCallCount()` and `fakeMetrics.IncPRPublishedArgsForCall(i)`, counting occurrences of `"override_mechanical"`; assert the count is exactly `1`.
 
-   Add a sibling entry OUTSIDE the `Mechanical override for trivial bot bumps` container, in the `Describe("Mechanical override error paths")` container the previous prompt created, so the spec's focused set stays exactly the named entries:
+   Add a sibling entry OUTSIDE the `Mechanical override for trivial bot bumps` container, in the `Describe("Gate error paths")` container the previous prompt created (its name deliberately avoids the focus words `Mechanical override`, so the spec's focused run still selects only its named entries):
    - `It("send fails -> override retried, no review", ...)` — set `createSender.SendCommandReturnsOnCall(0, errors.New("kafka down"))`, poll once, assert `SendCommandCallCount()` is `1` and that call's `Frontmatter["task_type"]` is `"pr-override"` (no review fallback); then `createSender.SendCommandReturns(nil)`, poll again, assert a second send whose `Frontmatter["task_type"]` is `"pr-override"` — the retry proves no cursor entry was recorded on the failure.
 
 11. **Do not change** `PublishOverride`, `BuildOverrideCommand`, `buildOverrideFrontmatter`, `buildOverrideBody`, `tryOverride`, or `buildFrontmatter`. The label path must keep its body and must keep having no `override_reason` key.
@@ -193,6 +194,8 @@ func (w *watcher) tryMechanicalOverride(
 - **No trust check in `PublishMechanicalOverride`.** The gate owns it; a second check would be a second source of truth.
 - **`override_mechanical` is registered at zero** in `pkg/metrics.go`'s `init()` list, alongside the other `command` labels.
 - **No label write and no arming in this prompt.** The next prompt in this series adds them.
+- **Prompts 2 and 3 ship in one release.** This prompt publishes an approve that prompt 3 arms. Do not deploy, merge or release between them: an approve with nothing armed is the stranded-approve failure this feature removes.
+- **The webhook / single-PR trigger path is out of scope.** `pkg/command/trigger_pr_review_executor.go` publishes reviews via `BuildCreateCommand` and does not consult this gate, exactly as it does not consult the override label today. The mechanical override is a poll-loop behaviour. If the stage registers the `pull_request` webhook, a review task may coexist with the override for the same SHA — the same accepted noise the spec's failure-mode table records for the unreviewed scanner. Do not add a gate there in this prompt.
 - Do not hand-edit any file under `mocks/`; regenerate with `ROOTDIR=/workspace make generate`.
 - Do not run `go mod tidy`, `go get`, or `go mod vendor`.
 - **Release ordering (operator-side, per stage).** Deploy `bborbe/github-pr-review-agent` PR #53 (which understands `override_reason: trivial-bot-bump`) before the watcher, and ship the `go.sum` classifier change in the same watcher release — without it `ClassifyTrivial` rejects every real bump and this feature stays dark. Do not change `pkg/trivial.go` here.
@@ -203,7 +206,7 @@ func (w *watcher) tryMechanicalOverride(
 <verification>
 Run `ROOTDIR=/workspace make precommit` — must pass with exit code 0.
 
-Then run the focused spec run and confirm the three positive entries above are listed and 0 failures:
+Then run the focused spec run and confirm the four entries above are listed and 0 failures:
 
 ```
 go test -mod=mod ./pkg/ -v -ginkgo.focus='Mechanical override'

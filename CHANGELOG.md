@@ -7,6 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+- feat: add `MECHANICAL_OVERRIDE_AUTHORS` and the six-condition qualification gate that proves a pull request is a trivial bot bump the operator has approved for review-free approval (author listed, author trusted, repo opted in via `.maintainer.yaml` `autoMerge.trivial` + `prReviewer.autoApprove`, all changed files mechanical); a qualifying PR still receives the normal review — the approve emission ships separately
 - fix: classify a dependency bump whose only changes are paired go.sum hash lines, go.mod version lines and an appended CHANGELOG line as trivial
 
 ## v0.14.3

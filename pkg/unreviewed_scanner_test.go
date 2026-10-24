@@ -407,7 +407,7 @@ var _ = Describe("pkg.UnreviewedScanner", func() {
 		publisher := new(mocks.TaskPublisher)
 		w := pkg.NewWatcher(
 			ghClient, publisher, fakeMetrics, cursorPath, now, "bborbe",
-			defaultFilter(), defaultFilter(), "override-review", "", false,
+			defaultFilter(), defaultFilter(), "override-review", "", false, nil,
 			trustAlice(), scanner,
 		)
 

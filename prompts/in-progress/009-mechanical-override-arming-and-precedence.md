@@ -1,8 +1,8 @@
 ---
-status: draft
-spec: ["002-mechanical-approve-trivial-bot-bumps"]
+status: approved
+spec: [002-mechanical-approve-trivial-bot-bumps]
 created: "2026-10-24T08:32:00Z"
-branch: dark-factory/mechanical-approve-trivial-bot-bumps
+queued: "2026-10-24T09:13:04Z"
 ---
 
 # Arm auto-merge in the mechanical-override poll and keep the label override in front
@@ -35,7 +35,7 @@ Read these coding-plugin docs (in-container paths):
 Read these source files fully before writing code:
 - `pkg/watcher.go` — `tryMechanicalOverride` (the function you extend), `tryOverride`, `maybeLabelTrivial` (the existing `AddLabel` call shape and its error handling), `tryAutoMerge` (the existing `EnableAutoMerge` call shape and its metrics), `processPR` (the side-effect ordering: `trySupersedeDepBump` → `tryUpdateBranch` → `tryAutoMerge` → `tryOverride` → `tryMechanicalOverride`), and `buildOverrideBody`.
 - `pkg/githubclient.go` — `AddLabel` and `EnableAutoMerge` doc comments (both require Pull requests: Write; re-arming an already-armed PR succeeds; arming a clean PR fails with UNPROCESSABLE).
-- `pkg/watcher_test.go` — the `Describe("Mechanical override for trivial bot bumps")` and `Describe("Mechanical override error paths")` containers, the `newTestWatcherWithMechanicalOverride` helper, and `Describe("override label")` (the label-path assertions to mirror).
+- `pkg/watcher_test.go` — the `Describe("Mechanical override for trivial bot bumps")` and `Describe("Gate error paths")` containers, the `newTestWatcherWithMechanicalOverride` helper, and `Describe("override label")` (the label-path assertions to mirror).
 - `README.md` — the `## Environment Variables` table (the `AUTO_MERGE_LABEL` row is the neighbour to add after) and the `## Auto-merge arming window` section (the new section goes before it).
 - `CHANGELOG.md` — the preamble and the top version heading.
 </context>
@@ -67,7 +67,7 @@ Read these source files fully before writing code:
    - **Label already present** → neither call. `tryAutoMerge` already ran earlier in this same poll with that label present and armed the PR (or logged its failure); a second arming would be a redundant API call and can fail with UNPROCESSABLE on an already-clean PR.
    - Do not add a new metric label for the label write or the arming. The next poll's `tryAutoMerge` already counts `auto_merge`, and the emission itself counts `override_mechanical`.
 
-2. **Keep the rest of `tryMechanicalOverride` unchanged**: gate first, then dedupe, then label/arm, then `PublishMechanicalOverride`, recording both cursor maps only when the send succeeded, and returning `true` once the gate qualified (so no review is published for that SHA).
+2. **Keep the rest of `tryMechanicalOverride` unchanged**: gate first, then dedupe, then label/arm, then `PublishMechanicalOverride`, recording both cursor maps only when the send succeeded. Return `true` once the gate qualified **and** the label write (when one was needed) succeeded, so no review is published for that SHA; return `false` on an `AddLabel` failure so the caller falls through to a normal review this poll (requirement 1). A failed `EnableAutoMerge` after a successful label write does **not** change the return value — the override is still published and the next poll's `tryAutoMerge` retries the arming.
 
 3. **Tests — `pkg/watcher_test.go`.** Add exactly these entries with these exact names inside the existing `Describe("Mechanical override for trivial bot bumps")` container, reusing `newTestWatcherWithMechanicalOverride` and its fixtures:
 
@@ -85,7 +85,7 @@ Read these source files fully before writing code:
 
      Note on the helper: the previous prompt's `newTestWatcherWithMechanicalOverride` does not take an override label. Extend it with a final `overrideLabel string` parameter (pass `""` in every existing call) and pass it through to `pkg.NewWatcher` in the `overrideLabel` position. Do not add a second helper.
 
-   Add these entries OUTSIDE the `Mechanical override for trivial bot bumps` container, in the existing `Describe("Mechanical override error paths")` container, so the spec's focused set stays exactly its named entries:
+   Add these entries OUTSIDE the `Mechanical override for trivial bot bumps` container, in the existing `Describe("Gate error paths")` container (its name deliberately avoids the focus words `Mechanical override`, so the spec's focused run still selects only its named entries):
    - `It("add label fails -> review only", ...)` — qualifying PR, `ghClient.AddLabelReturns(errors.New("label write failed"))`. Assert `Expect(ghClient.AddLabelCallCount()).To(Equal(1))`, `Expect(ghClient.EnableAutoMergeCallCount()).To(Equal(0))`, `Expect(createSender.SendCommandCallCount()).To(Equal(1))` and that the command is a `pr-review` — the pull request falls back to a review this poll.
    - `It("enable auto-merge fails -> override still published", ...)` — qualifying PR, `ghClient.AddLabelReturns(nil)`, `ghClient.EnableAutoMergeReturns(errors.New("clean status"))`. Assert `Expect(ghClient.EnableAutoMergeCallCount()).To(Equal(1))`, `Expect(createSender.SendCommandCallCount()).To(Equal(1))` and the command is a `pr-override` with `Frontmatter["override_reason"] == "trivial-bot-bump"`.
    - `It("pre-labeled qualifying bump -> no second label or arming", ...)` — qualifying PR whose `Labels` already contains `"auto-merge"`. Assert `Expect(ghClient.AddLabelCallCount()).To(Equal(0))`, `Expect(ghClient.EnableAutoMergeCallCount()).To(Equal(1))` (the earlier `tryAutoMerge` call, not a second one), and the override is still published.
@@ -147,10 +147,5 @@ grep -n 'Mechanical override for trivial bot bumps' README.md
 grep -n 'trivial-bot-bump' CHANGELOG.md
 ```
 
-And confirm the label path still has no reason field and the mechanical path still arms nothing when the label is present (source-level check):
-
-```
-grep -n 'override_reason' pkg/watcher.go
-grep -n 'EnableAutoMerge' pkg/watcher.go
-```
+The label-path and already-labelled assertions are covered by the entries `override label present -> label override only` and `pre-labeled qualifying bump -> no second label or arming` in the focused run above; no separate source-level grep is needed.
 </verification>

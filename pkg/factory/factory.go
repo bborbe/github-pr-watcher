@@ -72,6 +72,7 @@ func CreateWatcher(
 	overrideLabel string,
 	autoMergeLabel string,
 	trivialAutoMergeEnabled bool,
+	mechanicalOverrideAuthors []string,
 	unreviewedConfig pkg.UnreviewedConfig,
 	currentDateTime libtime.CurrentDateTimeGetter,
 ) pkg.Watcher {
@@ -115,6 +116,7 @@ func CreateWatcher(
 		overrideLabel,
 		autoMergeLabel,
 		trivialAutoMergeEnabled,
+		mechanicalOverrideAuthors,
 		trustDecision,
 		unreviewedScanner,
 	)

@@ -269,23 +269,25 @@ func NewWatcher(
 	overrideLabel string,
 	autoMergeLabel string,
 	trivialAutoMergeEnabled bool,
+	mechanicalOverrideAuthors []string,
 	trustDecision trust.Trust,
 	unreviewedScanner UnreviewedScanner,
 ) Watcher {
 	return &watcher{
-		ghClient:                ghClient,
-		publisher:               publisher,
-		metrics:                 metrics,
-		cursorPath:              cursorPath,
-		startTime:               startTime,
-		scope:                   scope,
-		taskCreationFilter:      taskCreationFilter,
-		sideEffectFilter:        sideEffectFilter,
-		overrideLabel:           overrideLabel,
-		autoMergeLabel:          autoMergeLabel,
-		trivialAutoMergeEnabled: trivialAutoMergeEnabled,
-		trustDecision:           trustDecision,
-		unreviewedScanner:       unreviewedScanner,
+		ghClient:                  ghClient,
+		publisher:                 publisher,
+		metrics:                   metrics,
+		cursorPath:                cursorPath,
+		startTime:                 startTime,
+		scope:                     scope,
+		taskCreationFilter:        taskCreationFilter,
+		sideEffectFilter:          sideEffectFilter,
+		overrideLabel:             overrideLabel,
+		autoMergeLabel:            autoMergeLabel,
+		trivialAutoMergeEnabled:   trivialAutoMergeEnabled,
+		mechanicalOverrideAuthors: mechanicalOverrideAuthors,
+		trustDecision:             trustDecision,
+		unreviewedScanner:         unreviewedScanner,
 	}
 }
 
@@ -319,6 +321,13 @@ type watcher struct {
 	// waiting for the author to. Off by default; the flag is the fleet-wide
 	// kill switch in addition to the per-repo `.maintainer.yaml` gate.
 	trivialAutoMergeEnabled bool
+	// mechanicalOverrideAuthors is the exact, case-sensitive set of GitHub
+	// logins that may be approved without an LLM review when the repo has
+	// opted in. It is NOT BOT_ALLOWLIST (which means "skip entirely") and NOT
+	// the trusted-authors list (which means "may be reviewed and may be
+	// armed"). Empty means nobody qualifies — the off switch, with no
+	// separate enable flag.
+	mechanicalOverrideAuthors []string
 	// trustDecision gates auto-merge arming to trusted authors (the label
 	// alone is insufficient — an untrusted author must not be able to opt
 	// any PR into auto-merge).
@@ -684,6 +693,16 @@ func (w *watcher) processPR(
 		return pr.UpdatedAt, true
 	}
 
+	// Mechanical override gate: a qualifying trivial bot bump will be approved
+	// without an LLM review. The emission ships in the next prompt in this
+	// series; evaluating the gate here keeps its negative paths observable now.
+	if w.qualifiesForMechanicalOverride(ctx, pr) {
+		glog.V(2).Infof(
+			"mechanical override gate passed pr=%s/%s#%d sha=%s",
+			pr.Owner, pr.Repo, pr.Number, details.HeadSHA,
+		)
+	}
+
 	taskIDStr := DeriveTaskID(pr.Owner, pr.Repo, pr.Number, details.HeadSHA).String()
 
 	if _, exists := cursorState.HeadSHAs[taskIDStr]; exists {
@@ -1017,6 +1036,77 @@ func (w *watcher) maybeLabelTrivial(ctx context.Context, pr PullRequest) bool {
 	}
 	glog.V(2).Infof("trivial auto-merge: labeled pr=%s/%s#%d", pr.Owner, pr.Repo, pr.Number)
 	w.metrics.IncPRPublished("auto_merge_labeled")
+	return true
+}
+
+// qualifiesForMechanicalOverride reports whether pr is a trivial bot bump the
+// operator has explicitly allowed to be approved without an LLM review.
+//
+// Every condition must hold, evaluated in this order with short-circuiting:
+//  1. the auto-merge label is configured — an approve that cannot be armed is
+//     the stranded-approve failure this feature exists to remove;
+//  2. the author is on the mechanical-override list (exact, case-sensitive);
+//  3. the author is trusted;
+//  4. the repo opted in via both `.maintainer.yaml` flags
+//     (`autoMerge.trivial` and `prReviewer.autoApprove`);
+//  5. every changed file is mechanical per ClassifyTrivial.
+//
+// Conditions 1 and 2 precede every GitHub read, so a PR whose author is not on
+// the list costs no extra API call. A config or file-listing failure means
+// "does not qualify" and is counted as an error, so the PR still gets a
+// review; a trust-check error publishes nothing, exactly as the review path
+// does today. The function never mutates pr, writes to GitHub, or publishes a
+// command.
+func (w *watcher) qualifiesForMechanicalOverride(
+	ctx context.Context,
+	pr PullRequest,
+) bool {
+	if w.autoMergeLabel == "" {
+		return false
+	}
+	if !slices.Contains(w.mechanicalOverrideAuthors, pr.AuthorLogin) {
+		glog.V(3).Infof(
+			"mechanical override: author not listed pr=%s/%s#%d login=%s",
+			pr.Owner, pr.Repo, pr.Number, pr.AuthorLogin,
+		)
+		return false
+	}
+	trustResult, err := w.trustDecision.IsTrusted(ctx, trust.PR{AuthorLogin: pr.AuthorLogin})
+	if err != nil {
+		glog.Errorf("mechanical override trust check failed pr=%s err=%v", pr.HTMLURL, err)
+		return false
+	}
+	if !trustResult.Success() {
+		glog.V(2).Infof("mechanical override skipped, untrusted author pr=%s", pr.HTMLURL)
+		return false
+	}
+	cfg, err := w.ghClient.GetMaintainerConfig(ctx, pr.Owner, pr.Repo)
+	if err != nil {
+		glog.Errorf("mechanical override: get maintainer config failed pr=%s err=%v",
+			pr.HTMLURL, err)
+		w.metrics.IncPRPublished("error")
+		return false
+	}
+	if !cfg.AutoMerge.Trivial || !cfg.PrReviewer.AutoApprove {
+		glog.V(3).Infof(
+			"mechanical override: repo not opted in pr=%s/%s",
+			pr.Owner, pr.Repo,
+		)
+		return false
+	}
+	files, err := w.ghClient.ListPRFiles(ctx, pr.Owner, pr.Repo, pr.Number)
+	if err != nil {
+		glog.Errorf("mechanical override: list pr files failed pr=%s err=%v", pr.HTMLURL, err)
+		w.metrics.IncPRPublished("error")
+		return false
+	}
+	if !ClassifyTrivial(files) {
+		glog.V(3).Infof(
+			"mechanical override: not trivial pr=%s/%s#%d",
+			pr.Owner, pr.Repo, pr.Number,
+		)
+		return false
+	}
 	return true
 }
 

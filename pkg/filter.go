@@ -38,3 +38,13 @@ func ParseTrustedAuthors(raw string) []string {
 	}
 	return result
 }
+
+// ParseMechanicalOverrideAuthors splits a comma-separated
+// MECHANICAL_OVERRIDE_AUTHORS string into trimmed, non-empty logins. The
+// splitting rules are deliberately identical to ParseTrustedAuthors; the
+// distinct name marks the distinct meaning — these logins may be approved
+// without a review, which is stronger than "trusted" and must never be
+// conflated with BOT_ALLOWLIST (skip) or TRUSTED_AUTHORS (may be reviewed).
+func ParseMechanicalOverrideAuthors(raw string) []string {
+	return ParseTrustedAuthors(raw)
+}

@@ -1,8 +1,13 @@
 ---
-status: draft
-spec: ["002-mechanical-approve-trivial-bot-bumps"]
+status: completed
+spec: [002-mechanical-approve-trivial-bot-bumps]
+summary: Added MECHANICAL_OVERRIDE_AUTHORS config, its parser, the six-condition mechanical-override qualification gate wired into the poll loop after tryOverride, and the full negative-path test suite; a qualifying PR still receives today's normal review.
+execution_id: github-pr-watcher-mechanical-approve-exec-007-mechanical-override-config-and-gate
+dark-factory-version: v0.198.7
 created: "2026-10-24T08:30:00Z"
-branch: dark-factory/mechanical-approve-trivial-bot-bumps
+queued: "2026-10-24T09:13:04Z"
+started: "2026-10-24T09:13:43Z"
+completed: "2026-10-24T09:17:04Z"
 ---
 
 # Gate a trivial bot bump on a mechanical-override author list and the repo's two opt-in flags
@@ -158,11 +163,11 @@ func newTestWatcherWithMechanicalOverride(
 ) pkg.Watcher
 ```
 
-   It builds a real `pkg.NewTaskPublisher` (same `TaskConfig` as the sibling helpers: `Stage: "dev"`, `MaxSlugLen: pkg.DefaultMaxSlugLen`, `MaxTitleLen: pkg.DefaultMaxTitleLen`, empty `TaskSuffix`) and a watcher with `taskCreationFilter` `{filter.NewDraftFilter(), filter.NewBotAuthorFilter([]string{"dependabot[bot]"})}`, `sideEffectFilter` `{filter.NewDraftFilter()}`, `trivialAutoMergeEnabled: false`, and `newDisabledUnreviewedScanner()`. `trivialAutoMergeEnabled` must be `false` so `maybeLabelTrivial` cannot confound these assertions — the feature is independent of that flag.
+   It builds a real `pkg.NewTaskPublisher` (same `TaskConfig` as the sibling helpers: `Stage: "dev"`, `MaxSlugLen: pkg.DefaultMaxSlugLen`, `MaxTitleLen: pkg.DefaultMaxTitleLen`, empty `TaskSuffix`) and a watcher with `taskCreationFilter` `{filter.NewDraftFilter(), filter.NewBotAuthorFilter([]string{"dependabot[bot]"})}`, `sideEffectFilter` `{filter.NewDraftFilter()}`, `trivialAutoMergeEnabled: false`, `overrideLabel: ""` (the label path is out of scope here; prompt 3 parameterises it), and `newDisabledUnreviewedScanner()`. `trivialAutoMergeEnabled` must be `false` so `maybeLabelTrivial` cannot confound these assertions — the feature is independent of that flag.
 
-   Shared fixtures: a PR with `Number: 10`, `Owner: "bborbe"`, `Repo: "repo"`, `Title: "bump deps"`, `HTMLURL: "https://github.com/bborbe/repo/pull/10"`, `AuthorLogin: "ben-s-go-updater-dev[bot]"`, `IsDraft: false`, `UpdatedAt: libtime.DateTime(time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC))`; `GetPRDetailsReturns(pkg.PRDetails{HeadSHA: "deadbeef", CloneURL: "https://github.com/bborbe/repo.git", BaseRef: "master"}, nil)`; `createSender.SendCommandReturns(nil)`; a trust decision that trusts that login (`trust.NewAuthorAllowlist([]string{"ben-s-go-updater-dev[bot]"})`); `mechanicalOverrideAuthors` `[]string{"ben-s-go-updater-dev[bot]"}`; `autoMergeLabel` `"auto-merge"`; an opted-in config `maintainerconfig.MaintainerConfig{AutoMerge: maintainerconfig.AutoMergeConfig{Trivial: true}, PrReviewer: maintainerconfig.PrReviewerConfig{AutoApprove: true}}`; and the mechanical file fixture already used by the trivial auto-merge tests (`Filename: "go.mod"` with a `go 1.26.5` → `go 1.26.6` patch).
+   Shared fixtures: a PR with `Number: 10`, `Owner: "bborbe"`, `Repo: "repo"`, `Title: "bump deps"`, `HTMLURL: "https://github.com/bborbe/repo/pull/10"`, `AuthorLogin: "ben-s-go-updater-dev[bot]"`, `IsDraft: false`, `UpdatedAt: libtime.DateTime(time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC))`; `GetPRDetailsReturns(pkg.PRDetails{HeadSHA: "deadbeef", CloneURL: "https://github.com/bborbe/repo.git", BaseRef: "master"}, nil)`; `createSender.SendCommandReturns(nil)`; a trust decision that trusts that login (`trust.NewAuthorAllowlist([]string{"ben-s-go-updater-dev[bot]"})`); `mechanicalOverrideAuthors` `[]string{"ben-s-go-updater-dev[bot]"}`; `autoMergeLabel` `"auto-merge"`; an opted-in config `maintainerconfig.MaintainerConfig{AutoMerge: maintainerconfig.AutoMergeConfig{Trivial: true}, PrReviewer: maintainerconfig.PrReviewerConfig{AutoApprove: true}}`; and the mechanical file fixture (`Filename: "go.mod"` with a `go 1.26.5` → `go 1.26.6` patch), installed as a default stub in the container's `BeforeEach` (`ghClient.ListPRFilesReturns(mechanical, nil)`), so it is not a declared-and-unused variable; the `non-trivial files` and `file listing fails` entries override it.
 
-   Each entry asserts that exactly one command was published and that it is a review, not an override:
+   Each entry except the two `no publication` entries asserts that exactly one command was published and that it is a review, not an override:
 
 ```go
 	Expect(createSender.SendCommandCallCount()).To(Equal(1))
@@ -171,7 +176,7 @@ func newTestWatcherWithMechanicalOverride(
 ```
 
    Entries and their distinguishing setup / extra assertions:
-   - `non-trivial files -> review only` — `ListPRFilesReturns(nonMechanical, nil)` where `nonMechanical` is the existing `pkg/watcher.go` patch fixture from `Describe("trivial auto-merge label")`. Extra: `Expect(ghClient.GetMaintainerConfigCallCount()).To(Equal(1))` and `Expect(ghClient.ListPRFilesCallCount()).To(Equal(1))` — proves the gate ran all the way to the classifier.
+   - `non-trivial files -> review only` — `ListPRFilesReturns(nonMechanical, nil)` where `nonMechanical` re-declares the same `pkg/watcher.go` patch fixture used in `Describe("trivial auto-merge label")` (that fixture is block-local there, so re-declare it inside this container). Extra: `Expect(ghClient.GetMaintainerConfigCallCount()).To(Equal(1))` and `Expect(ghClient.ListPRFilesCallCount()).To(Equal(1))` — proves the gate ran all the way to the classifier.
    - `author not on mechanical list -> review only` — `mechanicalOverrideAuthors` `[]string{"someone-else[bot]"}`; trust still trusts the PR author. Extra: `Expect(ghClient.GetMaintainerConfigCallCount()).To(Equal(0))` and `Expect(ghClient.ListPRFilesCallCount()).To(Equal(0))`.
    - `author not trusted -> review only` — trust `trust.NewAuthorAllowlist([]string{"alice"})`; mechanical list still contains the PR author. Assert `task_type` is `pr-review` and `phase` is `human_review` (the untrusted routing), and `Expect(ghClient.GetMaintainerConfigCallCount()).To(Equal(0))`.
    - `author case differs -> review only` — PR author `"Ben-S-Go-Updater-Dev[bot]"`, mechanical list `[]string{"ben-s-go-updater-dev[bot]"}`, and the trust allowlist containing the exact-case author `"Ben-S-Go-Updater-Dev[bot]"` so trust passes and only casing can reject. Extra: `Expect(ghClient.GetMaintainerConfigCallCount()).To(Equal(0))`.
@@ -182,10 +187,10 @@ func newTestWatcherWithMechanicalOverride(
    - `file listing fails -> review only` — opted-in config, `ListPRFilesReturns(nil, errors.New("boom"))`. Assert one `pr-review` command and `Expect(ghClient.ListPRFilesCallCount()).To(Equal(1))`.
    - `trust check fails -> no publication` — a trust decision of `trust.Func(func(ctx context.Context, _ trust.PR) (trust.Result, error) { return nil, errors.New("trust backend down") })`. Assert `Expect(createSender.SendCommandCallCount()).To(Equal(0))` (the review path's own trust check fails too, exactly as today).
 
-   Add a second, sibling container so the spec's focused set stays exactly the ten entries above:
+   Add a second, sibling container named exactly `Gate error paths` (deliberately NOT containing the words `Mechanical override`, so the spec's focus regex `-ginkgo.focus='Mechanical override'` does not select it):
 
 ```go
-	Describe("Mechanical override error paths", func() {
+	Describe("Gate error paths", func() {
 ```
 
    with one entry `It("empty auto-merge label -> review only", ...)` — `autoMergeLabel: ""`, everything else qualifying. Assert one `pr-review` command and `Expect(ghClient.GetMaintainerConfigCallCount()).To(Equal(0))`. Do NOT put it inside the `Mechanical override for trivial bot bumps` container.
@@ -206,7 +211,7 @@ func newTestWatcherWithMechanicalOverride(
 - **No new GitHub API calls for a PR whose author is not on the list** — the author and trust checks precede every read.
 - Errors follow `github.com/bborbe/errors` only where an error is returned; this gate returns a bool and logs, matching `maybeLabelTrivial` / `tryAutoMerge`.
 - Do not add a `time.Now()` call; this gate needs no clock.
-- Do not run `go mod tidy`, `go get`, or `go mod vendor`.
+- Do not run `go mod tidy` / `go get` manually; `make precommit`'s `ensure` target performs the tidy. Never run `go mod vendor` or a `-mod=vendor` test.
 - **Release ordering (operator-side, per stage).** Deploy `bborbe/github-pr-review-agent` PR #53 (which understands `override_reason: trivial-bot-bump`) before the watcher, and ship the `go.sum` classifier change in the same watcher release — without it `ClassifyTrivial` rejects every real bump and this feature stays dark. Do not change `pkg/trivial.go` here.
 - Do not commit — dark-factory handles git.
 - Existing tests must still pass, including every pre-existing entry in `pkg/watcher_test.go` and `pkg/filter_test.go`.
