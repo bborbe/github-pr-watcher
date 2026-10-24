@@ -255,6 +255,10 @@ agent falls back to the label wording. The `go.sum` classifier change must ship 
 the same watcher release — without it `ClassifyTrivial` rejects every real bump and
 the feature stays dark.
 
+**Kill switch.** `TRIVIAL_AUTO_MERGE` governs only the labelling path. Mechanical
+approvals are switched off by emptying `MECHANICAL_OVERRIDE_AUTHORS` — an incident
+that must stop unattended approvals clears that list, not the flag.
+
 **Failure fall-throughs.** A config or file-listing error means "review this poll".
 A failed label write also means "review this poll" — an approve never lands without
 its arming. A failed arming after a successful label write still publishes the

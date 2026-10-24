@@ -365,7 +365,11 @@ type watcher struct {
 	// mechanically trivial (stage-1 allow-list; the LLM stage-2 fallback is a
 	// follow-up), the watcher applies the auto-merge label itself instead of
 	// waiting for the author to. Off by default; the flag is the fleet-wide
-	// kill switch in addition to the per-repo `.maintainer.yaml` gate.
+	// kill switch for the LABELLING path in addition to the per-repo
+	// `.maintainer.yaml` gate. It does not govern the mechanical override:
+	// that path labels and arms itself, and its only switch is an empty
+	// MECHANICAL_OVERRIDE_AUTHORS list — an operator stopping mechanical
+	// approvals in an incident must empty that list, not clear this flag.
 	trivialAutoMergeEnabled bool
 	// mechanicalOverrideAuthors is the exact, case-sensitive set of GitHub
 	// logins that may be approved without an LLM review when the repo has
@@ -831,9 +835,6 @@ func (w *watcher) tryMechanicalOverride(
 	cursorHeadSHAs map[string]string,
 	newHeadSHAs map[string]string,
 ) bool {
-	if !w.qualifiesForMechanicalOverride(ctx, pr) {
-		return false
-	}
 	overrideID := DeriveTaskIDOverride(pr.Owner, pr.Repo, pr.Number, details.HeadSHA).String()
 	if _, exists := cursorHeadSHAs[overrideID]; exists {
 		glog.V(3).Infof(
@@ -843,6 +844,24 @@ func (w *watcher) tryMechanicalOverride(
 		newHeadSHAs[overrideID] = details.HeadSHA
 		return true
 	}
+	// Dedupe is checked before the gate: the gate costs two uncached GitHub
+	// reads, and a SHA that was already handled must not pay for them on every
+	// poll. The only ordering the design needs is label-before-publish.
+	//
+	// A SHA that already carries a review task is never overridden afterwards:
+	// a review and an override for the same commit race, and the review could
+	// post CHANGES_REQUESTED after the approve. This is reachable through a
+	// transient label-write failure on an earlier poll.
+	if _, exists := cursorHeadSHAs[DeriveTaskID(pr.Owner, pr.Repo, pr.Number, details.HeadSHA).String()]; exists {
+		glog.V(3).Infof(
+			"mechanical override skipped, review already emitted pr=%s/%s#%d sha=%s",
+			pr.Owner, pr.Repo, pr.Number, details.HeadSHA,
+		)
+		return false
+	}
+	if !w.qualifiesForMechanicalOverride(ctx, pr) {
+		return false
+	}
 	// Label and arm before publishing the approve: an approve that can never
 	// merge because nothing armed the PR is the stranded-approve failure this
 	// feature exists to remove. The gate guarantees a non-empty auto-merge
@@ -850,11 +869,12 @@ func (w *watcher) tryMechanicalOverride(
 	//
 	// A failed label write returns false so the caller falls through to a
 	// normal review this poll — an approve must never land without its arming.
+	// That fall-through cannot later become an override of the same SHA: the
+	// review-task cursor entry makes tryMechanicalOverride skip it.
 	// A failed arming after a successful label write is tolerated: the label is
 	// now present, so the next poll's tryAutoMerge path retries and succeeds.
 	// When the label is already present, tryAutoMerge already ran earlier in
-	// this poll and armed the PR; a second arming would be a redundant call and
-	// can fail with UNPROCESSABLE on an already-clean PR.
+	// this poll and armed the PR; re-arming is skipped here for the same reason.
 	if !slices.Contains(pr.Labels, w.autoMergeLabel) {
 		if err := w.ghClient.AddLabel(
 			ctx, pr.Owner, pr.Repo, pr.Number, w.autoMergeLabel,
@@ -863,12 +883,12 @@ func (w *watcher) tryMechanicalOverride(
 			w.metrics.IncPRPublished("error")
 			return false
 		}
-		if err := w.ghClient.EnableAutoMerge(ctx, pr.Owner, pr.Repo, pr.Number); err != nil {
-			glog.Errorf(
-				"mechanical override: enable auto-merge failed pr=%s err=%v", pr.HTMLURL, err,
-			)
-			w.metrics.IncPRPublished("error")
-		}
+		// Arm through the one arming path, so the trust check, the log line and
+		// the auto_merge counter stay in a single place. The label is present by
+		// now, which is exactly what tryAutoMerge requires. A failure here is
+		// tolerated: the label persists, so the next poll retries the arming.
+		pr.Labels = append(pr.Labels, w.autoMergeLabel)
+		w.tryAutoMerge(ctx, pr)
 	}
 	if w.publisher.PublishMechanicalOverride(ctx, pr, overrideID, details) {
 		cursorHeadSHAs[overrideID] = details.HeadSHA
