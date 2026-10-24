@@ -222,6 +222,16 @@ var _ = Describe("ClassifyTrivial", func() {
 			false,
 		),
 		Entry(
+			"go.sum same-version hash rewrite -> false",
+			[]pkg.PRFile{
+				{
+					Filename: "go.sum",
+					Patch:    "--- a/go.sum\n+++ b/go.sum\n@@ -1,3 +1,3 @@\n-github.com/foo/bar v1.2.3 h1:abc=\n+github.com/foo/bar v1.2.3 h1:def=\n",
+				},
+			},
+			false,
+		),
+		Entry(
 			"go.sum empty patch -> false",
 			[]pkg.PRFile{{Filename: "go.sum", Patch: ""}},
 			false,

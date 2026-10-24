@@ -82,6 +82,11 @@ func isMechanicalFile(f PRFile) bool {
 // same module path and the same /go.mod suffix presence. An unpaired addition
 // (a newly required module) is accepted; an unpaired removal is not, because
 // it changes the build graph.
+//
+// A line whose exact (path, version, /go.mod) reappears on the other side is
+// rejected: that is a hash rewritten at an unchanged version, not a bump. It
+// replaces the pin go.sum exists to enforce, and it is the one go.sum edit a
+// review would actually catch.
 func goSumMechanical(patch string) bool {
 	if patch == "" {
 		return false
@@ -90,8 +95,15 @@ func goSumMechanical(patch string) bool {
 		path  string
 		goMod bool
 	}
+	type moduleLine struct {
+		path    string
+		version string
+		goMod   bool
+	}
 	removed := map[moduleKey]int{}
 	added := map[moduleKey]int{}
+	removedExact := map[moduleLine]struct{}{}
+	addedExact := map[moduleLine]struct{}{}
 	for _, line := range strings.Split(patch, "\n") {
 		if line == "" ||
 			strings.HasPrefix(line, "---") ||
@@ -110,10 +122,22 @@ func goSumMechanical(patch string) bool {
 			path:  fields[0],
 			goMod: strings.HasSuffix(fields[1], "/go.mod"),
 		}
+		exact := moduleLine{
+			path:    fields[0],
+			version: strings.TrimSuffix(fields[1], "/go.mod"),
+			goMod:   key.goMod,
+		}
 		if line[0] == '-' {
 			removed[key]++
+			removedExact[exact] = struct{}{}
 		} else {
 			added[key]++
+			addedExact[exact] = struct{}{}
+		}
+	}
+	for exact := range removedExact {
+		if _, ok := addedExact[exact]; ok {
+			return false
 		}
 	}
 	for key, count := range removed {
