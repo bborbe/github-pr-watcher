@@ -2382,6 +2382,58 @@ var _ = Describe("pkg.Watcher", func() {
 
 			Expect(createSender.SendCommandCallCount()).To(Equal(0))
 		})
+
+		It("qualifying bump -> override task with rule body", func() {
+			pollWith(prBot(), mechanicalAuthors, trustBot)
+
+			Expect(createSender.SendCommandCallCount()).To(Equal(1))
+			_, cmd := createSender.SendCommandArgsForCall(0)
+			Expect(cmd.Frontmatter["task_type"]).To(Equal("pr-override"))
+			Expect(cmd.Frontmatter["override_reason"]).To(Equal("trivial-bot-bump"))
+			Expect(cmd.Frontmatter["ref"]).To(Equal("deadbeef"))
+			Expect(cmd.Frontmatter["task_identifier"]).To(Equal(
+				pkg.DeriveTaskIDOverride("bborbe", "repo", 10, "deadbeef").String()))
+			Expect(cmd.Title).To(HavePrefix("PR Override github - bborbe-repo - 10 - deadbeef"))
+			Expect(cmd.Body).To(ContainSubstring("trivial-bot-bump"))
+			Expect(cmd.Body).To(ContainSubstring("No LLM review ran"))
+			Expect(cmd.Body).NotTo(ContainSubstring("override-review"))
+			Expect(cmd.Body).NotTo(
+				ContainSubstring("A trusted author applied the override label."))
+		})
+
+		It("dedupe per head SHA", func() {
+			pollWith(prBot(), mechanicalAuthors, trustBot)
+			Expect(createSender.SendCommandCallCount()).To(Equal(1))
+
+			// Same head SHA: no second emission.
+			pollWith(prBot(), mechanicalAuthors, trustBot)
+			Expect(createSender.SendCommandCallCount()).To(Equal(1))
+
+			ghClient.GetPRDetailsReturns(pkg.PRDetails{
+				HeadSHA:  "cafebabe",
+				CloneURL: "https://github.com/bborbe/repo.git",
+				BaseRef:  "master",
+			}, nil)
+			pollWith(prBot(), mechanicalAuthors, trustBot)
+			Expect(createSender.SendCommandCallCount()).To(Equal(2))
+
+			_, cmd := createSender.SendCommandArgsForCall(1)
+			Expect(cmd.Frontmatter["ref"]).To(Equal("cafebabe"))
+			Expect(cmd.Frontmatter["task_identifier"]).To(Equal(
+				pkg.DeriveTaskIDOverride("bborbe", "repo", 10, "cafebabe").String()))
+		})
+
+		It("emitting poll records override_mechanical", func() {
+			pollWith(prBot(), mechanicalAuthors, trustBot)
+
+			count := 0
+			for i := 0; i < fakeMetrics.IncPRPublishedCallCount(); i++ {
+				if fakeMetrics.IncPRPublishedArgsForCall(i) == "override_mechanical" {
+					count++
+				}
+			}
+			Expect(count).To(Equal(1))
+		})
 	})
 
 	Describe("Gate error paths", func() {
@@ -2436,6 +2488,65 @@ var _ = Describe("pkg.Watcher", func() {
 			_, cmd := createSender.SendCommandArgsForCall(0)
 			Expect(cmd.Frontmatter["task_type"]).To(Equal("pr-review"))
 			Expect(ghClient.GetMaintainerConfigCallCount()).To(Equal(0))
+		})
+
+		It("send fails -> override retried, no review", func() {
+			pr := pkg.PullRequest{
+				Number:      10,
+				Owner:       "bborbe",
+				Repo:        "repo",
+				Title:       "bump deps",
+				HTMLURL:     "https://github.com/bborbe/repo/pull/10",
+				AuthorLogin: "ben-s-go-updater-dev[bot]",
+				IsDraft:     false,
+				UpdatedAt:   libtime.DateTime(time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC)),
+			}
+			trustBot := trust.NewAuthorAllowlist([]string{"ben-s-go-updater-dev[bot]"})
+			optedIn := maintainerconfig.MaintainerConfig{
+				AutoMerge:  maintainerconfig.AutoMergeConfig{Trivial: true},
+				PrReviewer: maintainerconfig.PrReviewerConfig{AutoApprove: true},
+			}
+
+			ghClient.GetPRDetailsReturns(pkg.PRDetails{
+				HeadSHA:  "deadbeef",
+				CloneURL: "https://github.com/bborbe/repo.git",
+				BaseRef:  "master",
+			}, nil)
+			ghClient.GetMaintainerConfigReturns(optedIn, nil)
+			ghClient.ListPRFilesReturns([]pkg.PRFile{
+				{
+					Filename: "go.mod",
+					Patch:    "--- a/go.mod\n+++ b/go.mod\n@@ -1,3 +1,3 @@\n-\tgo 1.26.5\n+\tgo 1.26.6\n",
+				},
+			}, nil)
+			ghClient.SearchPRsReturns(pkg.SearchResult{
+				PullRequests:  []pkg.PullRequest{pr},
+				RateRemaining: 100,
+			}, nil)
+
+			w := newTestWatcherWithMechanicalOverride(
+				ghClient,
+				createSender,
+				cursorPath,
+				startTime,
+				fakeMetrics,
+				trustBot,
+				"auto-merge",
+				[]string{"ben-s-go-updater-dev[bot]"},
+			)
+
+			createSender.SendCommandReturnsOnCall(0, errors.New("kafka down"))
+			Expect(w.Poll(ctx)).NotTo(HaveOccurred())
+			Expect(createSender.SendCommandCallCount()).To(Equal(1))
+			_, failedCmd := createSender.SendCommandArgsForCall(0)
+			Expect(failedCmd.Frontmatter["task_type"]).To(Equal("pr-override"))
+
+			// No cursor entry was recorded on the failure, so the next poll retries.
+			createSender.SendCommandReturns(nil)
+			Expect(w.Poll(ctx)).NotTo(HaveOccurred())
+			Expect(createSender.SendCommandCallCount()).To(Equal(2))
+			_, retriedCmd := createSender.SendCommandArgsForCall(1)
+			Expect(retriedCmd.Frontmatter["task_type"]).To(Equal("pr-override"))
 		})
 	})
 

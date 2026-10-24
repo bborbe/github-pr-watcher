@@ -7,6 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+- feat: publish one `pr-override` task for a pull request that passes the mechanical gate — the command carries `override_reason: trivial-bot-bump` and a body naming the rule and stating that no LLM review ran, is deduplicated per (PR, head SHA) on the existing override cursor entry, never coexists with a review task for that SHA, and is retried on the next poll when the send fails. Adds the `override_mechanical` label to `github_pr_watcher_prs_total`, pre-created at zero
 - feat: add `MECHANICAL_OVERRIDE_AUTHORS` and the six-condition qualification gate that proves a pull request is a trivial bot bump the operator has approved for review-free approval (author listed, author trusted, repo opted in via `.maintainer.yaml` `autoMerge.trivial` + `prReviewer.autoApprove`, all changed files mechanical); a qualifying PR still receives the normal review — the approve emission ships separately
 - fix: classify a dependency bump whose only changes are paired go.sum hash lines, go.mod version lines and an appended CHANGELOG line as trivial
 

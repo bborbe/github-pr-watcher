@@ -1,8 +1,13 @@
 ---
-status: approved
+status: completed
 spec: [002-mechanical-approve-trivial-bot-bumps]
+summary: Published one deduplicated mechanical `pr-override` task with a rule-naming body and `override_reason`, registered the `override_mechanical` metric at zero, regenerated mocks, and added focused tests
+execution_id: github-pr-watcher-mechanical-approve-exec-008-mechanical-override-emission
+dark-factory-version: v0.198.7
 created: "2026-10-24T08:31:00Z"
 queued: "2026-10-24T09:13:04Z"
+started: "2026-10-24T09:17:06Z"
+completed: "2026-10-24T09:19:56Z"
 ---
 
 # Publish one mechanical `pr-override` task for a qualifying trivial bot bump

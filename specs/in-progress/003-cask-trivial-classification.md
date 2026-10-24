@@ -1,6 +1,8 @@
 ---
-status: draft
-created: 2026-10-24
+status: generating
+approved: "2026-10-24T09:18:10Z"
+generating: "2026-10-24T09:18:11Z"
+branch: dark-factory/cask-trivial-classification
 ---
 
 ## Summary
@@ -51,7 +53,7 @@ Every entry name in ACs 1-11 below contains `Casks`, so `go test ./pkg/ -v -gink
 - [ ] The real bump `bborbe/homebrew-tap#29` (`vault-ui 0.98.0`, one file, `+2 −2`) classifies as trivial. Its patch text is embedded verbatim in the prompt, because the container has no network. Evidence: the entry `Casks real homebrew-tap bump -> true`, with the fixture's origin in a comment above it.
 - [ ] **Negative:** the real cask-addition PR `bborbe/homebrew-tap#3` — three files (`Casks/git-ai-sync.rb`, `.github/workflows/update-git-ai-sync-cask.yml`, `README.md`) — classifies as non-trivial, so the rule rejects the non-mechanical change it must not wave through. Evidence: the entry `Casks add-cask PR with workflow and readme -> false`.
 - [ ] **Negative:** no pre-existing classifier entry was removed or weakened. Evidence: `git diff -U0 "$(git merge-base HEAD origin/master)" HEAD -- pkg/trivial_test.go | grep -cE '^-[^-]|^-$'` prints `0` (grep exits 1 at zero matches, which is the expected outcome here), and `go test ./pkg/ -v -ginkgo.focus='ClassifyTrivial'` reports 0 failures across every entry that existed before this change.
-- [ ] **Post-Deploy (Rung-2):** the first cask bump PR on `bborbe/homebrew-tap` after the deploy carries the auto-merge label, an `APPROVED` review from `ben-s-pull-request-reviewer[bot]`, and reaches `MERGED`. Evidence: `gh -R bborbe/homebrew-tap pr view <n> --json labels,reviews,state` reports the label, the approve and `MERGED`.
+- [ ] **Post-Deploy (Rung-2):** the first cask bump PR on `bborbe/homebrew-tap` after the deploy carries the auto-merge label and reaches `MERGED`, and the approve on it is the **mechanical** one, not an LLM review. Evidence: `gh -R bborbe/homebrew-tap pr view <n> --json labels,reviews,state` reports the label, an `APPROVED` review from `ben-s-pull-request-reviewer[bot]` and `MERGED`; **and** `kubectlnukedev -n dev logs deploy/github-pr-watcher --since=30m | grep 'mechanical override'` returns ≥1 line naming that PR's head SHA, **and** no `PR Review github - bborbe-homebrew-tap - <n> - *` record exists in the agent tasks vault (`git -C ~/Documents/Obsidian/private-agent log --diff-filter=A -m --name-only -- ':(top)tasks/PR Review github - bborbe-homebrew-tap - <n> - *'` is empty). The approve login alone does not discriminate: the ordinary review path posts from the same bot.
   - `deploy_check:` `kubectlnukedev -n dev get deploy/github-pr-watcher -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="MECHANICAL_OVERRIDE_AUTHORS")].value}' | grep -q 'github-actions' && kubectlnukedev -n dev get deploy/github-pr-watcher -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="TRUSTED_AUTHORS")].value}' | grep -q 'github-actions' && kubectlnukedev -n dev get deploy/github-pr-watcher -o jsonpath='{.spec.template.spec.containers[0].image}' | awk -F: '{print $NF}'`
   - `deploy_target:` `$(git describe --tags --abbrev=0)`, evaluated in the host repo checked out at the released master commit the deploy consumed
 
@@ -66,7 +68,7 @@ Every entry name in ACs 1-11 below contains `Casks`, so `go test ./pkg/ -v -gink
 ### Operator-executable (runs on the host after PR merge)
 
 1. Confirm the tap's opt-in: `gh api repos/bborbe/homebrew-tap/contents/.maintainer.yaml --jq .content | base64 -d` must show `autoMerge.trivial: true` and `prReviewer.autoApprove: true`. The repo has **no** `.maintainer.yaml` today, so without this step the gate cannot fire there whatever the classifier says. Enabling it means `github-actions[bot]` PRs merge without a human on that repo — the operator's decision.
-2. Add `github-actions[bot]` to **both** `TRUSTED_AUTHORS` and `MECHANICAL_OVERRIDE_AUTHORS` in `github-pr-reviewer/values-{dev,prod}.yaml` of the `nuke-dev` / `nuke-prod` repos. Trust is required twice over: the mechanical gate checks it, and `tryAutoMerge` refuses to arm an untrusted author.
+2. Add `github-actions[bot]` to **both** `TRUSTED_AUTHORS` and `MECHANICAL_OVERRIDE_AUTHORS` in `github-pr-reviewer/values-{dev,prod}.yaml` of the `nuke-dev` / `nuke-prod` repos. Trust is required twice over: the mechanical gate checks it, and `tryAutoMerge` refuses to arm an untrusted author. It must **not** be on `BOT_ALLOWLIST` in the same stage — the bot-author filter runs before the gate and `processPR` returns early, so that listing alone would disable the feature silently.
 3. Deploy the watcher release carrying this change, per stage.
 
 ## Desired Behavior
@@ -79,6 +81,7 @@ Every entry name in ACs 1-11 below contains `Casks`, so `go test ./pkg/ -v -gink
 ## Constraints
 
 - **Conservative direction.** A false positive ships an unreviewed behavior change; a false negative costs one review. Every ambiguous cask shape resolves to non-mechanical.
+- **Release ordering.** The cask classifier deploys in a watcher release that also carries the mechanical override's own label write (spec 002). Otherwise the label can only come from `TRIVIAL_AUTO_MERGE`, which is off by default, and the Post-Deploy AC fails on the label rather than on the classifier.
 - **Exactly one pair per kind.** A multi-architecture bump is out of scope, not a variant of the accepted shape; the count rule is what keeps this change small.
 - **Paired by kind, not by count.** A `version` addition cannot pay for a `sha256` removal.
 - **The allow-list doc comment is part of the contract.** `ClassifyTrivial`'s doc comment enumerates the allow-list; it gains the cask case in the same change, so the comment never describes less than the code.

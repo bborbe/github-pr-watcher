@@ -69,6 +69,19 @@ type TaskPublisher interface {
 		taskIDStr string,
 		details PRDetails,
 	) (handled, emitted bool)
+	// PublishMechanicalOverride publishes the mechanical `pr-override` task for
+	// a qualifying trivial bot bump. The caller (the watcher's mechanical gate)
+	// has already evaluated the author list, trust, the repo's two opt-in flags
+	// and the file classifier, so this method performs no trust check of its
+	// own. Returns true when the command was sent; false when the send failed,
+	// in which case the caller records nothing so the emission is retried on
+	// the next poll.
+	PublishMechanicalOverride(
+		ctx context.Context,
+		pr PullRequest,
+		taskIDStr string,
+		details PRDetails,
+	) bool
 }
 
 // NewTaskPublisher returns a TaskPublisher that performs trust evaluation
@@ -254,6 +267,39 @@ func (p *taskPublisher) PublishOverride(
 		pr.Owner, pr.Repo, pr.Number, details.HeadSHA, taskIDStr)
 	p.metrics.IncPRPublished("override")
 	return true, true
+}
+
+// PublishMechanicalOverride implements TaskPublisher. The watcher's mechanical
+// gate has already evaluated every qualifying condition, so this method only
+// builds and sends the command — there is no second trust check.
+func (p *taskPublisher) PublishMechanicalOverride(
+	ctx context.Context,
+	pr PullRequest,
+	taskIDStr string,
+	details PRDetails,
+) bool {
+	cmd := BuildMechanicalOverrideCommand(
+		pr,
+		details,
+		taskIDStr,
+		p.cfg.Stage,
+		p.cfg.MaxSlugLen,
+		p.cfg.MaxTitleLen,
+		p.cfg.TaskSuffix,
+		p.cfg.TargetVault,
+	)
+
+	if err := p.createSender.SendCommand(ctx, cmd); err != nil {
+		glog.Errorf("publish mechanical override task failed pr=%s err=%v", pr.HTMLURL, err)
+		p.metrics.IncPRPublished("error")
+		return false
+	}
+	// Deliberately not V-gated: the spec's post-deploy check greps for this
+	// line, so it must be emitted at the default log level.
+	glog.Infof("mechanical override pr=%s/%s#%d sha=%s rule=%s",
+		pr.Owner, pr.Repo, pr.Number, details.HeadSHA, overrideReasonTrivialBotBump)
+	p.metrics.IncPRPublished("override_mechanical")
+	return true
 }
 
 // NewWatcher returns a Watcher that polls GitHub and publishes commands.
@@ -693,14 +739,11 @@ func (w *watcher) processPR(
 		return pr.UpdatedAt, true
 	}
 
-	// Mechanical override gate: a qualifying trivial bot bump will be approved
-	// without an LLM review. The emission ships in the next prompt in this
-	// series; evaluating the gate here keeps its negative paths observable now.
-	if w.qualifiesForMechanicalOverride(ctx, pr) {
-		glog.V(2).Infof(
-			"mechanical override gate passed pr=%s/%s#%d sha=%s",
-			pr.Owner, pr.Repo, pr.Number, details.HeadSHA,
-		)
+	// Mechanical override: a qualifying trivial bot bump gets an approve instead
+	// of a review for this SHA. Emitting both would race — a review could post
+	// CHANGES_REQUESTED after the override's APPROVE and re-block merge.
+	if w.tryMechanicalOverride(ctx, pr, details, cursorState.HeadSHAs, newHeadSHAs) {
+		return pr.UpdatedAt, true
 	}
 
 	taskIDStr := DeriveTaskID(pr.Owner, pr.Repo, pr.Number, details.HeadSHA).String()
@@ -762,6 +805,44 @@ func (w *watcher) tryOverride(
 		newHeadSHAs[overrideID] = details.HeadSHA
 	}
 	return handled
+}
+
+// tryMechanicalOverride emits the mechanical override task for a qualifying
+// trivial bot bump. It returns true when the PR is handled (override emitted,
+// already emitted for this SHA, or the send failed) — the caller then skips the
+// review path for this SHA, preserving the override-only invariant that avoids
+// the APPROVE-vs-CHANGES_REQUESTED race. It returns false when the PR does not
+// qualify, so the caller falls through to the normal review.
+//
+// The override task-id is the same one tryOverride uses, so both override kinds
+// share one dedupe entry per (PR, head SHA). A failed send records nothing, so
+// the emission retries on the next poll.
+func (w *watcher) tryMechanicalOverride(
+	ctx context.Context,
+	pr PullRequest,
+	details PRDetails,
+	cursorHeadSHAs map[string]string,
+	newHeadSHAs map[string]string,
+) bool {
+	if !w.qualifiesForMechanicalOverride(ctx, pr) {
+		return false
+	}
+	overrideID := DeriveTaskIDOverride(pr.Owner, pr.Repo, pr.Number, details.HeadSHA).String()
+	if _, exists := cursorHeadSHAs[overrideID]; exists {
+		glog.V(3).Infof(
+			"mechanical override already emitted, skipping pr=%s/%s#%d sha=%s",
+			pr.Owner, pr.Repo, pr.Number, details.HeadSHA,
+		)
+		newHeadSHAs[overrideID] = details.HeadSHA
+		return true
+	}
+	if w.publisher.PublishMechanicalOverride(ctx, pr, overrideID, details) {
+		cursorHeadSHAs[overrideID] = details.HeadSHA
+		newHeadSHAs[overrideID] = details.HeadSHA
+	}
+	// Handled whether or not the send succeeded: a failed send must not fall
+	// through to a review for this SHA, and the unset cursor retries next poll.
+	return true
 }
 
 // MergeState is a GitHub REST merge-state value, typed so a state-name typo is
@@ -1253,6 +1334,29 @@ func BuildOverrideCommand(
 	}
 }
 
+// BuildMechanicalOverrideCommand builds the `pr-override` CreateTaskCommand for
+// a qualifying mechanical override. It reuses BuildOverrideCommand for the
+// title, task identifier, phase and clone fields — so the task path stays
+// identical to the label override and the controller's title-path dedupe
+// collapses the two — then stamps the reason and replaces the body.
+func BuildMechanicalOverrideCommand(
+	pr PullRequest,
+	details PRDetails,
+	taskIDStr string,
+	stage string,
+	maxSlugLen int,
+	maxTitleLen int,
+	taskSuffix string,
+	targetVault string,
+) task.CreateCommand {
+	cmd := BuildOverrideCommand(
+		pr, details, taskIDStr, stage, maxSlugLen, maxTitleLen, taskSuffix, targetVault,
+	)
+	cmd.Frontmatter["override_reason"] = overrideReasonTrivialBotBump
+	cmd.Body = buildMechanicalOverrideBody(pr)
+	return cmd
+}
+
 func (w *watcher) fetchPRDetails(
 	ctx context.Context,
 	pr PullRequest,
@@ -1481,6 +1585,30 @@ func buildOverrideBody(pr PullRequest) string {
 		"# PR Override: %s\n\n%s\n\nA trusted author applied the override label. "+
 			"The agent will post an APPROVE at head SHA so the false-positive review no longer blocks merge.\n\n"+
 			"**Repo:** [%s/%s](%s)\n",
+		pr.Title,
+		pr.HTMLURL,
+		pr.Owner,
+		pr.Repo,
+		repoLink,
+	)
+}
+
+// overrideReasonTrivialBotBump is the frontmatter `override_reason` value that
+// tells the review agent this override is mechanical: no LLM review ran, and
+// the body names the rule. It is the only reason the watcher emits today.
+const overrideReasonTrivialBotBump = "trivial-bot-bump"
+
+// buildMechanicalOverrideBody renders the body for a mechanical override. It
+// deliberately never mentions the override label: no human applied it, so
+// reusing the label wording would misreport why the approve was posted.
+func buildMechanicalOverrideBody(pr PullRequest) string {
+	repoLink := fmt.Sprintf("https://github.com/%s/%s", pr.Owner, pr.Repo)
+	return fmt.Sprintf(
+		"# PR Override: %s\n\n%s\n\nMechanical approve: this PR qualifies as a "+
+			"`trivial-bot-bump` — a bot dependency bump whose changed files are all "+
+			"mechanical. No LLM review ran. The watcher applied the auto-merge label "+
+			"and armed GitHub-native auto-merge; GitHub merges once required checks "+
+			"are green.\n\n**Repo:** [%s/%s](%s)\n",
 		pr.Title,
 		pr.HTMLURL,
 		pr.Owner,
