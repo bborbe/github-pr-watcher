@@ -1,15 +1,20 @@
 ---
-status: draft
+status: failed
 spec: [003-cask-trivial-classification]
+execution_id: github-pr-watcher-mechanical-approve-exec-010-spec-003-cask-trivial-classification
+dark-factory-version: v0.198.7
 created: "2026-10-24T09:19:10Z"
-branch: dark-factory/cask-trivial-classification
+queued: "2026-10-24T09:36:55Z"
+started: "2026-10-24T09:36:57Z"
+completed: "2026-10-24T09:39:17Z"
+lastFailReason: 'execute prompt: docker run failed: wait command: exit status 125'
 ---
 
 # Classify a single-hash homebrew cask bump as a mechanical (trivial) change
 
 <summary>
 - A homebrew cask bump that changes only one `version` line and one `sha256` line is now recognised as a mechanical change.
-- Cask files (`Casks/<name>.rb`) join the classifier's allow-list; every other file under `Casks/` stays non-mechanical.
+- Homebrew cask files join the classifier's allow-list; every other file in that directory stays non-mechanical.
 - A cask change is accepted only when exactly one `version` line and exactly one `sha256` line are removed and exactly one of each is added — the two always move together.
 - A version change without a hash change, a hash change without a version change, a cross-kind swap, or an unpaired removal all still require a review.
 - Multi-architecture casks (four hash lines) remain non-mechanical; that is a deliberate follow-up, not a variant of the accepted shape.
@@ -227,10 +232,13 @@ func caskMechanical(patch string) bool {
 		),
 		Entry(
 			"Casks non-ruby file -> false",
+			// The patch is a shape the .rb branch would accept, so only the
+			// filename-suffix check can make this false — a patch the cask rule
+			// rejects on its own would let this entry pass vacuously.
 			[]pkg.PRFile{
 				{
 					Filename: "Casks/README.md",
-					Patch:    "--- a/Casks/README.md\n+++ b/Casks/README.md\n@@ -1,2 +1,3 @@\n # casks\n+new cask docs\n",
+					Patch:    "--- a/Casks/README.md\n+++ b/Casks/README.md\n@@ -1,3 +1,3 @@\n-  version \"0.97.0\"\n-  sha256 \"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\"\n+  version \"0.98.0\"\n+  sha256 \"fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210\"\n",
 				},
 			},
 			false,
@@ -238,31 +246,35 @@ func caskMechanical(patch string) bool {
 		Entry(
 			"Casks real homebrew-tap bump -> true",
 			// Origin: bborbe/homebrew-tap#29 — a vault-ui 0.98.0 bump, one file,
-			// +2 -2. The hunk shape (two context lines, then the version/sha256
-			// pair, then one context line) is the real patch shape; the two
-			// 64-hex values are fixtures chosen for shape, not the artefact's
-			// real hash (the generating container has no network).
+			// +2 -2. The patch below is the real hunk, pasted verbatim from
+			// `gh -R bborbe/homebrew-tap pr diff 29`, including the real hashes,
+			// the real hunk header, the comment context lines and the blank
+			// context line before the url line.
 			[]pkg.PRFile{
 				{
 					Filename: "Casks/vault-ui.rb",
-					Patch: "@@ -3,6 +3,6 @@\n" +
-						"   desc \"Web UI for Vault\"\n" +
-						"   homepage \"https://github.com/bborbe/vault-ui\"\n" +
-						"-  version \"0.97.0\"\n" +
-						"-  sha256 \"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\"\n" +
+					Patch: "@@ -3,8 +3,8 @@\n" +
+						" # sha256 are bumped by .github/workflows/update-vault-ui-cask.yml when a new\n" +
+						" # vault-ui release is published.\n" +
+						" cask \"vault-ui\" do\n" +
+						"-  version \"0.63.6\"\n" +
+						"-  sha256 \"7435ca1d7bf4a461fb4732afe5c2e4d9ddfacdf611363cf0b8220faf7890885a\"\n" +
 						"+  version \"0.98.0\"\n" +
-						"+  sha256 \"fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210\"\n" +
-						"   name \"vault-ui\"\n",
+						"+  sha256 \"2c7a3399648d5bbeb9559bfc3bf54efd72f8cc4ae84574ca3da7977a7281841b\"\n" +
+						" \n" +
+						"   url \"https://github.com/bborbe/vault-ui/releases/download/v#{version}/vault_ui-#{version}-py3-none-any.whl\"\n",
 				},
 			},
 			true,
 		),
 		Entry(
 			"Casks add-cask PR with workflow and readme -> false",
-			// Origin: bborbe/homebrew-tap#3 — three files: the new cask, the
-			// updater workflow, and the README. The cask file is an all-added
-			// file, so it is non-mechanical on its own; the two siblings make
-			// the PR non-mechanical regardless.
+			// Origin: the file set of bborbe/homebrew-tap#3 — three files: the new
+			// cask, the updater workflow, and the README. The patches below are
+			// minimal reproductions of each file's shape, not that PR's verbatim
+			// text; the file set is what the entry proves. The cask file is an
+			// all-added file, so it is non-mechanical on its own; the two siblings
+			// make the PR non-mechanical regardless.
 			[]pkg.PRFile{
 				{
 					Filename: "Casks/git-ai-sync.rb",
@@ -291,8 +303,6 @@ func caskMechanical(patch string) bool {
 ```
 
 Note the deliberate details in these fixtures: the context lines carry a leading space (`"   desc ..."` is space + two spaces + `desc`), so they are skipped by the same scaffolding/context rules `patchAll` uses. The real-bump entry deliberately has no `---` / `+++` file headers, mirroring how the GitHub files API returns a patch for one file. Do not "tidy" the indentation — the two-space indent is the shape under test.
-
-<!-- OPEN QUESTION FOR AUDITOR: bborbe/homebrew-tap#29's real sha256 values and its exact hunk header could not be fetched (no network in this container). The prompt fixes `version "0.97.0"` -> `version "0.98.0"` and two 64-lowercase-hex sha256 values as the fixture, which is sufficient to prove the classifier's shape rule but is not byte-identical to the real patch. If the operator can paste the real `gh -R bborbe/homebrew-tap pr view 29 --json files` output, the auditor should substitute it into the `Casks real homebrew-tap bump -> true` entry. -->
 
 6. **Add a changelog entry.** `CHANGELOG.md` already has a `## Unreleased` section. Append one bullet to it, below the existing bullets and above the `## v0.14.3` heading:
 
@@ -326,8 +336,7 @@ Run `ROOTDIR=/workspace make precommit` — must pass with exit code 0.
 Then run the focused spec run. `-v` alone does not print Ginkgo spec names, so `-ginkgo.v` is required to list them, and `Ran 11 of` is the assertion — a focus that matches nothing still exits 0:
 
 ```
-set -o pipefail
-GOFLAGS=-buildvcs=false go test -mod=mod ./pkg/ -v -ginkgo.v -ginkgo.focus='Casks' 2>&1 | tee /tmp/casks.log
+bash -o pipefail -c 'GOFLAGS=-buildvcs=false go test -mod=mod ./pkg/ -v -ginkgo.v -ginkgo.focus=Casks 2>&1 | tee /tmp/casks.log'
 grep -q 'Ran 11 of' /tmp/casks.log
 grep -q 'Casks version+sha256 bump -> true' /tmp/casks.log
 grep -q 'Casks real homebrew-tap bump -> true' /tmp/casks.log
@@ -337,7 +346,8 @@ grep -q 'Casks multi-arch block bump -> false' /tmp/casks.log
 Then confirm the classifier covers the file, in code and in the allow-list doc comment:
 
 ```
-grep -n 'Casks/' pkg/trivial.go
+grep -q 'Casks/' pkg/trivial.go
+grep -q 'single-hash homebrew cask version/sha256 bumps' pkg/trivial.go
 ```
 
 Finally run the whole pre-existing classifier table to prove nothing was weakened:

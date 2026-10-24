@@ -27,12 +27,20 @@ var (
 	// goSumLine matches one changed go.sum line: a module path, a version
 	// (optionally carrying the `/go.mod` suffix), and an h1 hash.
 	goSumLine = regexp.MustCompile(`^[+-]\S+ v\S+ h1:[A-Za-z0-9+/]+={0,2}$`)
+	// caskVersionLine matches one changed line of a single-hash homebrew cask:
+	// a `version "..."` line, indented by the two spaces real cask lines carry
+	// inside the `cask` block.
+	caskVersionLine = regexp.MustCompile(`^[+-]  version "[^"]*"$`)
+	// caskSHA256Line matches one changed `sha256 "<64 lowercase hex>"` line of a
+	// single-hash homebrew cask, at the same two-space indent.
+	caskSHA256Line = regexp.MustCompile(`^[+-]  sha256 "[0-9a-f]{64}"$`)
 )
 
 // ClassifyTrivial returns true when every changed file in the PR is mechanical
 // per the Mechanical Bump PR Pipeline allow-list: go.mod toolchain/version
 // bumps, go.sum hash bumps, Dockerfile base-image/GO_VERSION bumps,
-// append-only CHANGELOG, and workflow go-version bumps. Any out-of-pattern
+// append-only CHANGELOG, workflow go-version bumps, and single-hash homebrew
+// cask version/sha256 bumps. Any out-of-pattern
 // file (or an empty file list) returns false — conservative on edge cases: a
 // false-positive auto-merge (silent behavior change shipped) costs more than a
 // false-negative (waiting human merge).
@@ -62,6 +70,8 @@ func isMechanicalFile(f PRFile) bool {
 		return appendOnly(f.Patch)
 	case strings.HasPrefix(f.Filename, ".github/workflows/") && strings.HasSuffix(f.Filename, ".yml"):
 		return patchAll(f.Patch, workflowMechanical)
+	case strings.HasPrefix(f.Filename, "Casks/") && strings.HasSuffix(f.Filename, ".rb"):
+		return caskMechanical(f.Patch)
 	default:
 		return false
 	}
@@ -112,6 +122,47 @@ func goSumMechanical(patch string) bool {
 		}
 	}
 	return true
+}
+
+// caskMechanical returns true when a Casks/<name>.rb patch touches only one
+// version line and one sha256 line, each removed line paired with an added
+// line of the same kind. Pairing is by kind, never by count: a version
+// addition cannot pay for a sha256 removal, and a multi-architecture bump
+// (several sha256 lines) is not mechanical.
+func caskMechanical(patch string) bool {
+	if patch == "" {
+		return false
+	}
+	var removedVersion, addedVersion, removedSHA256, addedSHA256 int
+	for _, line := range strings.Split(patch, "\n") {
+		if line == "" ||
+			strings.HasPrefix(line, "---") ||
+			strings.HasPrefix(line, "+++") ||
+			strings.HasPrefix(line, "@@") {
+			continue
+		}
+		if !strings.HasPrefix(line, "+") && !strings.HasPrefix(line, "-") {
+			continue
+		}
+		switch {
+		case caskVersionLine.MatchString(line):
+			if line[0] == '-' {
+				removedVersion++
+			} else {
+				addedVersion++
+			}
+		case caskSHA256Line.MatchString(line):
+			if line[0] == '-' {
+				removedSHA256++
+			} else {
+				addedSHA256++
+			}
+		default:
+			return false
+		}
+	}
+	return removedVersion == 1 && addedVersion == 1 &&
+		removedSHA256 == 1 && addedSHA256 == 1
 }
 
 // patchAll returns true when every added/removed line in a unified-diff patch
