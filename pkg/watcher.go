@@ -817,6 +817,13 @@ func (w *watcher) tryOverride(
 // The override task-id is the same one tryOverride uses, so both override kinds
 // share one dedupe entry per (PR, head SHA). A failed send records nothing, so
 // the emission retries on the next poll.
+//
+// A qualifying PR is labelled with the auto-merge label and armed for
+// GitHub-native auto-merge in the same poll that publishes the approve. A
+// failed label write returns false so the caller reviews the PR this poll
+// instead — an approve never lands without its arming. A failed arming after a
+// successful label write does not change the return value: the label is
+// present, so the next poll's tryAutoMerge retries the arming.
 func (w *watcher) tryMechanicalOverride(
 	ctx context.Context,
 	pr PullRequest,
@@ -835,6 +842,33 @@ func (w *watcher) tryMechanicalOverride(
 		)
 		newHeadSHAs[overrideID] = details.HeadSHA
 		return true
+	}
+	// Label and arm before publishing the approve: an approve that can never
+	// merge because nothing armed the PR is the stranded-approve failure this
+	// feature exists to remove. The gate guarantees a non-empty auto-merge
+	// label, so no second emptiness check is needed.
+	//
+	// A failed label write returns false so the caller falls through to a
+	// normal review this poll — an approve must never land without its arming.
+	// A failed arming after a successful label write is tolerated: the label is
+	// now present, so the next poll's tryAutoMerge path retries and succeeds.
+	// When the label is already present, tryAutoMerge already ran earlier in
+	// this poll and armed the PR; a second arming would be a redundant call and
+	// can fail with UNPROCESSABLE on an already-clean PR.
+	if !slices.Contains(pr.Labels, w.autoMergeLabel) {
+		if err := w.ghClient.AddLabel(
+			ctx, pr.Owner, pr.Repo, pr.Number, w.autoMergeLabel,
+		); err != nil {
+			glog.Errorf("mechanical override: add label failed pr=%s err=%v", pr.HTMLURL, err)
+			w.metrics.IncPRPublished("error")
+			return false
+		}
+		if err := w.ghClient.EnableAutoMerge(ctx, pr.Owner, pr.Repo, pr.Number); err != nil {
+			glog.Errorf(
+				"mechanical override: enable auto-merge failed pr=%s err=%v", pr.HTMLURL, err,
+			)
+			w.metrics.IncPRPublished("error")
+		}
 	}
 	if w.publisher.PublishMechanicalOverride(ctx, pr, overrideID, details) {
 		cursorHeadSHAs[overrideID] = details.HeadSHA

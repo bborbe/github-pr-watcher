@@ -1,8 +1,13 @@
 ---
-status: approved
+status: completed
 spec: [002-mechanical-approve-trivial-bot-bumps]
+summary: Mechanical override now applies the auto-merge label and arms GitHub-native auto-merge in the same poll as the approve, with label-override precedence preserved, plus tests, README, and changelog updates
+execution_id: github-pr-watcher-mechanical-approve-exec-009-mechanical-override-arming-and-precedence
+dark-factory-version: v0.198.7
 created: "2026-10-24T08:32:00Z"
 queued: "2026-10-24T09:13:04Z"
+started: "2026-10-24T09:19:57Z"
+completed: "2026-10-24T09:24:31Z"
 ---
 
 # Arm auto-merge in the mechanical-override poll and keep the label override in front
