@@ -1,7 +1,8 @@
 ---
-spec: ["003-cask-trivial-classification"]
 status: draft
+spec: [003-cask-trivial-classification]
 created: "2026-10-24T09:19:10Z"
+branch: dark-factory/cask-trivial-classification
 ---
 
 # Classify a single-hash homebrew cask bump as a mechanical (trivial) change

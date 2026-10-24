@@ -1,7 +1,8 @@
 ---
-status: generating
+status: prompted
 approved: "2026-10-24T09:18:10Z"
 generating: "2026-10-24T09:18:11Z"
+prompted: "2026-10-24T09:28:47Z"
 branch: dark-factory/cask-trivial-classification
 ---
 
