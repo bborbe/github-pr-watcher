@@ -24,15 +24,18 @@ var (
 	// workflowMechanical matches a workflow patch line that is a go-version
 	// value bump (`+  go-version: 1.26.6`).
 	workflowMechanical = regexp.MustCompile(`^[+-]\s*go-version:\s*[0-9]+\.[0-9]+(\.[0-9]+)?`)
+	// goSumLine matches one changed go.sum line: a module path, a version
+	// (optionally carrying the `/go.mod` suffix), and an h1 hash.
+	goSumLine = regexp.MustCompile(`^[+-]\S+ v\S+ h1:[A-Za-z0-9+/]+={0,2}$`)
 )
 
 // ClassifyTrivial returns true when every changed file in the PR is mechanical
 // per the Mechanical Bump PR Pipeline allow-list: go.mod toolchain/version
-// bumps, Dockerfile base-image/GO_VERSION bumps, append-only CHANGELOG, and
-// workflow go-version bumps. Any out-of-pattern file (or an empty file list)
-// returns false — conservative on edge cases: a false-positive auto-merge
-// (silent behavior change shipped) costs more than a false-negative (waiting
-// human merge).
+// bumps, go.sum hash bumps, Dockerfile base-image/GO_VERSION bumps,
+// append-only CHANGELOG, and workflow go-version bumps. Any out-of-pattern
+// file (or an empty file list) returns false — conservative on edge cases: a
+// false-positive auto-merge (silent behavior change shipped) costs more than a
+// false-negative (waiting human merge).
 func ClassifyTrivial(files []PRFile) bool {
 	if len(files) == 0 {
 		return false
@@ -51,6 +54,8 @@ func isMechanicalFile(f PRFile) bool {
 	switch {
 	case f.Filename == "go.mod":
 		return patchAll(f.Patch, goModMechanical)
+	case f.Filename == "go.sum":
+		return goSumMechanical(f.Patch)
 	case f.Filename == "Dockerfile":
 		return patchAll(f.Patch, dockerfileMechanical)
 	case f.Filename == "CHANGELOG.md":
@@ -60,6 +65,53 @@ func isMechanicalFile(f PRFile) bool {
 	default:
 		return false
 	}
+}
+
+// goSumMechanical returns true when a go.sum patch touches only module hash
+// lines and every removed hash line is paired with an added hash line for the
+// same module path and the same /go.mod suffix presence. An unpaired addition
+// (a newly required module) is accepted; an unpaired removal is not, because
+// it changes the build graph.
+func goSumMechanical(patch string) bool {
+	if patch == "" {
+		return false
+	}
+	type moduleKey struct {
+		path  string
+		goMod bool
+	}
+	removed := map[moduleKey]int{}
+	added := map[moduleKey]int{}
+	for _, line := range strings.Split(patch, "\n") {
+		if line == "" ||
+			strings.HasPrefix(line, "---") ||
+			strings.HasPrefix(line, "+++") ||
+			strings.HasPrefix(line, "@@") {
+			continue
+		}
+		if !strings.HasPrefix(line, "+") && !strings.HasPrefix(line, "-") {
+			continue
+		}
+		if !goSumLine.MatchString(line) {
+			return false
+		}
+		fields := strings.Fields(line[1:])
+		key := moduleKey{
+			path:  fields[0],
+			goMod: strings.HasSuffix(fields[1], "/go.mod"),
+		}
+		if line[0] == '-' {
+			removed[key]++
+		} else {
+			added[key]++
+		}
+	}
+	for key, count := range removed {
+		if added[key] < count {
+			return false
+		}
+	}
+	return true
 }
 
 // patchAll returns true when every added/removed line in a unified-diff patch
