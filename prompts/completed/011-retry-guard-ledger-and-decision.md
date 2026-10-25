@@ -8,7 +8,7 @@ created: "2026-10-25T17:22:00Z"
 queued: "2026-10-25T17:43:13Z"
 started: "2026-10-25T17:43:14Z"
 completed: "2026-10-25T17:46:41Z"
-branch: dark-factory/bug-retry-runs-alongside-original
+branch: fix/retry-inflight-guard
 ---
 
 # Add the retry guard: typed decision, in-memory publish ledger, verdict lookup

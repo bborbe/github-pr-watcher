@@ -8,7 +8,7 @@ created: "2026-10-25T17:22:00Z"
 queued: "2026-10-25T17:43:15Z"
 started: "2026-10-25T17:46:42Z"
 completed: "2026-10-25T17:50:38Z"
-branch: dark-factory/bug-retry-runs-alongside-original
+branch: fix/retry-inflight-guard
 ---
 
 # Wire the retry guard into the forced path, the factory and main

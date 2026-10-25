@@ -1,9 +1,10 @@
 ---
-status: prompted
+status: verifying
 approved: "2026-10-25T09:26:29Z"
 generating: "2026-10-25T17:18:47Z"
 prompted: "2026-10-25T17:28:32Z"
-branch: dark-factory/bug-retry-runs-alongside-original
+verifying: "2026-10-25T17:50:38Z"
+branch: fix/retry-inflight-guard
 ---
 
 ## Summary
