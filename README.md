@@ -195,7 +195,14 @@ the shared App token.
 
 ### Single-PR Trigger Known Limit
 
-If a vault task already exists for the same `(PR, SHA)`, the controller's `create-if-not-exists` is idempotent and no fresh agent Job spawns. To force a re-run in that case, reset the vault task's frontmatter (`phase`, `status`, `trigger_count`) manually OR push a new commit so the SHA changes.
+If a vault task already exists for the same `(PR, SHA)`, the controller's `create-if-not-exists` is idempotent and no fresh agent Job spawns. To force a re-run in that case, call `/trigger?url=<pr_url>&force=true` (the forced run salts the task title with a retry token, so it lands on a fresh record) OR push a new commit so the SHA changes.
+
+### Un-parking a Parked Record
+
+A parked record (oversized or untrusted author) carries no PR URL in its body, so the reviewer fails it if it is un-parked by editing its frontmatter. Use the lever for the park reason instead:
+
+- **Oversized PR** — call `/trigger?url=<pr_url>&force=true`. Force skips the oversized park and composes a fresh, reviewable record.
+- **Untrusted author** — add the login to `TRUSTED_AUTHORS`; the next push or trigger creates a reviewable record. Force does not skip the trust check.
 
 ## Development
 

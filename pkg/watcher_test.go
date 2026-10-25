@@ -1214,7 +1214,8 @@ var _ = Describe("pkg.Watcher", func() {
 					Expect(cmd.Frontmatter["status"]).To(Equal("todo"))
 					Expect(cmd.Body).To(ContainSubstring("alice"))
 					Expect(cmd.Body).To(ContainSubstring("Untrusted author"))
-					Expect(cmd.Body).To(ContainSubstring("phase: in_progress"))
+					Expect(cmd.Body).To(ContainSubstring("TRUSTED_AUTHORS"))
+					Expect(cmd.Body).NotTo(ContainSubstring("phase: in_progress"))
 					Expect(
 						cmd.Title,
 					).To(Equal("PR Review github - bborbe-repo - 10 - sha1 - some-pr"))
@@ -3123,6 +3124,36 @@ var _ = Describe("BuildCreateCommand oversized PR park", func() {
 		Expect(cmd.Body).To(ContainSubstring("Oversized PR"))
 		Expect(cmd.Body).To(ContainSubstring("600 added lines"))
 		Expect(cmd.Body).To(ContainSubstring("2 changed files"))
+	})
+
+	// The park body carries no PR URL, so the reviewer fails any record that
+	// is un-parked by editing its frontmatter. The body must name the lever
+	// that works (a forced /trigger) and must not offer the frontmatter edit.
+	It("oversized park body names the forced-trigger lever, not a frontmatter edit", func() {
+		cmd := pkg.BuildCreateCommand(
+			makePR("trusted-user"), makeOversized(), "00000000-0000-0000-0000-000000000017",
+			"dev", 80, 60, "pr-reviewer", "agent",
+			trust.NewResult(true, "author allowlist"), false, 500, 100,
+			pkg.Exclusion{},
+		)
+		Expect(cmd.Body).To(ContainSubstring("/trigger?url="))
+		Expect(cmd.Body).To(ContainSubstring("force=true"))
+		Expect(cmd.Body).To(ContainSubstring("Do not paste the URL into this record"))
+		Expect(cmd.Body).NotTo(ContainSubstring("edit the frontmatter:"))
+		Expect(cmd.Body).NotTo(ContainSubstring("https://github.com/owner/repo/pull/1"))
+	})
+
+	It("untrusted body names TRUSTED_AUTHORS, not a frontmatter edit", func() {
+		cmd := pkg.BuildCreateCommand(
+			makePR("unknown-user"), makeOversized(), "00000000-0000-0000-0000-000000000018",
+			"dev", 80, 60, "pr-reviewer", "agent",
+			trust.NewResult(false, "author not in allowlist"), false, 500, 100,
+			pkg.Exclusion{},
+		)
+		Expect(cmd.Body).To(ContainSubstring("TRUSTED_AUTHORS"))
+		Expect(cmd.Body).To(ContainSubstring("A forced re-trigger also fails"))
+		Expect(cmd.Body).NotTo(ContainSubstring("To auto-process this PR"))
+		Expect(cmd.Body).NotTo(ContainSubstring("https://github.com/owner/repo/pull/1"))
 	})
 
 	It("trusted oversized author with thresholds disabled — reviews normally", func() {
