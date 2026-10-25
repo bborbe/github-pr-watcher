@@ -1,7 +1,12 @@
 ---
-status: approved
+status: completed
+summary: Added a same-repo trust leaf, carried head/base repository full names on PR, PRDetails and all eight trust call sites, moved the scanner trust check after its details fetch, and registered the leaf in the production trust chain
+execution_id: github-pr-watcher-same-repo-exec-011-same-repo-trust-guard
+dark-factory-version: v0.198.7
 created: "2026-10-25T20:22:56Z"
 queued: "2026-10-25T20:33:22Z"
+started: "2026-10-25T21:08:31Z"
+completed: "2026-10-25T21:11:21Z"
 ---
 
 # Require a same-repo pull request before trusting it

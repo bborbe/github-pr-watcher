@@ -304,7 +304,7 @@ func (a *application) Run(ctx context.Context, _ libsentry.Client) error {
 	}()
 	createSender := factory.CreateKafkaSender(syncProducer, a.TopicPrefix)
 
-	trustDecision := trust.And{trust.NewAuthorAllowlist(trustedAuthors)}
+	trustDecision := trust.And{trust.NewAuthorAllowlist(trustedAuthors), trust.NewSameRepo()}
 
 	httpClient, err := a.resolveAuth(ctx)
 	if err != nil {

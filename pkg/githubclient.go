@@ -70,6 +70,16 @@ type PRDetails struct {
 	// `fix/update-go-<sha>` — see isSupersededDepBump.
 	HeadRef string
 
+	// HeadRepoFullName is the head repository's `owner/repo` full name. Empty
+	// when GitHub no longer reports a head repo (a deleted fork). It feeds the
+	// same-repo trust check, so an empty value denies.
+	HeadRepoFullName string
+
+	// BaseRepoFullName is the base repository's `owner/repo` full name. Empty
+	// when unknown. It feeds the same-repo trust check, so an empty value
+	// denies.
+	BaseRepoFullName string
+
 	// AuthorLogin is the GitHub author login; empty for deleted accounts.
 	AuthorLogin string
 
@@ -460,18 +470,20 @@ func (c *githubClient) GetPRDetails(
 		)
 	}
 	return PRDetails{
-		HeadSHA:        pr.GetHead().GetSHA(),
-		CloneURL:       pr.GetHead().GetRepo().GetCloneURL(),
-		BaseRef:        pr.GetBase().GetRef(),
-		HeadRef:        pr.GetHead().GetRef(),
-		AuthorLogin:    pr.GetUser().GetLogin(),
-		Title:          pr.GetTitle(),
-		IsDraft:        pr.GetDraft(),
-		UpdatedAt:      libtime.DateTime(pr.GetUpdatedAt().Time),
-		Labels:         labelNames(pr.Labels),
-		Additions:      pr.GetAdditions(),
-		ChangedFiles:   pr.GetChangedFiles(),
-		MergeableState: MergeState(pr.GetMergeableState()),
+		HeadSHA:          pr.GetHead().GetSHA(),
+		CloneURL:         pr.GetHead().GetRepo().GetCloneURL(),
+		BaseRef:          pr.GetBase().GetRef(),
+		HeadRef:          pr.GetHead().GetRef(),
+		HeadRepoFullName: pr.GetHead().GetRepo().GetFullName(),
+		BaseRepoFullName: pr.GetBase().GetRepo().GetFullName(),
+		AuthorLogin:      pr.GetUser().GetLogin(),
+		Title:            pr.GetTitle(),
+		IsDraft:          pr.GetDraft(),
+		UpdatedAt:        libtime.DateTime(pr.GetUpdatedAt().Time),
+		Labels:           labelNames(pr.Labels),
+		Additions:        pr.GetAdditions(),
+		ChangedFiles:     pr.GetChangedFiles(),
+		MergeableState:   MergeState(pr.GetMergeableState()),
 	}, nil
 }
 

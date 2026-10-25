@@ -380,13 +380,6 @@ func (s *unreviewedScanner) qualify(
 	if s.overrideLabel != "" && slices.Contains(pr.Labels, s.overrideLabel) {
 		return PRDetails{}, false, nil
 	}
-	trustResult, err := s.trustDecision.IsTrusted(ctx, trust.PR{AuthorLogin: pr.AuthorLogin})
-	if err != nil {
-		return PRDetails{}, false, errors.Wrapf(ctx, err, "trust check %s", prKey(pr))
-	}
-	if !trustResult.Success() {
-		return PRDetails{}, false, nil
-	}
 	// UpdatedAt is the reviewable-since clock: it moves on open, on a new push
 	// and on draft→ready, each of which restarts the wait.
 	if now.Sub(pr.UpdatedAt) < s.cfg.Threshold {
@@ -399,6 +392,24 @@ func (s *unreviewedScanner) qualify(
 	details, err := s.ghClient.GetPRDetails(ctx, pr.Owner, pr.Repo, pr.Number)
 	if err != nil {
 		return PRDetails{}, false, err
+	}
+	// The trust check runs after the details fetch because the head repo only
+	// arrives with the details. For a trusted author this costs no extra GitHub
+	// call — GetPRDetails was already made for every PR reaching this point. For
+	// an untrusted author it costs one fetch per scan (cachedReviewed never
+	// caches an untrusted PR) and a fetch error aborts the scan; both are
+	// accepted costs of knowing the head repo. Do not move the fetch back above
+	// this check.
+	trustResult, err := s.trustDecision.IsTrusted(ctx, trust.PR{
+		AuthorLogin:      pr.AuthorLogin,
+		HeadRepoFullName: details.HeadRepoFullName,
+		BaseRepoFullName: details.BaseRepoFullName,
+	})
+	if err != nil {
+		return PRDetails{}, false, errors.Wrapf(ctx, err, "trust check %s", prKey(pr))
+	}
+	if !trustResult.Success() {
+		return PRDetails{}, false, nil
 	}
 	// Fail-closed, mirroring processPR: no head SHA means no reviewable commit.
 	if details.HeadSHA == "" {
