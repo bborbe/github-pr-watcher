@@ -38,6 +38,7 @@ var _ = func(
 	createSender task.CreateCommandSender,
 	taskCreationFilter filter.TaskCreationFilter,
 	trustDecision trust.Trust,
+	mechanicalOverrideAuthors []string,
 	stage string,
 	maxSlugLen int,
 	maxTitleLen int,
@@ -51,6 +52,7 @@ var _ = func(
 	return runTriggerPRReview(
 		ctx, tx, obj,
 		ghClient, createSender, taskCreationFilter, trustDecision,
+		mechanicalOverrideAuthors,
 		stage, maxSlugLen, maxTitleLen, taskSuffix, targetVault,
 		maxAdditions, maxChangedFiles, metrics,
 		currentDateTime,

@@ -5,6 +5,10 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+- fix: defer a **webhook**-published review to the poll path when the PR author is on `MECHANICAL_OVERRIDE_AUTHORS`, so a trivial bot bump no longer receives both an LLM review and a mechanical override on the same head SHA — the webhook arrives seconds after the PR is created, always before the poll path can act, and the poll path owns the override-vs-review decision. `TriggerPRReviewCommand` gains a `webhook` flag set only by the webhook handler, so every operator command on the `/trigger` endpoint — forced or not — still gets a full review; a deferral is counted under a new `deferred` label on `github_pr_watcher_prs_total` rather than `skipped`, which keeps meaning "dropped"
+
 ## v0.15.0
 
 - feat: mechanically approve trivial bot dependency bumps on opted-in repos, replacing the LLM review for that change class. A pull request qualifies when its author is on `MECHANICAL_OVERRIDE_AUTHORS`, the author is trusted, the repo's `.maintainer.yaml` carries `autoMerge.trivial` + `prReviewer.autoApprove`, and every changed file is mechanical; a qualifying PR gets the auto-merge label, has native auto-merge armed, and receives one `pr-override` task carrying `override_reason: trivial-bot-bump` and a body naming the rule and stating that no LLM review ran — deduplicated per (PR, head SHA) on the existing override cursor entry, never alongside a review task for that SHA, retried next poll when the send fails, and recorded under the new `override_mechanical` label on `github_pr_watcher_prs_total` (pre-created at zero). A PR carrying the override label keeps the label override, which takes precedence

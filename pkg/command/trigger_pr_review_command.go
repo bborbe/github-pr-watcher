@@ -28,8 +28,18 @@ const TriggerPRReviewCommandOperation base.CommandOperation = "trigger-pr-review
 // controller's vault-file dedup skip does NOT fire and a fresh review task
 // is created for the same head SHA (spec 069).
 type TriggerPRReviewCommand struct {
-	URL   string `json:"url"`
-	Force bool   `json:"force,omitempty"`
+	URL string `json:"url"`
+	// Force is the operator's explicit "review this now" request: it salts the
+	// task identifier (bypassing controller dedupe) and bypasses the
+	// oversized-PR park. It is NOT a webhook discriminator — the plain
+	// /trigger endpoint also publishes Force=false.
+	Force bool `json:"force,omitempty"`
+	// Webhook marks a command the webhook handler published on a pull_request
+	// event. Only the webhook path sets it; the operator /trigger endpoint
+	// leaves it false, which is what keeps an explicit operator request from
+	// being deferred to the poll path. Absent on messages published before the
+	// field existed, so they decode as false and behave as operator requests.
+	Webhook bool `json:"webhook,omitempty"`
 }
 
 // Validate enforces the command's schema rules. URL must be non-empty and

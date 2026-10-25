@@ -54,6 +54,7 @@ var _ = Describe("CreateCommandConsumer", func() {
 			createSender,
 			taskCreationFilter,
 			trustDecision,
+			nil,
 			"dev", 80, 200, "", "", 0, 0,
 			pkg.NewMetrics(),
 			base.TopicPrefix("develop"),

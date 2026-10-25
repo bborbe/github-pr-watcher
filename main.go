@@ -374,6 +374,7 @@ func (a *application) Run(ctx context.Context, _ libsentry.Client) error {
 		createSender,
 		taskCreationFilter,
 		trustDecision,
+		pkg.ParseMechanicalOverrideAuthors(a.MechanicalOverrideAuthors),
 		a.Stage,
 		a.MaxSlugLen,
 		a.MaxTitleLen,

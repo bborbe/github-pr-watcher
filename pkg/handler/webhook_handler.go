@@ -138,7 +138,8 @@ func (h *webhookHandler) ServeHTTP(
 	}
 
 	if err := h.sender.SendCommand(ctx, command.TriggerPRReviewCommand{
-		URL: payload.PullRequest.HTMLURL,
+		URL:     payload.PullRequest.HTMLURL,
+		Webhook: true,
 	}); err != nil {
 		return libhttp.WrapWithStatusCode(
 			errors.Wrap(ctx, err, "send TriggerPRReviewCommand"),

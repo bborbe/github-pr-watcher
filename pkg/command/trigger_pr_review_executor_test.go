@@ -102,6 +102,7 @@ var _ = Describe("NewTriggerPRReviewCommandExecutor", func() {
 				nil,
 				newCommandObject(cmd),
 				ghClient, createSender, taskCreationFilter, trustDecision,
+				nil,
 				"dev", 80, 200, "", "", 0, 0,
 				pkg.NewMetrics(),
 				libtime.NewCurrentDateTime(),
@@ -178,6 +179,107 @@ var _ = Describe("NewTriggerPRReviewCommandExecutor", func() {
 	)
 })
 
+// A webhook TriggerPRReviewCommand arrives seconds after the PR is created,
+// always before the poll path can act. Publishing a full review here would
+// therefore guarantee that a trivial bot bump gets BOTH an LLM review and a
+// mechanical override on the same SHA — spending exactly the reviewer pod the
+// override exists to save. The poll path owns that decision.
+var _ = Describe("mechanical-override authors defer to the poll path", func() {
+	var (
+		ctx                context.Context
+		ghClient           *mocks.GitHubClient
+		createSender       *taskmocks.TaskCreateCommandSender
+		taskCreationFilter *mocks.TaskCreationFilter
+		trustDecision      *mocks.Trust
+	)
+
+	run := func(cmd command.TriggerPRReviewCommand, authors []string) error {
+		_, _, err := command.RunTriggerPRReview(
+			ctx,
+			nil,
+			newCommandObject(cmd),
+			ghClient, createSender, taskCreationFilter, trustDecision,
+			authors,
+			"dev", 80, 200, "", "", 0, 0,
+			pkg.NewMetrics(),
+			libtime.NewCurrentDateTime(),
+		)
+		return err
+	}
+
+	BeforeEach(func() {
+		ctx = context.Background()
+		ghClient = new(mocks.GitHubClient)
+		createSender = new(taskmocks.TaskCreateCommandSender)
+		taskCreationFilter = new(mocks.TaskCreationFilter)
+		trustDecision = new(mocks.Trust)
+
+		taskCreationFilter.SkipReturns(false)
+		trustDecision.IsTrustedReturns(trust.NewResult(true, "trusted"), nil)
+		ghClient.GetPRDetailsReturns(pkg.PRDetails{
+			HeadSHA:     "abc123",
+			CloneURL:    "https://github.com/bborbe/repo.git",
+			BaseRef:     "main",
+			HeadRef:     "fix/update-go-abc1234",
+			AuthorLogin: "ben-s-go-updater[bot]",
+			Title:       "update go module dependencies",
+			IsDraft:     false,
+		}, nil)
+	})
+
+	It("defers a webhook command from a mechanical-override author", func() {
+		err := run(
+			command.TriggerPRReviewCommand{URL: validPRURL, Webhook: true},
+			[]string{"ben-s-go-updater[bot]"},
+		)
+		Expect(errors.Is(err, cdb.ErrCommandObjectSkipped)).To(BeTrue(),
+			"expected ErrCommandObjectSkipped, got %v", err)
+		Expect(createSender.SendCommandCallCount()).To(Equal(0),
+			"no review may be published here — the poll path decides override vs review")
+	})
+
+	It("still reviews a plain operator trigger for a mechanical-override author", func() {
+		// The regression this guards: /trigger publishes Force=false, so
+		// keying the deferral on Force would silently swallow an operator's
+		// explicit "review this now" request.
+		err := run(
+			command.TriggerPRReviewCommand{URL: validPRURL},
+			[]string{"ben-s-go-updater[bot]"},
+		)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(createSender.SendCommandCallCount()).To(Equal(1),
+			"an operator command always gets a full review")
+	})
+
+	It("still reviews a forced webhook command", func() {
+		err := run(
+			command.TriggerPRReviewCommand{URL: validPRURL, Webhook: true, Force: true},
+			[]string{"ben-s-go-updater[bot]"},
+		)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(createSender.SendCommandCallCount()).To(Equal(1))
+	})
+
+	It("publishes a full review for an author outside the mechanical list", func() {
+		err := run(
+			command.TriggerPRReviewCommand{URL: validPRURL, Webhook: true},
+			[]string{"someone-else[bot]"},
+		)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(createSender.SendCommandCallCount()).To(Equal(1))
+	})
+
+	It("publishes a full review when the mechanical list is empty", func() {
+		err := run(
+			command.TriggerPRReviewCommand{URL: validPRURL, Webhook: true},
+			nil,
+		)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(createSender.SendCommandCallCount()).To(Equal(1),
+			"an empty list is the off switch — nothing may be deferred")
+	})
+})
+
 var _ = Describe(
 	"executor vs handler payload parity (spec 066 AC: byte-identical downstream)",
 	func() {
@@ -248,6 +350,7 @@ var _ = Describe(
 				nil,
 				newCommandObject(publishedCmd),
 				ghClient, executorSender, taskCreationFilter, trustDecision,
+				nil,
 				"dev", 80, 200, "", "", 0, 0,
 				pkg.NewMetrics(),
 				libtime.NewCurrentDateTime(),
@@ -286,6 +389,7 @@ var _ = Describe(
 				nil,
 				newCommandObject(publishedCmd),
 				ghClient, executorSender, taskCreationFilter, trustDecision,
+				nil,
 				"dev", 80, 200, "", "", 0, 0,
 				pkg.NewMetrics(),
 				libtime.NewCurrentDateTime(),
@@ -352,6 +456,7 @@ var _ = Describe("executor crash recovery (spec 066 AC 16)", func() {
 		_, _, err := command.RunTriggerPRReview(
 			killedCtx, nil, commandObject,
 			ghClient, createSender, taskCreationFilter, trustDecision,
+			nil,
 			"dev", 80, 200, "", "", 0, 0,
 			pkg.NewMetrics(),
 			libtime.NewCurrentDateTime(),
@@ -382,6 +487,7 @@ var _ = Describe("executor crash recovery (spec 066 AC 16)", func() {
 		_, _, err = command.RunTriggerPRReview(
 			context.Background(), nil, commandObject,
 			ghClient, freshSender, taskCreationFilter, trustDecision,
+			nil,
 			"dev", 80, 200, "", "", 0, 0,
 			pkg.NewMetrics(),
 			libtime.NewCurrentDateTime(),
@@ -453,6 +559,7 @@ var _ = Describe("force-true branch (spec 067)", func() {
 			nil,
 			newCommandObject(cmd),
 			ghClient, createSender, taskCreationFilter, trustDecision,
+			nil,
 			"dev", 80, 200, "", "", 0, 0,
 			pkg.NewMetrics(),
 			currentDateTime,
@@ -564,6 +671,7 @@ var _ = Describe("force-true branch (spec 067)", func() {
 			nil,
 			newCommandObject(command.TriggerPRReviewCommand{URL: validPRURL, Force: true}),
 			ghClient, createSender, taskCreationFilter, trustDecision,
+			nil,
 			"dev", 80, 200, "", "", 0, 0,
 			metrics,
 			currentDateTime,
