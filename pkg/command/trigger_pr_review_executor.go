@@ -34,11 +34,13 @@ import (
 //   - GitHub 5xx / network error              → wrapped error (transient, retried)
 //   - trust infrastructure error              → wrapped error (transient, retried)
 //   - downstream CreateTaskCommand send error → wrapped error (transient, retried)
+//   - in-flight duplicate (forced)             → cdb.ErrCommandObjectSkipped from the guard
 //   - success                                  → nil, nil, nil
 //
 // SendResultEnabled is false (spec Non-goal: fire-and-forget, no result topic).
 // The github_pr_published metric is incremented from this executor
-// (not the HTTP handler) with labels: create, skipped, kafka_error, trust_error.
+// (not the HTTP handler) with labels: create, skipped, kafka_error, trust_error,
+// deferred, inflight_skipped.
 func NewTriggerPRReviewCommandExecutor(
 	ghClient pkg.GitHubClient,
 	createSender task.CreateCommandSender,
@@ -53,6 +55,7 @@ func NewTriggerPRReviewCommandExecutor(
 	maxAdditions int,
 	maxChangedFiles int,
 	metrics pkg.Metrics,
+	retryGuard pkg.RetryGuard,
 	currentDateTime libtime.CurrentDateTimeGetter,
 ) cdb.CommandObjectExecutorTx {
 	return cdb.CommandObjectExecutorTxFunc(
@@ -65,7 +68,7 @@ func NewTriggerPRReviewCommandExecutor(
 				mechanicalOverrideAuthors,
 				stage, maxSlugLen, maxTitleLen, taskSuffix, targetVault,
 				maxAdditions, maxChangedFiles, metrics,
-				currentDateTime,
+				retryGuard, currentDateTime,
 			)
 		},
 	)
@@ -84,7 +87,7 @@ func NewTriggerPRReviewCommandExecutor(
 // not the typed payload.
 func runTriggerPRReview(
 	ctx context.Context,
-	_ libkv.Tx,
+	tx libkv.Tx,
 	commandObject cdb.CommandObject,
 	ghClient pkg.GitHubClient,
 	createSender task.CreateCommandSender,
@@ -99,6 +102,7 @@ func runTriggerPRReview(
 	maxAdditions int,
 	maxChangedFiles int,
 	metrics pkg.Metrics,
+	retryGuard pkg.RetryGuard,
 	currentDateTime libtime.CurrentDateTimeGetter,
 ) (*base.EventID, base.Event, error) {
 	cmd, err := unmarshalAndValidate(ctx, commandObject)
@@ -158,18 +162,84 @@ func runTriggerPRReview(
 			prInfo.Owner, prInfo.Repo, prInfo.Number,
 		)
 	}
+	// The in-flight guard runs after every existing skip path, so an invalid
+	// URL, a filter skip, an untrusted author or a webhook deferral never
+	// touches the ledger. It is consulted only for a forced trigger.
+	guardPR := newRetryGuardPR(prInfo, details)
+	if err := checkRetryGuard(ctx, tx, retryGuard, cmd, guardPR); err != nil {
+		return nil, nil, err
+	}
+	// Derive the identifier only after the guard let this trigger through: a
+	// suppressed duplicate publishes nothing and so derives nothing.
+	taskIDStr := deriveTaskID(prInfo, cmd, details.HeadSHA, currentDateTime)
 	// A forced re-review bypasses the park regardless, but the exclusion is
 	// still computed here: it feeds the `.reviewignore` audit line on the task
 	// body, which must appear on every review task, not only parked ones.
 	exclusion := pkg.ReviewIgnoreExclusion(
 		ctx, ghClient, prInfo.Owner, prInfo.Repo, prInfo.Number, cmd.URL,
 	)
-	return publishCreateCommand(
-		ctx, prInfo, cmd, details, trustResult, createSender,
+	if err := publishCreateCommand(
+		ctx, prInfo, cmd, details, trustResult, createSender, taskIDStr,
 		stage, maxSlugLen, maxTitleLen, taskSuffix, targetVault,
-		maxAdditions, maxChangedFiles, metrics,
-		currentDateTime, exclusion,
-	)
+		maxAdditions, maxChangedFiles, metrics, exclusion,
+	); err != nil {
+		return nil, nil, err
+	}
+	recordRetryGuard(ctx, tx, retryGuard, cmd, guardPR, taskIDStr)
+	return nil, nil, nil
+}
+
+// newRetryGuardPR builds the guard key for one publishable review target.
+func newRetryGuardPR(
+	prInfo *prurl.PRInfo,
+	details pkg.PRDetails,
+) pkg.RetryGuardPR {
+	return pkg.RetryGuardPR{
+		Owner:   prInfo.Owner,
+		Repo:    prInfo.Repo,
+		Number:  prInfo.Number,
+		HeadSHA: details.HeadSHA,
+	}
+}
+
+// checkRetryGuard consults the in-flight guard for a forced trigger. An
+// unforced trigger never reaches the guard. The returned error includes the
+// guard's cdb.ErrCommandObjectSkipped for an in-flight duplicate and any
+// transient ledger error; it is returned unchanged so errors.Is still matches.
+func checkRetryGuard(
+	ctx context.Context,
+	tx libkv.Tx,
+	retryGuard pkg.RetryGuard,
+	cmd TriggerPRReviewCommand,
+	guardPR pkg.RetryGuardPR,
+) error {
+	if !cmd.Force {
+		return nil
+	}
+	_, err := retryGuard.Check(ctx, tx, guardPR)
+	return err
+}
+
+// recordRetryGuard notes a successful forced publish in the guard's ledger.
+// A record failure is logged, never returned: the create command was already
+// sent, and surfacing an error would make the framework redeliver it.
+func recordRetryGuard(
+	ctx context.Context,
+	tx libkv.Tx,
+	retryGuard pkg.RetryGuard,
+	cmd TriggerPRReviewCommand,
+	guardPR pkg.RetryGuardPR,
+	taskIDStr string,
+) {
+	if !cmd.Force {
+		return
+	}
+	if err := retryGuard.Record(ctx, tx, guardPR, taskIDStr); err != nil {
+		glog.Warningf(
+			"retry guard: record publish failed pr=%s/%s#%d sha=%s task_id=%s err=%v",
+			guardPR.Owner, guardPR.Repo, guardPR.Number, guardPR.HeadSHA, taskIDStr, err,
+		)
+	}
 }
 
 // unmarshalAndValidate decodes the CommandObject payload into a typed
@@ -293,19 +363,37 @@ func applyTrust(
 	)
 }
 
-// publishCreateCommand builds the downstream CreateTaskCommand and
-// publishes it via createSender. Returns (nil, wrappedErr) on transient
-// Kafka send failure and (nil, nil) on success.
+// deriveTaskID returns the TaskIdentifier to publish for this PR at headSHA.
 //
-// When cmd.Force is true, the published TaskIdentifier is derived from
-// DeriveTaskIDForce with a time-derived nonce, AND cmd.Force is passed to
-// BuildCreateCommand so the vault TITLE carries a retry marker too. Both are
-// required: the agent controller dedupes on title path (checkTitlePathFree),
-// not on task_identifier, so salting the identifier alone left every forced
+// When cmd.Force is true, the identifier is derived from DeriveTaskIDForce
+// with a time-derived nonce, AND cmd.Force is passed to BuildCreateCommand so
+// the vault TITLE carries a retry marker too. Both are required: the agent
+// controller dedupes on title path (checkTitlePathFree), not on
+// task_identifier, so salting the identifier alone left every forced
 // re-review of an unchanged head SHA silently rejected with
 // ErrTaskAlreadyExists (confirmed in prod, bborbe/coding#90, 2026-08-09).
 // The nonce is intentionally not logged — it leaks no security-sensitive data
 // and adds noise without operator benefit.
+func deriveTaskID(
+	prInfo *prurl.PRInfo,
+	cmd TriggerPRReviewCommand,
+	headSHA string,
+	currentDateTime libtime.CurrentDateTimeGetter,
+) string {
+	if cmd.Force {
+		nonce := strconv.FormatInt(currentDateTime.Now().UnixMicro(), 10)
+		return pkg.DeriveTaskIDForce(
+			prInfo.Owner, prInfo.Repo, prInfo.Number, headSHA, nonce,
+		).String()
+	}
+	return pkg.DeriveTaskID(
+		prInfo.Owner, prInfo.Repo, prInfo.Number, headSHA,
+	).String()
+}
+
+// publishCreateCommand builds the downstream CreateTaskCommand and
+// publishes it via createSender. Returns a wrapped error on transient Kafka
+// send failure and nil on success.
 func publishCreateCommand(
 	ctx context.Context,
 	prInfo *prurl.PRInfo,
@@ -313,6 +401,7 @@ func publishCreateCommand(
 	details pkg.PRDetails,
 	trustResult trust.Result,
 	createSender task.CreateCommandSender,
+	taskIDStr string,
 	stage string,
 	maxSlugLen int,
 	maxTitleLen int,
@@ -321,9 +410,8 @@ func publishCreateCommand(
 	maxAdditions int,
 	maxChangedFiles int,
 	metrics pkg.Metrics,
-	currentDateTime libtime.CurrentDateTimeGetter,
 	exclusion pkg.Exclusion,
-) (*base.EventID, base.Event, error) {
+) error {
 	pr := pkg.PullRequest{
 		Number:      prInfo.Number,
 		Owner:       prInfo.Owner,
@@ -332,19 +420,6 @@ func publishCreateCommand(
 		AuthorLogin: details.AuthorLogin,
 		HTMLURL:     cmd.URL,
 		IsDraft:     details.IsDraft,
-	}
-	var taskIDStr string
-	if cmd.Force {
-		nonce := strconv.FormatInt(
-			currentDateTime.Now().UnixMicro(), 10,
-		)
-		taskIDStr = pkg.DeriveTaskIDForce(
-			prInfo.Owner, prInfo.Repo, prInfo.Number, details.HeadSHA, nonce,
-		).String()
-	} else {
-		taskIDStr = pkg.DeriveTaskID(
-			prInfo.Owner, prInfo.Repo, prInfo.Number, details.HeadSHA,
-		).String()
 	}
 
 	createCmd := pkg.BuildCreateCommand(
@@ -358,7 +433,7 @@ func publishCreateCommand(
 		// than logging here too (no-log-and-return-error). Downstream is
 		// idempotent via derived task_id.
 		metrics.IncPRPublished("kafka_error")
-		return nil, nil, errors.Wrapf(
+		return errors.Wrapf(
 			ctx, err, "send create task command for %s", cmd.URL,
 		)
 	}
@@ -367,5 +442,5 @@ func publishCreateCommand(
 		"trigger executor: published task_id=%s pr=%s/%s#%d sha=%s force=%v",
 		taskIDStr, prInfo.Owner, prInfo.Repo, prInfo.Number, details.HeadSHA, cmd.Force,
 	)
-	return nil, nil, nil
+	return nil
 }

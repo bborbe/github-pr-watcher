@@ -366,6 +366,10 @@ func (a *application) Run(ctx context.Context, _ libsentry.Client) error {
 	// via the derived task_id.
 	saramaClientProvider := libkafka.NewSaramaClientProviderNew(a.KafkaBrokers)
 	db := pkg.NewMemDB()
+	// Process-wide in-flight guard: suppresses a forced re-review whose review
+	// for the same head SHA is still running. Uses the same reviewer-login set
+	// as the unreviewed-PR scanner.
+	retryGuard := pkg.NewRetryGuard(ghClient, metrics, unreviewedConfig.Logins, currentDateTime)
 	commandConsumer := factory.CreateCommandConsumer(
 		saramaClientProvider,
 		syncProducer,
@@ -383,6 +387,7 @@ func (a *application) Run(ctx context.Context, _ libsentry.Client) error {
 		a.MaxAdditions,
 		a.MaxChangedFiles,
 		metrics, // shared with the watcher
+		retryGuard,
 		a.TopicPrefix,
 		currentDateTime, // spec 067: time-injected clock for Force=true nonce
 	)

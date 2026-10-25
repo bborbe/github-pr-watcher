@@ -1,8 +1,13 @@
 ---
-status: approved
+status: completed
 spec: [004-bug-retry-runs-alongside-original]
+summary: Wired the RetryGuard into the forced executor path, factory and main, with executor-level AC1-AC6 specs
+execution_id: github-pr-watcher-retry-inflight-guard-exec-012-retry-guard-executor-wiring
+dark-factory-version: v0.198.7
 created: "2026-10-25T17:22:00Z"
 queued: "2026-10-25T17:43:15Z"
+started: "2026-10-25T17:46:42Z"
+completed: "2026-10-25T17:50:38Z"
 branch: dark-factory/bug-retry-runs-alongside-original
 ---
 
