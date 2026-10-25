@@ -5,6 +5,10 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+- chore: bump `github.com/bborbe/sentry` to v1.10.6, `github.com/bborbe/service` to v1.11.1, `github.com/bborbe/time` to v1.27.18 and `github.com/bborbe/validation` to v1.5.6
+
 ## v0.15.1
 
 - fix: defer a **webhook**-published review to the poll path when the PR author is on `MECHANICAL_OVERRIDE_AUTHORS`, so a trivial bot bump no longer receives both an LLM review and a mechanical override on the same head SHA — the webhook arrives seconds after the PR is created, always before the poll path can act, and the poll path owns the override-vs-review decision. `TriggerPRReviewCommand` gains a `webhook` flag set only by the webhook handler, so every operator command on the `/trigger` endpoint — forced or not — still gets a full review; a deferral is counted under a new `deferred` label on `github_pr_watcher_prs_total` rather than `skipped`, which keeps meaning "dropped"

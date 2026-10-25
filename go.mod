@@ -11,12 +11,12 @@ require (
 	github.com/bborbe/kv v1.21.18
 	github.com/bborbe/log v1.7.4
 	github.com/bborbe/maintainer v0.50.12
-	github.com/bborbe/parse v1.12.3
+	github.com/bborbe/parse v1.12.4
 	github.com/bborbe/run v1.11.2
-	github.com/bborbe/sentry v1.10.5
-	github.com/bborbe/service v1.11.0
-	github.com/bborbe/time v1.27.17
-	github.com/bborbe/validation v1.5.5
+	github.com/bborbe/sentry v1.10.6
+	github.com/bborbe/service v1.11.1
+	github.com/bborbe/time v1.27.18
+	github.com/bborbe/validation v1.5.6
 	github.com/golang/glog v1.2.5
 	github.com/google/go-github/v62 v62.0.0
 	github.com/google/uuid v1.6.0
@@ -32,7 +32,7 @@ require (
 	github.com/Masterminds/semver/v3 v3.5.0 // indirect
 	github.com/a2aproject/a2a-go/v2 v2.6.0 // indirect
 	github.com/bborbe/argument/v2 v2.13.6 // indirect
-	github.com/bborbe/collection v1.21.2 // indirect
+	github.com/bborbe/collection v1.21.3 // indirect
 	github.com/bborbe/k8s v1.14.23 // indirect
 	github.com/bborbe/math v1.4.15 // indirect
 	github.com/bborbe/strimzi v1.8.21 // indirect
@@ -107,6 +107,4 @@ require (
 	sigs.k8s.io/yaml v1.6.0 // indirect
 )
 
-exclude (
-	k8s.io/kube-openapi v0.0.0-20260904170622-9ab3195f2a72
-)
+exclude k8s.io/kube-openapi v0.0.0-20260904170622-9ab3195f2a72
