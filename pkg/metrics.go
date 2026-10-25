@@ -119,7 +119,7 @@ func init() {
 	for _, result := range []string{"success", "rate_limited", "github_error"} {
 		pollCyclesTotal.WithLabelValues(result).Add(0)
 	}
-	for _, cmd := range []string{"create", "update_frontmatter", "skipped", "error", "trust_error", "kafka_error", "override", "override_skipped", "override_mechanical", "auto_merge", "auto_merge_skipped", "auto_merge_not_trivial", "auto_merge_labeled"} {
+	for _, cmd := range []string{"create", "update_frontmatter", "skipped", "error", "trust_error", "kafka_error", "override", "override_skipped", "override_mechanical", "deferred", "auto_merge", "auto_merge_skipped", "auto_merge_not_trivial", "auto_merge_labeled"} {
 		prPublishedTotal.WithLabelValues(cmd).Add(0)
 	}
 	for _, result := range []string{"success", "skip"} {

@@ -227,9 +227,9 @@ var _ = Describe("mechanical-override authors defer to the poll path", func() {
 		}, nil)
 	})
 
-	It("skips a non-forced trigger from a mechanical-override author", func() {
+	It("defers a webhook command from a mechanical-override author", func() {
 		err := run(
-			command.TriggerPRReviewCommand{URL: validPRURL},
+			command.TriggerPRReviewCommand{URL: validPRURL, Webhook: true},
 			[]string{"ben-s-go-updater[bot]"},
 		)
 		Expect(errors.Is(err, cdb.ErrCommandObjectSkipped)).To(BeTrue(),
@@ -238,19 +238,31 @@ var _ = Describe("mechanical-override authors defer to the poll path", func() {
 			"no review may be published here — the poll path decides override vs review")
 	})
 
-	It("still publishes a full review when the operator forces the trigger", func() {
+	It("still reviews a plain operator trigger for a mechanical-override author", func() {
+		// The regression this guards: /trigger publishes Force=false, so
+		// keying the deferral on Force would silently swallow an operator's
+		// explicit "review this now" request.
 		err := run(
-			command.TriggerPRReviewCommand{URL: validPRURL, Force: true},
+			command.TriggerPRReviewCommand{URL: validPRURL},
 			[]string{"ben-s-go-updater[bot]"},
 		)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(createSender.SendCommandCallCount()).To(Equal(1),
-			"/github-pr-review-trigger is an explicit request and always gets a review")
+			"an operator command always gets a full review")
+	})
+
+	It("still reviews a forced webhook command", func() {
+		err := run(
+			command.TriggerPRReviewCommand{URL: validPRURL, Webhook: true, Force: true},
+			[]string{"ben-s-go-updater[bot]"},
+		)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(createSender.SendCommandCallCount()).To(Equal(1))
 	})
 
 	It("publishes a full review for an author outside the mechanical list", func() {
 		err := run(
-			command.TriggerPRReviewCommand{URL: validPRURL},
+			command.TriggerPRReviewCommand{URL: validPRURL, Webhook: true},
 			[]string{"someone-else[bot]"},
 		)
 		Expect(err).NotTo(HaveOccurred())
@@ -258,7 +270,10 @@ var _ = Describe("mechanical-override authors defer to the poll path", func() {
 	})
 
 	It("publishes a full review when the mechanical list is empty", func() {
-		err := run(command.TriggerPRReviewCommand{URL: validPRURL}, nil)
+		err := run(
+			command.TriggerPRReviewCommand{URL: validPRURL, Webhook: true},
+			nil,
+		)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(createSender.SendCommandCallCount()).To(Equal(1),
 			"an empty list is the off switch — nothing may be deferred")

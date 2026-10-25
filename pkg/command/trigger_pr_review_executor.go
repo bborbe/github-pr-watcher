@@ -130,18 +130,23 @@ func runTriggerPRReview(
 	if err != nil || trustResult == nil {
 		return nil, nil, err
 	}
-	// Defer mechanical-override authors to the poll path, which owns the
-	// mechanical decision. A webhook TriggerPRReviewCommand arrives seconds
+	// Defer a WEBHOOK-created command for a mechanical-override author to the
+	// poll path, which owns the mechanical decision. A webhook arrives seconds
 	// after the PR is created — always before the poll path can act — so
 	// publishing a full review here guarantees that a trivial bot bump gets
 	// BOTH an LLM review and a mechanical override on the same SHA, spending
 	// exactly the reviewer pod the override exists to save. The poll path
 	// publishes either the override or, when the PR does not classify
-	// trivial, the review; nothing is lost by skipping here. A forced
-	// trigger (/github-pr-review-trigger) is an operator's explicit request
-	// and always gets a full review.
-	if !cmd.Force && slices.Contains(mechanicalOverrideAuthors, details.AuthorLogin) {
-		metrics.IncPRPublished("skipped")
+	// trivial, the review; nothing is lost, because applyFilter above already
+	// rejected every PR the poll path would reject too.
+	//
+	// The gate is cmd.Webhook, NOT cmd.Force: the plain /trigger endpoint also
+	// publishes Force=false, so keying on Force would silently swallow an
+	// operator's explicit review request. An operator command — forced or not
+	// — always gets a full review.
+	if cmd.Webhook && !cmd.Force &&
+		slices.Contains(mechanicalOverrideAuthors, details.AuthorLogin) {
+		metrics.IncPRPublished("deferred")
 		glog.V(2).Infof(
 			"trigger executor: deferred to poll path for mechanical override pr=%s/%s#%d author=%s",
 			prInfo.Owner, prInfo.Repo, prInfo.Number, details.AuthorLogin,
