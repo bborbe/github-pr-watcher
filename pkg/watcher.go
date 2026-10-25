@@ -445,7 +445,7 @@ func (w *watcher) Poll(ctx context.Context) error {
 	// population these side effects exist for — is never fetched by the main
 	// loop again. Re-query by label so a labeled PR stays reachable however
 	// old it is. PRs already handled above are skipped, not re-run.
-	w.processLabeledPRs(ctx, sideEffectsRun)
+	w.processLabeledPRs(ctx, &cursorState, sideEffectsRun)
 
 	if maxUpdatedAt.After(cursorState.LastUpdatedAt) {
 		cursorState.LastUpdatedAt = maxUpdatedAt
@@ -574,8 +574,20 @@ func prKey(pr PullRequest) string {
 //
 // skip holds PRs whose side effects already ran in the main loop this poll;
 // they are not repeated. Failures never abort the poll.
+//
+// The mechanical override is retried here for the same reason, and it needs
+// the retry more than the side effects do: a deferral in the main loop writes
+// no cursor entry by design, so the PR must be re-evaluated for the override
+// later. When its updated-at has fallen behind the cursor — trivially so, since
+// another PR updated later in the same batch advances the cursor past it — the
+// main search never returns it again, and the labeled pass is the only path
+// that still reaches it. Without this the deferred PR would receive neither a
+// review nor an override: strictly worse than the fall-through it replaced,
+// which at least always reviewed. Bounded to listed authors so a human-labeled
+// PR does not pay the gate's two GitHub reads on every poll.
 func (w *watcher) processLabeledPRs(
 	ctx context.Context,
+	cursorState *Cursor,
 	skip map[string]struct{},
 ) {
 	if w.autoMergeLabel == "" {
@@ -630,6 +642,12 @@ func (w *watcher) processLabeledPRs(
 		w.trySupersedeDepBump(ctx, pr, details)
 		w.tryUpdateBranch(ctx, pr, details)
 		w.tryAutoMerge(ctx, pr, details)
+		// Retry a mechanical override the main loop deferred. cursorState.HeadSHAs
+		// serves as both maps because processPRs already assigned newHeadSHAs into
+		// it, so they are the same map by the time this pass runs.
+		if slices.Contains(w.mechanicalOverrideAuthors, pr.AuthorLogin) {
+			w.tryMechanicalOverride(ctx, pr, details, cursorState.HeadSHAs, cursorState.HeadSHAs)
+		}
 	}
 }
 
@@ -870,10 +888,12 @@ func (w *watcher) tryMechanicalOverride(
 	// A gate that could not be evaluated is NOT a rejection. Returning true
 	// here means "handled: emit nothing for this PR this poll" — the caller
 	// then skips the review path, and because no cursor entry is written the
-	// gate is re-evaluated on the next poll. Falling through to a review
-	// instead would write a review-task cursor entry and permanently block the
-	// override for this SHA (see the review-already-emitted guard above), so a
-	// single transient read failure would cost a full LLM review forever.
+	// gate is re-evaluated on the next poll: from the main search window if the
+	// PR is still inside it, otherwise from processLabeledPRs, which has no
+	// cursor bound. Falling through to a review instead would write a
+	// review-task cursor entry and permanently block the override for this SHA
+	// (see the review-already-emitted guard above), so a single transient read
+	// failure would cost a full LLM review forever.
 	switch w.qualifiesForMechanicalOverride(ctx, pr, details) {
 	case overrideIndeterminate:
 		glog.Infof(

@@ -2444,6 +2444,40 @@ var _ = Describe("pkg.Watcher", func() {
 			Expect(ghClient.ListPRFilesCallCount()).To(Equal(1))
 		})
 
+		// The retry must reach a PR the main search can no longer see. A deferral
+		// writes no cursor entry, but the cursor still advances past this PR when
+		// another PR in the same batch has a later updated-at, so the search
+		// `updated:>=cursor` never returns it again. The labeled pass has no such
+		// bound and is the only path left; without it the deferred PR would get
+		// neither a review nor an override — strictly worse than the fall-through
+		// this fix replaced, which at least always reviewed.
+		It("deferred PR behind the cursor -> labeled pass retries and overrides", func() {
+			pr := prBot()
+			pr.Labels = []string{"auto-merge"}
+
+			ghClient.GetMaintainerConfigReturns(
+				maintainerconfig.MaintainerConfig{},
+				errors.New("boom"),
+			)
+			pollWith(pr, mechanicalAuthors, trustBot)
+			Expect(createSender.SendCommandCallCount()).To(Equal(0))
+
+			// Second poll: the main search returns nothing, as it would once the
+			// PR has fallen behind the cursor. Only the labeled search sees it.
+			ghClient.GetMaintainerConfigReturns(optedIn, nil)
+			ghClient.ListPRFilesReturns(mechanical, nil)
+			ghClient.SearchPRsReturns(pkg.SearchResult{RateRemaining: 100}, nil)
+			ghClient.SearchLabeledPRsReturns(pkg.SearchResult{
+				PullRequests:  []pkg.PullRequest{pr},
+				RateRemaining: 100,
+			}, nil)
+			Expect(newWatcher(mechanicalAuthors, trustBot).Poll(ctx)).NotTo(HaveOccurred())
+
+			Expect(createSender.SendCommandCallCount()).To(Equal(1))
+			_, cmd := createSender.SendCommandArgsForCall(0)
+			Expect(cmd.Frontmatter["task_type"]).To(Equal("pr-override"))
+		})
+
 		It("trust check fails -> no publication", func() {
 			failingTrust := trust.Func(func(
 				_ context.Context,
