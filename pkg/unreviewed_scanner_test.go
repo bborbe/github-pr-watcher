@@ -234,10 +234,11 @@ var _ = Describe("pkg.UnreviewedScanner", func() {
 		Expect(prs).To(BeEmpty())
 	})
 
-	It("skips an untrusted author without fetching details", func() {
+	It("skips an untrusted author after fetching details, without a review lookup", func() {
 		searchOpenReturns(openPR(42, "mallory", now.Add(-libtime.Hour)))
 		newScanner(qualifying(), defaultFilter(), trustAlice()).Scan(ctx)
-		Expect(ghClient.GetPRDetailsCallCount()).To(Equal(0))
+		Expect(ghClient.GetPRDetailsCallCount()).To(Equal(1))
+		Expect(ghClient.ListReviewsCallCount()).To(Equal(0))
 		prs, _ := fakeMetrics.SetUnreviewedPRsArgsForCall(0)
 		Expect(prs).To(BeEmpty())
 	})
