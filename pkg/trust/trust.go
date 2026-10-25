@@ -19,6 +19,16 @@ import (
 // Only the fields needed for trust decisions are included.
 type PR struct {
 	AuthorLogin string
+
+	// HeadRepoFullName is the head repository's `owner/repo` full name as
+	// GitHub reports it (`pr.head.repo.full_name`). Empty when the head repo
+	// is unknown — a deleted fork, or a PR derived from the Search API, which
+	// does not carry it.
+	HeadRepoFullName string
+
+	// BaseRepoFullName is the base repository's `owner/repo` full name
+	// (`pr.base.repo.full_name`). Empty when unknown.
+	BaseRepoFullName string
 }
 
 // Result captures a trust decision and a human-readable description.
