@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## Unreleased
+## v0.16.0
 
 - feat: require a pull request's head repository to match its base repository before trusting it, closing the fork-PR trust hole — a workflow running in a fork that opens a PR against upstream renders as the same author login, so the trusted-author list alone would have let a fork PR be auto-reviewed. `trust.PR` and `PRDetails` gain `HeadRepoFullName`/`BaseRepoFullName`, populated from `pr.head.repo.full_name` and `pr.base.repo.full_name` in `GetPRDetails`; the new `trust.NewSameRepo()` leaf denies an unknown head or base repo (fail-closed) and is registered in the production `trust.And` chain shared by the watcher, the command consumer and the single-PR trigger, so a fork PR is denied on every path including an explicit `/trigger` (non-retryable `ErrCommandObjectSkipped`). The unreviewed-PR scan now runs its trust check after the details fetch, because the head repo only arrives with the details
 
