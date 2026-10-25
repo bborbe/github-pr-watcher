@@ -39,8 +39,8 @@ var (
 // ClassifyTrivial returns true when every changed file in the PR is mechanical
 // per the Mechanical Bump PR Pipeline allow-list: go.mod toolchain/version
 // bumps, go.sum hash bumps, Dockerfile base-image/GO_VERSION bumps,
-// append-only CHANGELOG, workflow go-version bumps, and single-hash homebrew
-// cask version/sha256 bumps. Any out-of-pattern
+// append-only CHANGELOG, workflow go-version bumps, and
+// single-hash homebrew cask version/sha256 bumps. Any out-of-pattern
 // file (or an empty file list) returns false — conservative on edge cases: a
 // false-positive auto-merge (silent behavior change shipped) costs more than a
 // false-negative (waiting human merge).
