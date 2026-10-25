@@ -85,6 +85,7 @@ var _ = Describe("github_pr_published metric (spec 066 AC 12)", func() {
 			createSender,
 			taskCreationFilter,
 			trustDecision,
+			nil,
 			"dev", 80, 200, "", "", 0, 0,
 			metrics,
 			libtime.NewCurrentDateTime(),

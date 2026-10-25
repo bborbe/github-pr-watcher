@@ -6,6 +6,7 @@ package command
 
 import (
 	"context"
+	"slices"
 	"strconv"
 
 	task "github.com/bborbe/agent/command/task"
@@ -43,6 +44,7 @@ func NewTriggerPRReviewCommandExecutor(
 	createSender task.CreateCommandSender,
 	taskCreationFilter filter.TaskCreationFilter,
 	trustDecision trust.Trust,
+	mechanicalOverrideAuthors []string,
 	stage string,
 	maxSlugLen int,
 	maxTitleLen int,
@@ -60,6 +62,7 @@ func NewTriggerPRReviewCommandExecutor(
 			return runTriggerPRReview(
 				ctx, tx, commandObject,
 				ghClient, createSender, taskCreationFilter, trustDecision,
+				mechanicalOverrideAuthors,
 				stage, maxSlugLen, maxTitleLen, taskSuffix, targetVault,
 				maxAdditions, maxChangedFiles, metrics,
 				currentDateTime,
@@ -87,6 +90,7 @@ func runTriggerPRReview(
 	createSender task.CreateCommandSender,
 	taskCreationFilter filter.TaskCreationFilter,
 	trustDecision trust.Trust,
+	mechanicalOverrideAuthors []string,
 	stage string,
 	maxSlugLen int,
 	maxTitleLen int,
@@ -125,6 +129,29 @@ func runTriggerPRReview(
 	trustResult, err := applyTrust(ctx, cmd, details, trustDecision, metrics)
 	if err != nil || trustResult == nil {
 		return nil, nil, err
+	}
+	// Defer mechanical-override authors to the poll path, which owns the
+	// mechanical decision. A webhook TriggerPRReviewCommand arrives seconds
+	// after the PR is created — always before the poll path can act — so
+	// publishing a full review here guarantees that a trivial bot bump gets
+	// BOTH an LLM review and a mechanical override on the same SHA, spending
+	// exactly the reviewer pod the override exists to save. The poll path
+	// publishes either the override or, when the PR does not classify
+	// trivial, the review; nothing is lost by skipping here. A forced
+	// trigger (/github-pr-review-trigger) is an operator's explicit request
+	// and always gets a full review.
+	if !cmd.Force && slices.Contains(mechanicalOverrideAuthors, details.AuthorLogin) {
+		metrics.IncPRPublished("skipped")
+		glog.V(2).Infof(
+			"trigger executor: deferred to poll path for mechanical override pr=%s/%s#%d author=%s",
+			prInfo.Owner, prInfo.Repo, prInfo.Number, details.AuthorLogin,
+		)
+		return nil, nil, errors.Wrapf(
+			ctx,
+			cdb.ErrCommandObjectSkipped,
+			"mechanical-override author deferred to poll path pr=%s/%s#%d",
+			prInfo.Owner, prInfo.Repo, prInfo.Number,
+		)
 	}
 	// A forced re-review bypasses the park regardless, but the exclusion is
 	// still computed here: it feeds the `.reviewignore` audit line on the task
