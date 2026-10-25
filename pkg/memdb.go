@@ -6,6 +6,7 @@ package pkg
 
 import (
 	"context"
+	"slices"
 	"sort"
 	"sync"
 
@@ -22,8 +23,9 @@ import (
 //
 // The implementation is intentionally minimal — it implements only the
 // methods the offset-store / consumer wiring touches: Update, View, Sync,
-// Close, Remove, Stats, StatsDetailed. Iterator / ListBucketNames return
-// empty results because no caller in this package uses them.
+// Close, Remove, Stats, StatsDetailed. Iteration over a bucket is real
+// (forward and reverse, with Rewind and Seek), because the retry guard's
+// ledger prunes its own records on write.
 func NewMemDB() libkv.DB {
 	return &memDB{
 		buckets: make(map[string]map[string][]byte),
@@ -159,23 +161,57 @@ func (b *memBucket) Delete(ctx context.Context, key []byte) error {
 }
 
 func (b *memBucket) Iterator() libkv.Iterator {
-	return &memIterator{}
+	return newMemIterator(b.b, false)
 }
 
 func (b *memBucket) IteratorReverse() libkv.Iterator {
-	return &memIterator{}
+	return newMemIterator(b.b, true)
 }
 
-type memIterator struct{}
+type memIterator struct {
+	keys    []string
+	values  map[string][]byte
+	reverse bool
+	index   int
+}
+
+func newMemIterator(values map[string][]byte, reverse bool) libkv.Iterator {
+	keys := make([]string, 0, len(values))
+	for k := range values {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	if reverse {
+		slices.Reverse(keys)
+	}
+	return &memIterator{keys: keys, values: values, reverse: reverse}
+}
 
 func (i *memIterator) Close() {}
 
-func (i *memIterator) Item() libkv.Item { return libkv.NewByteItem(nil, nil) }
+func (i *memIterator) Item() libkv.Item {
+	if !i.Valid() {
+		return libkv.NewByteItem(nil, nil)
+	}
+	key := i.keys[i.index]
+	return libkv.NewByteItem([]byte(key), i.values[key])
+}
 
-func (i *memIterator) Next() {}
+func (i *memIterator) Next() { i.index++ }
 
-func (i *memIterator) Valid() bool { return false }
+func (i *memIterator) Valid() bool { return i.index >= 0 && i.index < len(i.keys) }
 
-func (i *memIterator) Rewind() {}
+// Rewind positions at the first element. Callers use
+// `for it.Rewind(); it.Valid(); it.Next()`, so the zero index is "rewound".
+func (i *memIterator) Rewind() { i.index = 0 }
 
-func (i *memIterator) Seek(key []byte) {}
+// Seek positions at the first key >= key (forward) or <= key (reverse).
+func (i *memIterator) Seek(key []byte) {
+	k := string(key)
+	i.index = sort.Search(len(i.keys), func(n int) bool {
+		if i.reverse {
+			return i.keys[n] <= k
+		}
+		return i.keys[n] >= k
+	})
+}

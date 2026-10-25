@@ -21,7 +21,7 @@ type Metrics interface {
 	IncPollCycle(result string)
 	// IncPRPublished increments the PR-published counter with the given command label.
 	// command: "create", "update_frontmatter", "skipped", "error", "override",
-	// "override_skipped", "override_mechanical"
+	// "override_skipped", "override_mechanical", "inflight_skipped"
 	IncPRPublished(command string)
 	// IncWebhookDelivery increments the webhook delivery counter with the given result label.
 	// result: "success", "skip"
@@ -119,7 +119,7 @@ func init() {
 	for _, result := range []string{"success", "rate_limited", "github_error"} {
 		pollCyclesTotal.WithLabelValues(result).Add(0)
 	}
-	for _, cmd := range []string{"create", "update_frontmatter", "skipped", "error", "trust_error", "kafka_error", "override", "override_skipped", "override_mechanical", "deferred", "auto_merge", "auto_merge_skipped", "auto_merge_not_trivial", "auto_merge_labeled"} {
+	for _, cmd := range []string{"create", "update_frontmatter", "skipped", "error", "trust_error", "kafka_error", "override", "override_skipped", "override_mechanical", "deferred", "auto_merge", "auto_merge_skipped", "auto_merge_not_trivial", "auto_merge_labeled", "inflight_skipped"} {
 		prPublishedTotal.WithLabelValues(cmd).Add(0)
 	}
 	for _, result := range []string{"success", "skip"} {
