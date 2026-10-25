@@ -2419,22 +2419,28 @@ var _ = Describe("pkg.Watcher", func() {
 			Expect(createSender.SendCommandCallCount()).To(Equal(0))
 		})
 
-		It("config read fails -> review only", func() {
+		// A gate that cannot be evaluated is NOT a rejection. Publishing a
+		// review here would write a review-task cursor entry, and that entry
+		// blocks the override for this SHA permanently — so one transient read
+		// failure would cost a full LLM review forever. Observed 2026-10-25 on
+		// bborbe/errors#22: reviewed 2 minutes after creation, never overridden,
+		// then merged on that review.
+		It("config read fails -> no publication, retried next poll", func() {
 			ghClient.GetMaintainerConfigReturns(
 				maintainerconfig.MaintainerConfig{},
 				errors.New("boom"),
 			)
 			pollWith(prBot(), mechanicalAuthors, trustBot)
 
-			expectReviewOnly()
+			Expect(createSender.SendCommandCallCount()).To(Equal(0))
 			Expect(ghClient.ListPRFilesCallCount()).To(Equal(0))
 		})
 
-		It("file listing fails -> review only", func() {
+		It("file listing fails -> no publication, retried next poll", func() {
 			ghClient.ListPRFilesReturns(nil, errors.New("boom"))
 			pollWith(prBot(), mechanicalAuthors, trustBot)
 
-			expectReviewOnly()
+			Expect(createSender.SendCommandCallCount()).To(Equal(0))
 			Expect(ghClient.ListPRFilesCallCount()).To(Equal(1))
 		})
 

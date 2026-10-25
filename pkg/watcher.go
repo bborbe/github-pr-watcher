@@ -867,7 +867,21 @@ func (w *watcher) tryMechanicalOverride(
 		)
 		return false
 	}
-	if !w.qualifiesForMechanicalOverride(ctx, pr, details) {
+	// A gate that could not be evaluated is NOT a rejection. Returning true
+	// here means "handled: emit nothing for this PR this poll" — the caller
+	// then skips the review path, and because no cursor entry is written the
+	// gate is re-evaluated on the next poll. Falling through to a review
+	// instead would write a review-task cursor entry and permanently block the
+	// override for this SHA (see the review-already-emitted guard above), so a
+	// single transient read failure would cost a full LLM review forever.
+	switch w.qualifiesForMechanicalOverride(ctx, pr, details) {
+	case overrideIndeterminate:
+		glog.Infof(
+			"mechanical override: gate could not be evaluated, deferring to next poll pr=%s/%s#%d",
+			pr.Owner, pr.Repo, pr.Number,
+		)
+		return true
+	case overrideDoesNotQualify:
 		return false
 	}
 	// Label and arm before publishing the approve: an approve that can never
@@ -1195,6 +1209,24 @@ func (w *watcher) maybeLabelTrivial(ctx context.Context, pr PullRequest) bool {
 	return true
 }
 
+// overrideQualification is the three-valued answer to "may this PR be approved
+// without an LLM review?". It is deliberately not a bool: "no" and "I could not
+// tell" demand opposite responses from the caller, and treating them alike is
+// what turned a transient read failure into a permanently spent review.
+type overrideQualification int
+
+const (
+	// overrideIndeterminate means a gate could not be evaluated because a
+	// GitHub read failed. The caller must publish nothing for this PR this
+	// poll and retry on the next one.
+	overrideIndeterminate overrideQualification = iota
+	// overrideDoesNotQualify means a gate evaluated and rejected the PR. The
+	// caller falls through to the normal review path.
+	overrideDoesNotQualify
+	// overrideQualifies means every gate passed.
+	overrideQualifies
+)
+
 // qualifiesForMechanicalOverride reports whether pr is a trivial bot bump the
 // operator has explicitly allowed to be approved without an LLM review.
 //
@@ -1208,25 +1240,37 @@ func (w *watcher) maybeLabelTrivial(ctx context.Context, pr PullRequest) bool {
 //  5. every changed file is mechanical per ClassifyTrivial.
 //
 // Conditions 1 and 2 precede every GitHub read, so a PR whose author is not on
-// the list costs no extra API call. A config or file-listing failure means
-// "does not qualify" and is counted as an error, so the PR still gets a
-// review; a trust-check error publishes nothing, exactly as the review path
-// does today. The function never mutates pr, writes to GitHub, or publishes a
-// command.
+// the list costs no extra API call. The function never mutates pr, writes to
+// GitHub, or publishes a command.
+//
+// A gate that REJECTS the PR and a gate that FAILS to evaluate it are different
+// answers, which is why this returns overrideQualification rather than a bool.
+// A rejection is settled — the caller falls through to a normal review. A failed
+// read is transient — the caller must emit nothing and retry on the next poll.
+//
+// Collapsing the two was a defect. A review emitted for a SHA that would later
+// have qualified writes a review-task cursor entry, and the
+// review-already-emitted guard then blocks the override for that SHA
+// *permanently*, so one failed read cost a full LLM review forever. Observed
+// 2026-10-25 on bborbe/errors#22: deferred by the webhook at 21:13:37, reviewed
+// by the poll path at 21:15:39 — two minutes after the PR was created, which is
+// precisely when a file listing or maintainer-config read is most likely to be
+// incomplete. The PR then merged on that LLM review, spending the reviewer pod
+// this feature exists to save.
 func (w *watcher) qualifiesForMechanicalOverride(
 	ctx context.Context,
 	pr PullRequest,
 	details PRDetails,
-) bool {
+) overrideQualification {
 	if w.autoMergeLabel == "" {
-		return false
+		return overrideDoesNotQualify
 	}
 	if !slices.Contains(w.mechanicalOverrideAuthors, pr.AuthorLogin) {
 		glog.V(3).Infof(
 			"mechanical override: author not listed pr=%s/%s#%d login=%s",
 			pr.Owner, pr.Repo, pr.Number, pr.AuthorLogin,
 		)
-		return false
+		return overrideDoesNotQualify
 	}
 	trustResult, err := w.trustDecision.IsTrusted(ctx, trust.PR{
 		AuthorLogin:      pr.AuthorLogin,
@@ -1235,40 +1279,40 @@ func (w *watcher) qualifiesForMechanicalOverride(
 	})
 	if err != nil {
 		glog.Errorf("mechanical override trust check failed pr=%s err=%v", pr.HTMLURL, err)
-		return false
+		return overrideIndeterminate
 	}
 	if !trustResult.Success() {
 		glog.V(2).Infof("mechanical override skipped, untrusted author pr=%s", pr.HTMLURL)
-		return false
+		return overrideDoesNotQualify
 	}
 	cfg, err := w.ghClient.GetMaintainerConfig(ctx, pr.Owner, pr.Repo)
 	if err != nil {
 		glog.Errorf("mechanical override: get maintainer config failed pr=%s err=%v",
 			pr.HTMLURL, err)
 		w.metrics.IncPRPublished("error")
-		return false
+		return overrideIndeterminate
 	}
 	if !cfg.AutoMerge.Trivial || !cfg.PrReviewer.AutoApprove {
 		glog.V(3).Infof(
 			"mechanical override: repo not opted in pr=%s/%s",
 			pr.Owner, pr.Repo,
 		)
-		return false
+		return overrideDoesNotQualify
 	}
 	files, err := w.ghClient.ListPRFiles(ctx, pr.Owner, pr.Repo, pr.Number)
 	if err != nil {
 		glog.Errorf("mechanical override: list pr files failed pr=%s err=%v", pr.HTMLURL, err)
 		w.metrics.IncPRPublished("error")
-		return false
+		return overrideIndeterminate
 	}
 	if !ClassifyTrivial(files) {
 		glog.V(3).Infof(
 			"mechanical override: not trivial pr=%s/%s#%d",
 			pr.Owner, pr.Repo, pr.Number,
 		)
-		return false
+		return overrideDoesNotQualify
 	}
-	return true
+	return overrideQualifies
 }
 
 // BuildCreateCommand builds a CreateTaskCommand for a PR given its details and trust result.
