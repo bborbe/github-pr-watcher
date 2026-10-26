@@ -20,6 +20,7 @@ import (
 	"github.com/bborbe/github-pr-watcher/pkg/command"
 	"github.com/bborbe/github-pr-watcher/pkg/handler"
 	"github.com/bborbe/github-pr-watcher/pkg/trust"
+	libkv "github.com/bborbe/kv"
 	libtime "github.com/bborbe/time"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -105,6 +106,7 @@ var _ = Describe("NewTriggerPRReviewCommandExecutor", func() {
 				nil,
 				"dev", 80, 200, "", "", 0, 0,
 				pkg.NewMetrics(),
+				new(mocks.RetryGuard),
 				libtime.NewCurrentDateTime(),
 			)
 
@@ -177,6 +179,232 @@ var _ = Describe("NewTriggerPRReviewCommandExecutor", func() {
 			command.TriggerPRReviewCommand{URL: validPRURL},
 			outcomeWrappedErr, 1),
 	)
+
+	// The retry guard is exercised through the executor here, not only in the
+	// pkg unit tests, so a guard that exists but is unreachable from the
+	// executor fails.
+	Describe("retry guard (in-flight duplicate suppression)", func() {
+		var (
+			metrics         *mocks.Metrics
+			db              libkv.DB
+			guard           pkg.RetryGuard
+			fakeNow         libtime.DateTime
+			currentDateTime libtime.CurrentDateTimeGetter
+		)
+
+		BeforeEach(func() {
+			metrics = new(mocks.Metrics)
+			db = pkg.NewMemDB()
+			fakeNow = libtime.NewDateTime(2026, 6, 9, 12, 0, 0, 0, time.UTC)
+			currentDateTime = libtime.CurrentDateTimeGetterFunc(
+				func() libtime.DateTime { return fakeNow },
+			)
+			guard = pkg.NewRetryGuard(
+				ghClient, metrics, []string{"octopus-pr-reviewer"}, currentDateTime,
+			)
+		})
+
+		// inflightSkipped counts how often the guard's suppression label was
+		// recorded on the shared metrics fake.
+		inflightSkipped := func() int {
+			count := 0
+			for i := 0; i < metrics.IncPRPublishedCallCount(); i++ {
+				if metrics.IncPRPublishedArgsForCall(i) == "inflight_skipped" {
+					count++
+				}
+			}
+			return count
+		}
+
+		// runTrigger drives one command through the executor inside a real
+		// db.Update, exactly as the consumer's transaction wrapper does.
+		runTrigger := func(cmd command.TriggerPRReviewCommand, g pkg.RetryGuard) error {
+			return db.Update(ctx, func(ctx context.Context, tx libkv.Tx) error {
+				_, _, err := command.RunTriggerPRReview(
+					ctx, tx, newCommandObject(cmd),
+					ghClient, createSender, taskCreationFilter, trustDecision,
+					nil,
+					"dev", 80, 200, "", "", 0, 0,
+					metrics, g, currentDateTime,
+				)
+				return err
+			})
+		}
+
+		It("AC1: suppresses a second forced trigger for the same head SHA", func() {
+			cmd := command.TriggerPRReviewCommand{URL: validPRURL, Force: true}
+			Expect(runTrigger(cmd, guard)).NotTo(HaveOccurred())
+			Expect(createSender.SendCommandCallCount()).To(Equal(1))
+			_, published := createSender.SendCommandArgsForCall(0)
+			firstTaskID := string(published.TaskIdentifier)
+
+			before := inflightSkipped()
+			err := runTrigger(cmd, guard)
+			Expect(err).To(HaveOccurred())
+			Expect(errors.Is(err, cdb.ErrCommandObjectSkipped)).To(BeTrue(),
+				"expected ErrCommandObjectSkipped, got %v", err)
+			Expect(createSender.SendCommandCallCount()).To(Equal(1),
+				"a suppressed duplicate must not publish")
+			Expect(inflightSkipped()-before).To(Equal(1),
+				"a suppression must increment the inflight_skipped label once")
+			Expect(err.Error()).To(ContainSubstring(firstTaskID),
+				"the skip must name the in-flight task identifier")
+		})
+
+		It("AC1b: an unforced publish also writes the ledger, so the retry suppresses", func() {
+			cmd := command.TriggerPRReviewCommand{URL: validPRURL}
+			Expect(runTrigger(cmd, guard)).NotTo(HaveOccurred())
+			Expect(createSender.SendCommandCallCount()).To(Equal(1))
+
+			cmd.Force = true
+			err := runTrigger(cmd, guard)
+			Expect(errors.Is(err, cdb.ErrCommandObjectSkipped)).To(BeTrue(),
+				"expected ErrCommandObjectSkipped, got %v", err)
+			Expect(createSender.SendCommandCallCount()).To(Equal(1),
+				"the forced retry must not duplicate the unforced publish")
+		})
+
+		// The defect this covers: the operator retries the review the POLL path
+		// published, which never passes through the command executor. A ledger
+		// holding only forced publishes finds no record and publishes a second
+		// review alongside the one already running.
+		It("AC1c: a poll-path publish suppresses a later forced retry", func() {
+			publisher := pkg.NewTaskPublisher(
+				createSender,
+				trustDecision,
+				metrics,
+				pkg.TaskConfig{
+					Stage:       "dev",
+					MaxSlugLen:  pkg.DefaultMaxSlugLen,
+					MaxTitleLen: pkg.DefaultMaxTitleLen,
+				},
+				ghClient,
+				pkg.WithPublishRecorder(pkg.NewPublishRecorder(db, guard)),
+			)
+			published := publisher.PublishCreate(
+				ctx,
+				pkg.PullRequest{
+					Number:      42,
+					Owner:       "bborbe",
+					Repo:        "repo",
+					HTMLURL:     validPRURL,
+					HeadSHA:     "abc123",
+					AuthorLogin: "bborbe",
+				},
+				"poll-task-id",
+				pkg.PRDetails{
+					HeadSHA:     "abc123",
+					CloneURL:    "https://github.com/bborbe/repo.git",
+					BaseRef:     "main",
+					AuthorLogin: "bborbe",
+					Title:       "Feature: add support",
+				},
+			)
+			Expect(published).To(BeTrue())
+			Expect(createSender.SendCommandCallCount()).To(Equal(1))
+
+			before := inflightSkipped()
+			err := runTrigger(command.TriggerPRReviewCommand{URL: validPRURL, Force: true}, guard)
+			Expect(errors.Is(err, cdb.ErrCommandObjectSkipped)).To(BeTrue(),
+				"expected ErrCommandObjectSkipped, got %v", err)
+			Expect(createSender.SendCommandCallCount()).To(Equal(1),
+				"the forced retry must not duplicate the poll-path review")
+			Expect(inflightSkipped() - before).To(Equal(1))
+		})
+
+		It("AC2: a reviewer verdict at the head SHA lets a forced trigger publish again", func() {
+			cmd := command.TriggerPRReviewCommand{URL: validPRURL, Force: true}
+			Expect(runTrigger(cmd, guard)).NotTo(HaveOccurred())
+			Expect(createSender.SendCommandCallCount()).To(Equal(1))
+
+			ghClient.ListReviewsReturns([]pkg.Review{
+				{AuthorLogin: "octopus-pr-reviewer[bot]", CommitID: "abc123"},
+			}, nil)
+
+			Expect(runTrigger(cmd, guard)).NotTo(HaveOccurred())
+			Expect(createSender.SendCommandCallCount()).To(Equal(2),
+				"a verdict overrides the in-flight suppression")
+		})
+
+		It("AC3: a forced trigger for an unrecorded head SHA publishes once", func() {
+			err := runTrigger(
+				command.TriggerPRReviewCommand{URL: validPRURL, Force: true}, guard,
+			)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(createSender.SendCommandCallCount()).To(Equal(1))
+			Expect(inflightSkipped()).To(Equal(0),
+				"a first publish must not increment inflight_skipped")
+		})
+
+		It("AC4: a stale record no longer suppresses a forced trigger", func() {
+			cmd := command.TriggerPRReviewCommand{URL: validPRURL, Force: true}
+			Expect(runTrigger(cmd, guard)).NotTo(HaveOccurred())
+			Expect(createSender.SendCommandCallCount()).To(Equal(1))
+
+			fakeNow = fakeNow.Add(libtime.Hour + libtime.Second)
+
+			Expect(runTrigger(cmd, guard)).NotTo(HaveOccurred())
+			Expect(createSender.SendCommandCallCount()).To(Equal(2),
+				"past the one-hour bound the record is ignored")
+		})
+
+		It("AC6: a failed send writes no record, so the next forced trigger publishes", func() {
+			cmd := command.TriggerPRReviewCommand{URL: validPRURL, Force: true}
+			createSender.SendCommandReturns(errors.Errorf(ctx, "kafka down"))
+
+			before := inflightSkipped()
+			err := runTrigger(cmd, guard)
+			Expect(err).To(HaveOccurred())
+			Expect(errors.Is(err, cdb.ErrCommandObjectSkipped)).To(BeFalse(),
+				"a send failure is transient, not a guard skip")
+			Expect(inflightSkipped()).To(Equal(before),
+				"a send failure must not touch inflight_skipped")
+
+			createSender.SendCommandReturns(nil)
+			Expect(runTrigger(cmd, guard)).NotTo(HaveOccurred())
+			Expect(createSender.SendCommandCallCount()).To(Equal(2),
+				"the failed send left no record, so the retry publishes")
+		})
+
+		It("AC5: the unforced path records but never checks", func() {
+			guardFake := new(mocks.RetryGuard)
+			err := runTrigger(
+				command.TriggerPRReviewCommand{URL: validPRURL, Force: false}, guardFake,
+			)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(guardFake.CheckCallCount()).To(Equal(0),
+				"an unforced trigger must not read the ledger")
+			Expect(guardFake.RecordCallCount()).To(Equal(1),
+				"an unforced publish must write the ledger, or a later forced retry duplicates it")
+			Expect(createSender.SendCommandCallCount()).To(Equal(1))
+		})
+
+		It("AC5: the guard is reachable through the public executor", func() {
+			guardFake := new(mocks.RetryGuard)
+			executor := command.NewTriggerPRReviewCommandExecutor(
+				ghClient, createSender, taskCreationFilter, trustDecision,
+				nil, "dev", 80, 200, "", "", 0, 0,
+				metrics, guardFake, currentDateTime,
+			)
+			err := db.Update(ctx, func(ctx context.Context, tx libkv.Tx) error {
+				_, _, err := executor.HandleCommand(
+					ctx, tx,
+					newCommandObject(
+						command.TriggerPRReviewCommand{URL: validPRURL, Force: true},
+					),
+				)
+				return err
+			})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(guardFake.CheckCallCount()).To(Equal(1))
+			Expect(guardFake.RecordCallCount()).To(Equal(1))
+
+			_, published := createSender.SendCommandArgsForCall(0)
+			_, _, _, recordedTaskID := guardFake.RecordArgsForCall(0)
+			Expect(recordedTaskID).To(Equal(string(published.TaskIdentifier)),
+				"the guard must record the identifier that was published")
+		})
+	})
 })
 
 // A webhook TriggerPRReviewCommand arrives seconds after the PR is created,
@@ -202,6 +430,7 @@ var _ = Describe("mechanical-override authors defer to the poll path", func() {
 			authors,
 			"dev", 80, 200, "", "", 0, 0,
 			pkg.NewMetrics(),
+			new(mocks.RetryGuard),
 			libtime.NewCurrentDateTime(),
 		)
 		return err
@@ -353,6 +582,7 @@ var _ = Describe(
 				nil,
 				"dev", 80, 200, "", "", 0, 0,
 				pkg.NewMetrics(),
+				new(mocks.RetryGuard),
 				libtime.NewCurrentDateTime(),
 			)
 			Expect(err).NotTo(HaveOccurred())
@@ -392,6 +622,7 @@ var _ = Describe(
 				nil,
 				"dev", 80, 200, "", "", 0, 0,
 				pkg.NewMetrics(),
+				new(mocks.RetryGuard),
 				libtime.NewCurrentDateTime(),
 			)
 			Expect(errors.Is(err, cdb.ErrCommandObjectSkipped)).To(BeTrue())
@@ -459,6 +690,7 @@ var _ = Describe("executor crash recovery (spec 066 AC 16)", func() {
 			nil,
 			"dev", 80, 200, "", "", 0, 0,
 			pkg.NewMetrics(),
+			new(mocks.RetryGuard),
 			libtime.NewCurrentDateTime(),
 		)
 		Expect(err).To(HaveOccurred(),
@@ -490,6 +722,7 @@ var _ = Describe("executor crash recovery (spec 066 AC 16)", func() {
 			nil,
 			"dev", 80, 200, "", "", 0, 0,
 			pkg.NewMetrics(),
+			new(mocks.RetryGuard),
 			libtime.NewCurrentDateTime(),
 		)
 		Expect(err).NotTo(HaveOccurred(), "retry must succeed: %v", err)
@@ -562,6 +795,7 @@ var _ = Describe("force-true branch (spec 067)", func() {
 			nil,
 			"dev", 80, 200, "", "", 0, 0,
 			pkg.NewMetrics(),
+			new(mocks.RetryGuard),
 			currentDateTime,
 		)
 		Expect(err).NotTo(HaveOccurred())
@@ -674,6 +908,7 @@ var _ = Describe("force-true branch (spec 067)", func() {
 			nil,
 			"dev", 80, 200, "", "", 0, 0,
 			metrics,
+			new(mocks.RetryGuard),
 			currentDateTime,
 		)
 		Expect(err).NotTo(HaveOccurred())
