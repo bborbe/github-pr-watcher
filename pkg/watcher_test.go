@@ -2444,16 +2444,44 @@ var _ = Describe("pkg.Watcher", func() {
 			Expect(ghClient.ListPRFilesCallCount()).To(Equal(1))
 		})
 
-		// The retry must reach a PR the main search can no longer see. A deferral
-		// writes no cursor entry, but the cursor still advances past this PR when
-		// another PR in the same batch has a later updated-at, so the search
-		// `updated:>=cursor` never returns it again. The labeled pass has no such
-		// bound and is the only path left; without it the deferred PR would get
-		// neither a review nor an override — strictly worse than the fall-through
-		// this fix replaced, which at least always reviewed.
-		It("deferred PR behind the cursor -> labeled pass retries and overrides", func() {
+		// A deferral writes no cursor entry, so the search window is the only thing
+		// that can bring the PR back — and the window is `updated:>=cursor`. Another
+		// PR updated later in the same batch would otherwise push the cursor past
+		// the deferred PR, and it would never be fetched again: no review, no
+		// override, permanently, because the unreviewed scanner that would
+		// otherwise notice is off unless REVIEWER_BOT_LOGINS is configured.
+		It("deferral holds the cursor at the deferred PR", func() {
+			deferred := prBot() // bot author, updatedAt 2026-02-01T00:00:00Z
+			later := prBot()
+			later.Number = 11
+			later.AuthorLogin = "alice" // not on the override list -> gets a review
+			later.UpdatedAt = libtime.DateTime(time.Date(2026, 2, 1, 0, 5, 0, 0, time.UTC))
+
+			ghClient.GetMaintainerConfigReturns(
+				maintainerconfig.MaintainerConfig{},
+				errors.New("boom"),
+			)
+			ghClient.SearchPRsReturns(pkg.SearchResult{
+				PullRequests:  []pkg.PullRequest{deferred, later},
+				RateRemaining: 100,
+			}, nil)
+			Expect(newWatcher(mechanicalAuthors, trustBot).Poll(ctx)).NotTo(HaveOccurred())
+
+			// alice's PR is reviewed; the bot PR is deferred, not reviewed.
+			Expect(createSender.SendCommandCallCount()).To(Equal(1))
+			_, cmd := createSender.SendCommandArgsForCall(0)
+			Expect(cmd.Frontmatter["task_type"]).To(Equal("pr-review"))
+
+			cursor, err := pkg.LoadCursor(ctx, cursorPath, startTime)
+			Expect(err).NotTo(HaveOccurred())
+			// Without the clamp this would be 00:05 — alice's PR — and the deferred
+			// bot PR would be outside every future search window.
+			Expect(cursor.LastUpdatedAt).To(Equal(deferred.UpdatedAt))
+			Expect(cursor.Deferrals).To(HaveLen(1))
+		})
+
+		It("deferred PR is retried on the next poll and then overridden", func() {
 			pr := prBot()
-			pr.Labels = []string{"auto-merge"}
 
 			ghClient.GetMaintainerConfigReturns(
 				maintainerconfig.MaintainerConfig{},
@@ -2462,20 +2490,34 @@ var _ = Describe("pkg.Watcher", func() {
 			pollWith(pr, mechanicalAuthors, trustBot)
 			Expect(createSender.SendCommandCallCount()).To(Equal(0))
 
-			// Second poll: the main search returns nothing, as it would once the
-			// PR has fallen behind the cursor. Only the labeled search sees it.
 			ghClient.GetMaintainerConfigReturns(optedIn, nil)
 			ghClient.ListPRFilesReturns(mechanical, nil)
-			ghClient.SearchPRsReturns(pkg.SearchResult{RateRemaining: 100}, nil)
-			ghClient.SearchLabeledPRsReturns(pkg.SearchResult{
-				PullRequests:  []pkg.PullRequest{pr},
-				RateRemaining: 100,
-			}, nil)
-			Expect(newWatcher(mechanicalAuthors, trustBot).Poll(ctx)).NotTo(HaveOccurred())
+			pollWith(pr, mechanicalAuthors, trustBot)
 
 			Expect(createSender.SendCommandCallCount()).To(Equal(1))
 			_, cmd := createSender.SendCommandArgsForCall(0)
 			Expect(cmd.Frontmatter["task_type"]).To(Equal("pr-override"))
+		})
+
+		// Deferring is only safe because the cursor is held back, and holding it
+		// back re-fetches everything newer on every poll. So the retry is bounded:
+		// past the cap the PR takes the review the pre-change code always gave it,
+		// rather than being starved indefinitely by a gate that never becomes
+		// readable (a revoked token, a changed permission).
+		It("gate unreadable past the attempt cap -> review, not starvation", func() {
+			pr := prBot()
+			ghClient.GetMaintainerConfigReturns(
+				maintainerconfig.MaintainerConfig{},
+				errors.New("boom"),
+			)
+			// maxDeferralAttempts is 3; the fourth poll exhausts the budget.
+			for i := 0; i < 4; i++ {
+				pollWith(pr, mechanicalAuthors, trustBot)
+			}
+
+			Expect(createSender.SendCommandCallCount()).To(Equal(1))
+			_, cmd := createSender.SendCommandArgsForCall(0)
+			Expect(cmd.Frontmatter["task_type"]).To(Equal("pr-review"))
 		})
 
 		It("trust check fails -> no publication", func() {

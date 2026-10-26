@@ -22,6 +22,12 @@ const DefaultCursorPath = "/data/cursor.json"
 type Cursor struct {
 	LastUpdatedAt libtime.DateTime  `json:"last_updated_at"`
 	HeadSHAs      map[string]string `json:"head_shas"`
+	// Deferrals counts how many consecutive polls a (PR, head SHA) has been left
+	// unsettled because its mechanical-override gate could not be evaluated. A
+	// deferral deliberately writes no HeadSHAs entry, so this count is the only
+	// record that the PR is owed another attempt — and the only thing that bounds
+	// the retry, so a permanently unreadable gate cannot pin the cursor forever.
+	Deferrals map[string]int `json:"deferrals,omitempty"`
 }
 
 // LoadCursor reads cursor state from path.
@@ -32,17 +38,28 @@ func LoadCursor(ctx context.Context, path string, startTime libtime.DateTime) (C
 		if os.IsNotExist(err) {
 			glog.V(2).
 				Infof("cursor file not found, using cold-start time=%s", startTime.Format(time.RFC3339))
-			return Cursor{LastUpdatedAt: startTime, HeadSHAs: make(map[string]string)}, nil
+			return Cursor{
+				LastUpdatedAt: startTime,
+				HeadSHAs:      make(map[string]string),
+				Deferrals:     make(map[string]int),
+			}, nil
 		}
 		return Cursor{}, errors.Wrap(ctx, err, "read cursor file")
 	}
 	var state Cursor
 	if err := json.Unmarshal(data, &state); err != nil {
 		glog.Warningf("cursor file corrupt, using cold-start path=%s err=%v", path, err)
-		return Cursor{LastUpdatedAt: startTime, HeadSHAs: make(map[string]string)}, nil
+		return Cursor{
+			LastUpdatedAt: startTime,
+			HeadSHAs:      make(map[string]string),
+			Deferrals:     make(map[string]int),
+		}, nil
 	}
 	if state.HeadSHAs == nil {
 		state.HeadSHAs = make(map[string]string)
+	}
+	if state.Deferrals == nil {
+		state.Deferrals = make(map[string]int)
 	}
 	return state, nil
 }

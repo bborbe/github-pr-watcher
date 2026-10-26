@@ -445,7 +445,7 @@ func (w *watcher) Poll(ctx context.Context) error {
 	// population these side effects exist for — is never fetched by the main
 	// loop again. Re-query by label so a labeled PR stays reachable however
 	// old it is. PRs already handled above are skipped, not re-run.
-	w.processLabeledPRs(ctx, &cursorState, sideEffectsRun)
+	w.processLabeledPRs(ctx, sideEffectsRun)
 
 	if maxUpdatedAt.After(cursorState.LastUpdatedAt) {
 		cursorState.LastUpdatedAt = maxUpdatedAt
@@ -527,6 +527,8 @@ func (w *watcher) processPRs(
 	prDetailsCache := make(map[string]PRDetails)
 	newHeadSHAs := make(map[string]string, len(allPRs))
 	sideEffectsRun := make(map[string]struct{}, len(allPRs))
+	var deferFloor libtime.DateTime
+	deferFloorSet := false
 
 	for _, pr := range allPRs {
 		select {
@@ -536,13 +538,30 @@ func (w *watcher) processPRs(
 		default:
 		}
 
-		if updatedAt, ok := w.processPR(
+		outcome := w.processPR(
 			ctx, pr, cursorState, newHeadSHAs, prDetailsCache, sideEffectsRun,
-		); ok {
-			if updatedAt.After(maxUpdatedAt) {
-				maxUpdatedAt = updatedAt
+		)
+		if outcome.deferred {
+			if !deferFloorSet || pr.UpdatedAt.Before(deferFloor) {
+				deferFloor = pr.UpdatedAt
+				deferFloorSet = true
 			}
 		}
+		if outcome.handled && outcome.updatedAt.After(maxUpdatedAt) {
+			maxUpdatedAt = outcome.updatedAt
+		}
+	}
+
+	// A deferred PR is owed another attempt, and a deferral writes no cursor
+	// entry, so the search window is the only thing that can bring it back. That
+	// window is `updated:>=cursor` and inclusive, so clamping the cursor to the
+	// earliest deferred PR keeps it in range. Without the clamp any other PR
+	// updated later in this same batch would push the cursor past it and the PR
+	// would never be fetched again — no review and no override, permanently,
+	// because the unreviewed scanner that would otherwise notice is off unless
+	// REVIEWER_BOT_LOGINS is configured.
+	if deferFloorSet && maxUpdatedAt.After(deferFloor) {
+		maxUpdatedAt = deferFloor
 	}
 
 	cursorState.HeadSHAs = newHeadSHAs
@@ -574,20 +593,8 @@ func prKey(pr PullRequest) string {
 //
 // skip holds PRs whose side effects already ran in the main loop this poll;
 // they are not repeated. Failures never abort the poll.
-//
-// The mechanical override is retried here for the same reason, and it needs
-// the retry more than the side effects do: a deferral in the main loop writes
-// no cursor entry by design, so the PR must be re-evaluated for the override
-// later. When its updated-at has fallen behind the cursor — trivially so, since
-// another PR updated later in the same batch advances the cursor past it — the
-// main search never returns it again, and the labeled pass is the only path
-// that still reaches it. Without this the deferred PR would receive neither a
-// review nor an override: strictly worse than the fall-through it replaced,
-// which at least always reviewed. Bounded to listed authors so a human-labeled
-// PR does not pay the gate's two GitHub reads on every poll.
 func (w *watcher) processLabeledPRs(
 	ctx context.Context,
-	cursorState *Cursor,
 	skip map[string]struct{},
 ) {
 	if w.autoMergeLabel == "" {
@@ -642,12 +649,6 @@ func (w *watcher) processLabeledPRs(
 		w.trySupersedeDepBump(ctx, pr, details)
 		w.tryUpdateBranch(ctx, pr, details)
 		w.tryAutoMerge(ctx, pr, details)
-		// Retry a mechanical override the main loop deferred. cursorState.HeadSHAs
-		// serves as both maps because processPRs already assigned newHeadSHAs into
-		// it, so they are the same map by the time this pass runs.
-		if slices.Contains(w.mechanicalOverrideAuthors, pr.AuthorLogin) {
-			w.tryMechanicalOverride(ctx, pr, details, cursorState.HeadSHAs, cursorState.HeadSHAs)
-		}
 	}
 }
 
@@ -682,10 +683,12 @@ func (w *watcher) fetchLabeledPRs(ctx context.Context) ([]PullRequest, string) {
 }
 
 // processPR processes a single PR: filter → fetch details → override-or-review.
-// It returns (pr.UpdatedAt, true) when the PR advanced cursor state (override
-// emitted, review deduped, or review published) and (zero, false) when the PR
-// was skipped (filtered, details error, empty SHA, or publish failure) and must
-// not advance the cursor. cursorState and newHeadSHAs are mutated in place.
+// It returns handled when the PR was settled (override emitted, review deduped,
+// or review published), and deferred when the mechanical-override gate could not
+// be evaluated — nothing published, no cursor entry written, and the caller must
+// keep the cursor from advancing past it. Anything else is unhandled and must
+// not advance the cursor for its own sake. cursorState and newHeadSHAs are
+// mutated in place.
 func (w *watcher) processPR(
 	ctx context.Context,
 	pr PullRequest,
@@ -693,7 +696,7 @@ func (w *watcher) processPR(
 	newHeadSHAs map[string]string,
 	prDetailsCache map[string]PRDetails,
 	sideEffectsRun map[string]struct{},
-) (libtime.DateTime, bool) {
+) prOutcome {
 	if w.taskCreationFilter.Skip(
 		filter.PR{
 			AuthorLogin: pr.AuthorLogin,
@@ -708,7 +711,7 @@ func (w *watcher) processPR(
 		// Filtered PRs do not contribute entries to newHeadSHAs. If the PR was previously
 		// published, its SHA-based cursor entry is pruned here and will be re-created on
 		// the next successful (non-filtered) poll — controller dedup prevents a duplicate file.
-		return libtime.DateTime{}, false
+		return prOutcome{}
 	}
 
 	details, err := w.fetchPRDetails(ctx, pr, prDetailsCache)
@@ -716,13 +719,13 @@ func (w *watcher) processPR(
 		glog.Errorf("get pr details failed pr=%s/%s#%d err=%v", pr.Owner, pr.Repo, pr.Number, err)
 		// Same rationale as filtered PRs: cannot preserve old SHA-based entry without
 		// knowing the SHA. Transient error → re-publish on next poll → controller deduplicates.
-		return libtime.DateTime{}, false
+		return prOutcome{}
 	}
 
 	// Fail-closed: if head SHA is absent, skip this PR on this poll.
 	if details.HeadSHA == "" {
 		glog.Warningf("missing head SHA for pr=%s/%s#%d, skipping", pr.Owner, pr.Repo, pr.Number)
-		return libtime.DateTime{}, false
+		return prOutcome{}
 	}
 
 	// Automatic trivial flow: when the repo opted in via `.maintainer.yaml`
@@ -766,14 +769,16 @@ func (w *watcher) processPR(
 	// APPROVE and re-block merge. tryOverride returns false (no label, untrusted
 	// author, or send error) → fall through to the normal review path.
 	if w.tryOverride(ctx, pr, details, cursorState.HeadSHAs, newHeadSHAs) {
-		return pr.UpdatedAt, true
+		return prOutcome{updatedAt: pr.UpdatedAt, handled: true}
 	}
 
 	// Mechanical override: a qualifying trivial bot bump gets an approve instead
 	// of a review for this SHA. Emitting both would race — a review could post
 	// CHANGES_REQUESTED after the override's APPROVE and re-block merge.
-	if w.tryMechanicalOverride(ctx, pr, details, cursorState.HeadSHAs, newHeadSHAs) {
-		return pr.UpdatedAt, true
+	if outcome := w.mechanicalOverrideOutcome(
+		ctx, pr, details, cursorState, newHeadSHAs,
+	); outcome.handled {
+		return outcome
 	}
 
 	taskIDStr := DeriveTaskID(pr.Owner, pr.Repo, pr.Number, details.HeadSHA).String()
@@ -785,7 +790,7 @@ func (w *watcher) processPR(
 			pr.Owner, pr.Repo, pr.Number, details.HeadSHA, taskIDStr,
 		)
 		newHeadSHAs[taskIDStr] = details.HeadSHA
-		return pr.UpdatedAt, true
+		return prOutcome{updatedAt: pr.UpdatedAt, handled: true}
 	}
 
 	// New (PR, SHA) pair — publish a fresh CreateTaskCommand.
@@ -794,10 +799,56 @@ func (w *watcher) processPR(
 		// are deduplicated without a second create publish.
 		cursorState.HeadSHAs[taskIDStr] = details.HeadSHA
 		newHeadSHAs[taskIDStr] = details.HeadSHA
-		return pr.UpdatedAt, true
+		return prOutcome{updatedAt: pr.UpdatedAt, handled: true}
 	}
 
-	return libtime.DateTime{}, false
+	return prOutcome{}
+}
+
+// mechanicalOverrideOutcome runs the mechanical-override attempt and owns the
+// deferral bookkeeping that goes with it.
+//
+// A deferral is the one outcome that must neither review nor advance the cursor:
+// nothing was published, so the PR is still owed a decision, and the only thing
+// that brings it back is the next search window — which is why processPRs holds
+// the cursor at a deferred PR. The count is bounded so a gate that never becomes
+// readable, a revoked token or a changed permission, cannot pin that window
+// forever. On exhaustion the PR takes the review the pre-change code always gave
+// it: a reviewer pod spent, but far better than a PR nobody looks at again.
+func (w *watcher) mechanicalOverrideOutcome(
+	ctx context.Context,
+	pr PullRequest,
+	details PRDetails,
+	cursorState *Cursor,
+	newHeadSHAs map[string]string,
+) prOutcome {
+	key := deferralKey(pr, details.HeadSHA)
+	switch w.tryMechanicalOverride(ctx, pr, details, cursorState.HeadSHAs, newHeadSHAs) {
+	case overrideHandled:
+		delete(cursorState.Deferrals, key)
+		return prOutcome{updatedAt: pr.UpdatedAt, handled: true}
+	case overrideDeferred:
+		cursorState.Deferrals[key]++
+		if cursorState.Deferrals[key] <= maxDeferralAttempts {
+			glog.Infof(
+				"mechanical override: gate could not be evaluated, deferring pr=%s/%s#%d attempt=%d",
+				pr.Owner,
+				pr.Repo,
+				pr.Number,
+				cursorState.Deferrals[key],
+			)
+			return prOutcome{updatedAt: pr.UpdatedAt, handled: true, deferred: true}
+		}
+		glog.Warningf(
+			"mechanical override: gate still unreadable after %d attempts, falling through to review pr=%s/%s#%d",
+			maxDeferralAttempts,
+			pr.Owner,
+			pr.Repo,
+			pr.Number,
+		)
+	}
+	delete(cursorState.Deferrals, key)
+	return prOutcome{}
 }
 
 // tryOverride handles the override path for one PR. It returns true when the PR
@@ -841,8 +892,8 @@ func (w *watcher) tryOverride(
 // trivial bot bump. It returns true when the PR is handled (override emitted,
 // already emitted for this SHA, or the send failed) — the caller then skips the
 // review path for this SHA, preserving the override-only invariant that avoids
-// the APPROVE-vs-CHANGES_REQUESTED race. It returns false when the PR does not
-// qualify, so the caller falls through to the normal review.
+// the APPROVE-vs-CHANGES_REQUESTED race. It returns overrideNotHandled when the
+// PR does not qualify, so the caller falls through to the normal review.
 //
 // The override task-id is the same one tryOverride uses, so both override kinds
 // share one dedupe entry per (PR, head SHA). A failed send records nothing, so
@@ -850,9 +901,9 @@ func (w *watcher) tryOverride(
 //
 // A qualifying PR is labelled with the auto-merge label and armed for
 // GitHub-native auto-merge in the same poll that publishes the approve. A
-// failed label write returns false so the caller reviews the PR this poll
-// instead — an approve never lands without its arming. A failed arming after a
-// successful label write does not change the return value: the label is
+// failed label write returns overrideNotHandled so the caller reviews the PR
+// this poll instead — an approve never lands without its arming. A failed arming
+// after a successful label write does not change the return value: the label is
 // present, so the next poll's tryAutoMerge retries the arming.
 func (w *watcher) tryMechanicalOverride(
 	ctx context.Context,
@@ -860,7 +911,7 @@ func (w *watcher) tryMechanicalOverride(
 	details PRDetails,
 	cursorHeadSHAs map[string]string,
 	newHeadSHAs map[string]string,
-) bool {
+) overrideOutcome {
 	overrideID := DeriveTaskIDOverride(pr.Owner, pr.Repo, pr.Number, details.HeadSHA).String()
 	if _, exists := cursorHeadSHAs[overrideID]; exists {
 		glog.V(3).Infof(
@@ -868,7 +919,7 @@ func (w *watcher) tryMechanicalOverride(
 			pr.Owner, pr.Repo, pr.Number, details.HeadSHA,
 		)
 		newHeadSHAs[overrideID] = details.HeadSHA
-		return true
+		return overrideHandled
 	}
 	// Dedupe is checked before the gate: the gate costs two uncached GitHub
 	// reads, and a SHA that was already handled must not pay for them on every
@@ -883,26 +934,20 @@ func (w *watcher) tryMechanicalOverride(
 			"mechanical override skipped, review already emitted pr=%s/%s#%d sha=%s",
 			pr.Owner, pr.Repo, pr.Number, details.HeadSHA,
 		)
-		return false
+		return overrideNotHandled
 	}
-	// A gate that could not be evaluated is NOT a rejection. Returning true
-	// here means "handled: emit nothing for this PR this poll" — the caller
-	// then skips the review path, and because no cursor entry is written the
-	// gate is re-evaluated on the next poll: from the main search window if the
-	// PR is still inside it, otherwise from processLabeledPRs, which has no
-	// cursor bound. Falling through to a review instead would write a
-	// review-task cursor entry and permanently block the override for this SHA
-	// (see the review-already-emitted guard above), so a single transient read
-	// failure would cost a full LLM review forever.
+	// A gate that could not be evaluated is NOT a rejection. Returning deferred
+	// means "emit nothing for this PR this poll" — the caller skips the review
+	// path AND holds the cursor back so the PR stays in the next search window.
+	// Falling through to a review instead would write a review-task cursor entry
+	// and permanently block the override for this SHA (see the
+	// review-already-emitted guard above), so a single transient read failure
+	// would cost a full LLM review forever.
 	switch w.qualifiesForMechanicalOverride(ctx, pr, details) {
 	case overrideIndeterminate:
-		glog.Infof(
-			"mechanical override: gate could not be evaluated, deferring to next poll pr=%s/%s#%d",
-			pr.Owner, pr.Repo, pr.Number,
-		)
-		return true
+		return overrideDeferred
 	case overrideDoesNotQualify:
-		return false
+		return overrideNotHandled
 	}
 	// Label and arm before publishing the approve: an approve that can never
 	// merge because nothing armed the PR is the stranded-approve failure this
@@ -923,7 +968,7 @@ func (w *watcher) tryMechanicalOverride(
 		); err != nil {
 			glog.Errorf("mechanical override: add label failed pr=%s err=%v", pr.HTMLURL, err)
 			w.metrics.IncPRPublished("error")
-			return false
+			return overrideNotHandled
 		}
 		// Arm through the one arming path, so the trust check, the log line and
 		// the auto_merge counter stay in a single place. The label is present by
@@ -938,7 +983,7 @@ func (w *watcher) tryMechanicalOverride(
 	}
 	// Handled whether or not the send succeeded: a failed send must not fall
 	// through to a review for this SHA, and the unset cursor retries next poll.
-	return true
+	return overrideHandled
 }
 
 // MergeState is a GitHub REST merge-state value, typed so a state-name typo is
@@ -1246,6 +1291,51 @@ const (
 	// overrideQualifies means every gate passed.
 	overrideQualifies
 )
+
+// overrideOutcome is what the mechanical-override path decided for one PR. It is
+// three-valued for the same reason the qualification is: "handled" skips the
+// review, "not handled" runs it, and "deferred" must do neither while also
+// holding the cursor back so the PR is fetched again.
+type overrideOutcome int
+
+const (
+	// overrideNotHandled — no override applies; the caller runs the review path.
+	overrideNotHandled overrideOutcome = iota
+	// overrideHandled — an override was published, or already existed for this SHA.
+	overrideHandled
+	// overrideDeferred — the gate could not be evaluated. Nothing was published
+	// and no cursor entry was written, so the PR is owed another attempt.
+	overrideDeferred
+)
+
+// maxDeferralAttempts bounds how many consecutive polls a PR may be deferred
+// before it falls through to a review after all. Deferring is only safe because
+// the cursor is held back, and holding it back re-fetches everything newer than
+// the deferred PR on every poll — so an unreadable gate must not be able to pin
+// the window indefinitely. On exhaustion the PR gets the review the pre-change
+// code always gave it: worse for one pod than an override, far better than a PR
+// that is never looked at again.
+const maxDeferralAttempts = 3
+
+// deferralKey identifies one (PR, head SHA) across polls for the deferral count.
+// The SHA is part of the key so a push starts a fresh budget.
+func deferralKey(pr PullRequest, headSHA string) string {
+	return prKey(pr) + "@" + headSHA
+}
+
+// prOutcome is what processPR did with one PR, and in particular whether the
+// cursor may advance past it.
+type prOutcome struct {
+	// updatedAt is the PR's updated-at, valid only when handled.
+	updatedAt libtime.DateTime
+	// handled means the PR was settled this poll: a review or override was
+	// published, or already existed for this SHA.
+	handled bool
+	// deferred means the override gate could not be evaluated: nothing was
+	// published and no cursor entry written, so the cursor must not advance past
+	// this PR or the next search would never return it again.
+	deferred bool
+}
 
 // qualifiesForMechanicalOverride reports whether pr is a trivial bot bump the
 // operator has explicitly allowed to be approved without an LLM review.
