@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## Unreleased
+## v0.17.1
 
 - fix: a review task created for a **fork PR** now carries the **base** repo's `clone_url` instead of the contributor's fork, so the record names a repo that actually holds the pull request. `GetPRDetails` populated `CloneURL` from `pr.head.repo.clone_url`, which on a fork PR is the fork; the PR number does not exist there, so a reader holding only the record's URL and number gets *"Could not resolve to a PullRequest with the number of N"* and the record can never resolve to a verdict. Observed on `bborbe/ai-assistant#106` from the `YetAnotherGerrit/ai-assistant` fork: `gh api repos/YetAnotherGerrit/ai-assistant` succeeds (the repo exists), `gh pr view 106` in it fails (the PR does not), so nothing looks broken at either end — the mismatch is only visible when the two halves are checked together. `HeadRepoFullName` still names the head repo, because `trust.NewSameRepo()` depends on it; only the clone URL changes hands, and `BaseRepoFullName` was already correct. The test fixture that covered this case was itself wrong — its `head.repo.clone_url` read `https://github.com/owner/repo.git` beside a `full_name` of `forkowner/repo`, and its `base.repo` carried no `clone_url` key at all — so the base accessor could never have been distinguished from the head one; it is replaced by a case where the two URLs differ, plus a captured real `pulls/106` response served verbatim
 
