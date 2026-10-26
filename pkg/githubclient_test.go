@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"strconv"
 	"time"
 
@@ -268,7 +269,7 @@ var _ = Describe("pkg.GitHubClient", func() {
 	})
 
 	Describe("GetPRDetails", func() {
-		It("returns head SHA, clone URL, and base ref for a PR", func() {
+		It("returns the base repo's clone URL for a fork PR, not the fork's", func() {
 			server := httptest.NewServer(
 				http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 					Expect(r.URL.Path).To(Equal("/repos/owner/repo/pulls/42"))
@@ -278,13 +279,14 @@ var _ = Describe("pkg.GitHubClient", func() {
 					"head": {
 						"sha": "abc123def456abc123def456abc123def456abc1",
 						"repo": {
-							"clone_url": "https://github.com/owner/repo.git",
+							"clone_url": "https://github.com/forkowner/repo.git",
 							"full_name": "forkowner/repo"
 						}
 					},
 					"base": {
 						"ref": "master",
 						"repo": {
+							"clone_url": "https://github.com/owner/repo.git",
 							"full_name": "owner/repo"
 						}
 					}
@@ -297,10 +299,41 @@ var _ = Describe("pkg.GitHubClient", func() {
 			details, err := client.GetPRDetails(ctx, "owner", "repo", 42)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(details.HeadSHA).To(Equal("abc123def456abc123def456abc123def456abc1"))
+			// The head repo is the contributor's fork. Naming it here would hand
+			// the record a repo that carries no PR 42, so the assertion is on the
+			// base repo's URL — and the two differ, which is what makes it bite.
 			Expect(details.CloneURL).To(Equal("https://github.com/owner/repo.git"))
 			Expect(details.BaseRef).To(Equal("master"))
 			Expect(details.HeadRepoFullName).To(Equal("forkowner/repo"))
 			Expect(details.BaseRepoFullName).To(Equal("owner/repo"))
+		})
+
+		It("resolves the base repo from a captured real fork-PR response", func() {
+			// pkg/testdata/fork_pr_106.json is the unmodified GitHub response for
+			// bborbe/ai-assistant#106, a PR from the YetAnotherGerrit/ai-assistant
+			// fork. Served verbatim so the fixture shape is one the API actually
+			// emits rather than one written to match the accessor under test.
+			body, readErr := os.ReadFile("testdata/fork_pr_106.json")
+			Expect(readErr).NotTo(HaveOccurred())
+
+			server := httptest.NewServer(
+				http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					Expect(r.URL.Path).To(Equal("/repos/bborbe/ai-assistant/pulls/106"))
+					w.Header().Set("Content-Type", "application/json")
+					_, _ = w.Write(body)
+				}),
+			)
+			defer server.Close()
+
+			client := buildClient(server)
+			details, err := client.GetPRDetails(ctx, "bborbe", "ai-assistant", 106)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(details.CloneURL).To(Equal("https://github.com/bborbe/ai-assistant.git"))
+			Expect(
+				details.CloneURL,
+			).NotTo(Equal("https://github.com/YetAnotherGerrit/ai-assistant.git"))
+			Expect(details.HeadRepoFullName).To(Equal("YetAnotherGerrit/ai-assistant"))
+			Expect(details.BaseRepoFullName).To(Equal("bborbe/ai-assistant"))
 		})
 
 		It("returns an error on HTTP failure", func() {

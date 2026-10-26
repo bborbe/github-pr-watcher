@@ -56,9 +56,12 @@ type PRDetails struct {
 	// detection and as the `ref` the agent checks out for review.
 	HeadSHA string
 
-	// CloneURL is the HTTPS clone URL of the head repo (e.g.
+	// CloneURL is the HTTPS clone URL of the base repo (e.g.
 	// `https://github.com/owner/repo.git`). Used as the `clone_url` the
-	// agent's execution phase passes to git clone.
+	// agent's execution phase passes to git clone. It must name the base
+	// repo, not the head: on a fork PR the head repo is the contributor's
+	// fork, which carries no PR of that number and cannot be resolved by a
+	// reader holding only the PR number.
 	CloneURL string
 
 	// BaseRef is the base branch name (e.g. `master`, `main`). Used as
@@ -471,7 +474,7 @@ func (c *githubClient) GetPRDetails(
 	}
 	return PRDetails{
 		HeadSHA:          pr.GetHead().GetSHA(),
-		CloneURL:         pr.GetHead().GetRepo().GetCloneURL(),
+		CloneURL:         pr.GetBase().GetRepo().GetCloneURL(),
 		BaseRef:          pr.GetBase().GetRef(),
 		HeadRef:          pr.GetHead().GetRef(),
 		HeadRepoFullName: pr.GetHead().GetRepo().GetFullName(),
