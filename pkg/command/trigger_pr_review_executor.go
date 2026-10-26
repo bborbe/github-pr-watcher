@@ -338,7 +338,11 @@ func applyTrust(
 	trustDecision trust.Trust,
 	metrics pkg.Metrics,
 ) (trust.Result, error) {
-	trustResult, err := trustDecision.IsTrusted(ctx, trust.PR{AuthorLogin: details.AuthorLogin})
+	trustResult, err := trustDecision.IsTrusted(ctx, trust.PR{
+		AuthorLogin:      details.AuthorLogin,
+		HeadRepoFullName: details.HeadRepoFullName,
+		BaseRepoFullName: details.BaseRepoFullName,
+	})
 	if err != nil {
 		// Transient: trust infrastructure error (e.g. allowlist lookup).
 		// Framework emits Failure and logs at the boundary, Kafka redelivers —

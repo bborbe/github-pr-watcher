@@ -144,7 +144,11 @@ func (p *taskPublisher) PublishCreate(
 ) bool {
 	author := pr.AuthorLogin
 
-	trustResult, err := p.trustDecision.IsTrusted(ctx, trust.PR{AuthorLogin: author})
+	trustResult, err := p.trustDecision.IsTrusted(ctx, trust.PR{
+		AuthorLogin:      author,
+		HeadRepoFullName: details.HeadRepoFullName,
+		BaseRepoFullName: details.BaseRepoFullName,
+	})
 	if err != nil {
 		glog.Errorf("trust check failed pr=%s err=%v", pr.HTMLURL, err)
 		p.metrics.IncPRPublished("error")
@@ -273,7 +277,11 @@ func (p *taskPublisher) PublishOverride(
 	taskIDStr string,
 	details PRDetails,
 ) (handled, emitted bool) {
-	trustResult, err := p.trustDecision.IsTrusted(ctx, trust.PR{AuthorLogin: pr.AuthorLogin})
+	trustResult, err := p.trustDecision.IsTrusted(ctx, trust.PR{
+		AuthorLogin:      pr.AuthorLogin,
+		HeadRepoFullName: details.HeadRepoFullName,
+		BaseRepoFullName: details.BaseRepoFullName,
+	})
 	if err != nil {
 		// Trust-check error: fall through to the review path (which hits the
 		// same error and emits nothing), rather than silently swallowing the PR.
@@ -665,7 +673,7 @@ func (w *watcher) processLabeledPRs(
 		}
 		w.trySupersedeDepBump(ctx, pr, details)
 		w.tryUpdateBranch(ctx, pr, details)
-		w.tryAutoMerge(ctx, pr)
+		w.tryAutoMerge(ctx, pr, details)
 	}
 }
 
@@ -776,7 +784,7 @@ func (w *watcher) processPR(
 	// the PR into GitHub-native auto-merge. Side effect only — the review path
 	// continues unchanged below (the ruleset's required review must still
 	// approve before GitHub merges).
-	w.tryAutoMerge(ctx, pr)
+	w.tryAutoMerge(ctx, pr, details)
 
 	// Override path: a trusted author carrying the override label gets a
 	// `pr-override` task INSTEAD of a review task for this SHA. Emitting both
@@ -903,7 +911,7 @@ func (w *watcher) tryMechanicalOverride(
 		)
 		return false
 	}
-	if !w.qualifiesForMechanicalOverride(ctx, pr) {
+	if !w.qualifiesForMechanicalOverride(ctx, pr, details) {
 		return false
 	}
 	// Label and arm before publishing the approve: an approve that can never
@@ -932,7 +940,7 @@ func (w *watcher) tryMechanicalOverride(
 		// now, which is exactly what tryAutoMerge requires. A failure here is
 		// tolerated: the label persists, so the next poll retries the arming.
 		pr.Labels = append(pr.Labels, w.autoMergeLabel)
-		w.tryAutoMerge(ctx, pr)
+		w.tryAutoMerge(ctx, pr, details)
 	}
 	if w.publisher.PublishMechanicalOverride(ctx, pr, overrideID, details) {
 		cursorHeadSHAs[overrideID] = details.HeadSHA
@@ -1016,7 +1024,11 @@ func (w *watcher) tryUpdateBranch(
 	if !staleMergeState(details.MergeableState) {
 		return
 	}
-	trustResult, err := w.trustDecision.IsTrusted(ctx, trust.PR{AuthorLogin: pr.AuthorLogin})
+	trustResult, err := w.trustDecision.IsTrusted(ctx, trust.PR{
+		AuthorLogin:      pr.AuthorLogin,
+		HeadRepoFullName: details.HeadRepoFullName,
+		BaseRepoFullName: details.BaseRepoFullName,
+	})
 	if err != nil {
 		glog.Errorf("update-branch trust check failed pr=%s err=%v", pr.HTMLURL, err)
 		w.metrics.IncPRPublished("error")
@@ -1111,7 +1123,11 @@ func (w *watcher) trySupersedeDepBump(
 	if !isSupersededDepBump(pr, details) {
 		return
 	}
-	trustResult, err := w.trustDecision.IsTrusted(ctx, trust.PR{AuthorLogin: pr.AuthorLogin})
+	trustResult, err := w.trustDecision.IsTrusted(ctx, trust.PR{
+		AuthorLogin:      pr.AuthorLogin,
+		HeadRepoFullName: details.HeadRepoFullName,
+		BaseRepoFullName: details.BaseRepoFullName,
+	})
 	if err != nil {
 		glog.Errorf("abort-and-reemit trust check failed pr=%s err=%v", pr.HTMLURL, err)
 		w.metrics.IncPRPublished("error")
@@ -1149,11 +1165,16 @@ func (w *watcher) trySupersedeDepBump(
 func (w *watcher) tryAutoMerge(
 	ctx context.Context,
 	pr PullRequest,
+	details PRDetails,
 ) {
 	if w.autoMergeLabel == "" || !slices.Contains(pr.Labels, w.autoMergeLabel) {
 		return
 	}
-	trustResult, err := w.trustDecision.IsTrusted(ctx, trust.PR{AuthorLogin: pr.AuthorLogin})
+	trustResult, err := w.trustDecision.IsTrusted(ctx, trust.PR{
+		AuthorLogin:      pr.AuthorLogin,
+		HeadRepoFullName: details.HeadRepoFullName,
+		BaseRepoFullName: details.BaseRepoFullName,
+	})
 	if err != nil {
 		glog.Errorf("auto-merge trust check failed pr=%s err=%v", pr.HTMLURL, err)
 		w.metrics.IncPRPublished("error")
@@ -1239,6 +1260,7 @@ func (w *watcher) maybeLabelTrivial(ctx context.Context, pr PullRequest) bool {
 func (w *watcher) qualifiesForMechanicalOverride(
 	ctx context.Context,
 	pr PullRequest,
+	details PRDetails,
 ) bool {
 	if w.autoMergeLabel == "" {
 		return false
@@ -1250,7 +1272,11 @@ func (w *watcher) qualifiesForMechanicalOverride(
 		)
 		return false
 	}
-	trustResult, err := w.trustDecision.IsTrusted(ctx, trust.PR{AuthorLogin: pr.AuthorLogin})
+	trustResult, err := w.trustDecision.IsTrusted(ctx, trust.PR{
+		AuthorLogin:      pr.AuthorLogin,
+		HeadRepoFullName: details.HeadRepoFullName,
+		BaseRepoFullName: details.BaseRepoFullName,
+	})
 	if err != nil {
 		glog.Errorf("mechanical override trust check failed pr=%s err=%v", pr.HTMLURL, err)
 		return false

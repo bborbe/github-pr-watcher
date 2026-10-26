@@ -1,13 +1,13 @@
 ---
-status: failed
+status: completed
 spec: [003-cask-trivial-classification]
-execution_id: github-pr-watcher-mechanical-approve-exec-010-spec-003-cask-trivial-classification
+summary: 'Verified and completed cask trivial classification: two line-shape regexps, Casks/*.rb routing, caskMechanical exact-pair rule, updated allow-list doc comment, eleven test entries, and changelog entry — precommit exits 0 and the focused Casks run reports Ran 11 of with 0 failures.'
+execution_id: github-pr-watcher-same-repo-exec-010-spec-003-cask-trivial-classification
 dark-factory-version: v0.198.7
 created: "2026-10-24T09:19:10Z"
 queued: "2026-10-24T09:36:55Z"
-started: "2026-10-24T09:36:57Z"
-completed: "2026-10-24T09:39:17Z"
-lastFailReason: 'execute prompt: docker run failed: wait command: exit status 125'
+started: "2026-10-25T21:04:38Z"
+completed: "2026-10-25T21:08:29Z"
 ---
 
 # Classify a single-hash homebrew cask bump as a mechanical (trivial) change

@@ -278,11 +278,15 @@ var _ = Describe("pkg.GitHubClient", func() {
 					"head": {
 						"sha": "abc123def456abc123def456abc123def456abc1",
 						"repo": {
-							"clone_url": "https://github.com/owner/repo.git"
+							"clone_url": "https://github.com/owner/repo.git",
+							"full_name": "forkowner/repo"
 						}
 					},
 					"base": {
-						"ref": "master"
+						"ref": "master",
+						"repo": {
+							"full_name": "owner/repo"
+						}
 					}
 				}`)
 				}),
@@ -295,6 +299,8 @@ var _ = Describe("pkg.GitHubClient", func() {
 			Expect(details.HeadSHA).To(Equal("abc123def456abc123def456abc123def456abc1"))
 			Expect(details.CloneURL).To(Equal("https://github.com/owner/repo.git"))
 			Expect(details.BaseRef).To(Equal("master"))
+			Expect(details.HeadRepoFullName).To(Equal("forkowner/repo"))
+			Expect(details.BaseRepoFullName).To(Equal("owner/repo"))
 		})
 
 		It("returns an error on HTTP failure", func() {

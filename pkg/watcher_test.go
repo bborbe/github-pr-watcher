@@ -1654,6 +1654,71 @@ var _ = Describe("pkg.Watcher", func() {
 			_, cmd := createSender.SendCommandArgsForCall(0)
 			Expect(cmd.Frontmatter["task_type"]).To(Equal("pr-review"))
 		})
+
+		It("does not arm auto-merge for a fork PR whose author is trusted", func() {
+			// Production-shaped chain: the trusted-author list alone would admit
+			// this PR; the same-repo leaf must narrow it.
+			trustSameRepo := trust.And{
+				trust.NewAuthorAllowlist([]string{"alice"}),
+				trust.NewSameRepo(),
+			}
+			ghClient.GetPRDetailsReturns(pkg.PRDetails{
+				HeadSHA:          "deadbeef",
+				CloneURL:         "https://github.com/bborbe/repo.git",
+				BaseRef:          "master",
+				HeadRepoFullName: "forkowner/repo",
+				BaseRepoFullName: "owner/repo",
+			}, nil)
+			ghClient.SearchPRsReturns(pkg.SearchResult{
+				PullRequests:  []pkg.PullRequest{prWith([]string{"auto-merge"}, "alice")},
+				RateRemaining: 100,
+			}, nil)
+			w := newTestWatcherWithAutoMerge(
+				ghClient,
+				createSender,
+				cursorPath,
+				startTime,
+				fakeMetrics,
+				trustSameRepo,
+				"auto-merge",
+			)
+			Expect(w.Poll(ctx)).NotTo(HaveOccurred())
+			Expect(ghClient.EnableAutoMergeCallCount()).To(Equal(0))
+			var labels []string
+			for i := 0; i < fakeMetrics.IncPRPublishedCallCount(); i++ {
+				labels = append(labels, fakeMetrics.IncPRPublishedArgsForCall(i))
+			}
+			Expect(labels).To(ContainElement("auto_merge_skipped"))
+		})
+
+		It("arms auto-merge for a same-repo PR whose author is trusted", func() {
+			trustSameRepo := trust.And{
+				trust.NewAuthorAllowlist([]string{"alice"}),
+				trust.NewSameRepo(),
+			}
+			ghClient.GetPRDetailsReturns(pkg.PRDetails{
+				HeadSHA:          "deadbeef",
+				CloneURL:         "https://github.com/bborbe/repo.git",
+				BaseRef:          "master",
+				HeadRepoFullName: "owner/repo",
+				BaseRepoFullName: "owner/repo",
+			}, nil)
+			ghClient.SearchPRsReturns(pkg.SearchResult{
+				PullRequests:  []pkg.PullRequest{prWith([]string{"auto-merge"}, "alice")},
+				RateRemaining: 100,
+			}, nil)
+			w := newTestWatcherWithAutoMerge(
+				ghClient,
+				createSender,
+				cursorPath,
+				startTime,
+				fakeMetrics,
+				trustSameRepo,
+				"auto-merge",
+			)
+			Expect(w.Poll(ctx)).NotTo(HaveOccurred())
+			Expect(ghClient.EnableAutoMergeCallCount()).To(Equal(1))
+		})
 	})
 
 	Describe("stale branch update", func() {
