@@ -251,6 +251,67 @@ var _ = Describe("NewTriggerPRReviewCommandExecutor", func() {
 				"the skip must name the in-flight task identifier")
 		})
 
+		It("AC1b: an unforced publish also writes the ledger, so the retry suppresses", func() {
+			cmd := command.TriggerPRReviewCommand{URL: validPRURL}
+			Expect(runTrigger(cmd, guard)).NotTo(HaveOccurred())
+			Expect(createSender.SendCommandCallCount()).To(Equal(1))
+
+			cmd.Force = true
+			err := runTrigger(cmd, guard)
+			Expect(errors.Is(err, cdb.ErrCommandObjectSkipped)).To(BeTrue(),
+				"expected ErrCommandObjectSkipped, got %v", err)
+			Expect(createSender.SendCommandCallCount()).To(Equal(1),
+				"the forced retry must not duplicate the unforced publish")
+		})
+
+		// The defect this covers: the operator retries the review the POLL path
+		// published, which never passes through the command executor. A ledger
+		// holding only forced publishes finds no record and publishes a second
+		// review alongside the one already running.
+		It("AC1c: a poll-path publish suppresses a later forced retry", func() {
+			publisher := pkg.NewTaskPublisher(
+				createSender,
+				trustDecision,
+				metrics,
+				pkg.TaskConfig{
+					Stage:       "dev",
+					MaxSlugLen:  pkg.DefaultMaxSlugLen,
+					MaxTitleLen: pkg.DefaultMaxTitleLen,
+				},
+				ghClient,
+				pkg.WithPublishRecorder(pkg.NewPublishRecorder(db, guard)),
+			)
+			published := publisher.PublishCreate(
+				ctx,
+				pkg.PullRequest{
+					Number:      42,
+					Owner:       "bborbe",
+					Repo:        "repo",
+					HTMLURL:     validPRURL,
+					HeadSHA:     "abc123",
+					AuthorLogin: "bborbe",
+				},
+				"poll-task-id",
+				pkg.PRDetails{
+					HeadSHA:     "abc123",
+					CloneURL:    "https://github.com/bborbe/repo.git",
+					BaseRef:     "main",
+					AuthorLogin: "bborbe",
+					Title:       "Feature: add support",
+				},
+			)
+			Expect(published).To(BeTrue())
+			Expect(createSender.SendCommandCallCount()).To(Equal(1))
+
+			before := inflightSkipped()
+			err := runTrigger(command.TriggerPRReviewCommand{URL: validPRURL, Force: true}, guard)
+			Expect(errors.Is(err, cdb.ErrCommandObjectSkipped)).To(BeTrue(),
+				"expected ErrCommandObjectSkipped, got %v", err)
+			Expect(createSender.SendCommandCallCount()).To(Equal(1),
+				"the forced retry must not duplicate the poll-path review")
+			Expect(inflightSkipped() - before).To(Equal(1))
+		})
+
 		It("AC2: a reviewer verdict at the head SHA lets a forced trigger publish again", func() {
 			cmd := command.TriggerPRReviewCommand{URL: validPRURL, Force: true}
 			Expect(runTrigger(cmd, guard)).NotTo(HaveOccurred())
@@ -305,7 +366,7 @@ var _ = Describe("NewTriggerPRReviewCommandExecutor", func() {
 				"the failed send left no record, so the retry publishes")
 		})
 
-		It("AC5: the unforced path never consults the guard", func() {
+		It("AC5: the unforced path records but never checks", func() {
 			guardFake := new(mocks.RetryGuard)
 			err := runTrigger(
 				command.TriggerPRReviewCommand{URL: validPRURL, Force: false}, guardFake,
@@ -313,8 +374,8 @@ var _ = Describe("NewTriggerPRReviewCommandExecutor", func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(guardFake.CheckCallCount()).To(Equal(0),
 				"an unforced trigger must not read the ledger")
-			Expect(guardFake.RecordCallCount()).To(Equal(0),
-				"an unforced trigger must not write the ledger")
+			Expect(guardFake.RecordCallCount()).To(Equal(1),
+				"an unforced publish must write the ledger, or a later forced retry duplicates it")
 			Expect(createSender.SendCommandCallCount()).To(Equal(1))
 		})
 

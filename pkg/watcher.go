@@ -84,6 +84,19 @@ type TaskPublisher interface {
 	) bool
 }
 
+// TaskPublisherOption configures optional TaskPublisher behaviour.
+type TaskPublisherOption func(*taskPublisher)
+
+// WithPublishRecorder makes the publisher record every review task it sends in
+// the retry guard's ledger, so a later forced retry for the same head SHA is
+// suppressed while that review is still in flight. Without it the publisher
+// records nothing.
+func WithPublishRecorder(recorder PublishRecorder) TaskPublisherOption {
+	return func(p *taskPublisher) {
+		p.recorder = recorder
+	}
+}
+
 // NewTaskPublisher returns a TaskPublisher that performs trust evaluation
 // then publishes a CreateTaskCommand via the given CreateCommandSender.
 func NewTaskPublisher(
@@ -92,14 +105,19 @@ func NewTaskPublisher(
 	metrics Metrics,
 	cfg TaskConfig,
 	ghClient GitHubClient,
+	opts ...TaskPublisherOption,
 ) TaskPublisher {
-	return &taskPublisher{
+	p := &taskPublisher{
 		createSender:  createSender,
 		trustDecision: trustDecision,
 		metrics:       metrics,
 		cfg:           cfg,
 		ghClient:      ghClient,
 	}
+	for _, opt := range opts {
+		opt(p)
+	}
+	return p
 }
 
 type taskPublisher struct {
@@ -111,6 +129,10 @@ type taskPublisher struct {
 	// reviewable content. Nil-tolerant: a publisher built without one simply
 	// excludes nothing.
 	ghClient GitHubClient
+	// recorder writes the retry guard's ledger after every successful publish.
+	// Nil-tolerant: a publisher built without one records nothing, which is the
+	// pre-guard behaviour.
+	recorder PublishRecorder
 }
 
 // PublishCreate implements TaskPublisher.
@@ -165,7 +187,29 @@ func (p *taskPublisher) PublishCreate(
 	}
 	glog.V(2).Infof("published CreateTaskCommand pr=%s/%s#%d sha=%s taskID=%s trusted=%t parked=%t",
 		pr.Owner, pr.Repo, pr.Number, details.HeadSHA, taskIDStr, trustResult.Success(), parked)
+	p.recordPublished(ctx, pr, taskIDStr, details)
 	return true
+}
+
+// recordPublished writes the retry guard's ledger entry for the review task
+// this publisher just sent. Without it the ledger would only ever hold forced
+// publishes, so a forced retry after a poll-path publish would find no record
+// and duplicate the review that is already running.
+func (p *taskPublisher) recordPublished(
+	ctx context.Context,
+	pr PullRequest,
+	taskIDStr string,
+	details PRDetails,
+) {
+	if p.recorder == nil {
+		return
+	}
+	p.recorder.RecordPublish(ctx, RetryGuardPR{
+		Owner:   pr.Owner,
+		Repo:    pr.Repo,
+		Number:  pr.Number,
+		HeadSHA: details.HeadSHA,
+	}, taskIDStr)
 }
 
 // ReviewIgnoreExclusion reads the repo's `.reviewignore` and computes what it

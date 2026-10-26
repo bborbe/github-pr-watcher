@@ -84,6 +84,50 @@ type RetryGuard interface {
 	Record(ctx context.Context, tx libkv.Tx, pr RetryGuardPR, taskID string) error
 }
 
+// PublishRecorder records that a review task was published for one head SHA,
+// so the guard's Check can suppress a duplicate forced retry.
+//
+// It exists for the publish paths that hold no transaction of their own — the
+// poll loop and the unreviewed scanner both publish through TaskPublisher. The
+// command executor must NOT use a recorder: it runs inside the consumer's
+// already-held transaction and memDB's mutex is not re-entrant, so it records
+// through its own tx instead.
+type PublishRecorder interface {
+	RecordPublish(ctx context.Context, pr RetryGuardPR, taskID string)
+}
+
+// NewPublishRecorder returns a PublishRecorder that writes into the same ledger
+// Check reads, one transaction per record.
+func NewPublishRecorder(db libkv.DB, guard RetryGuard) PublishRecorder {
+	return &publishRecorder{db: db, guard: guard}
+}
+
+type publishRecorder struct {
+	db    libkv.DB
+	guard RetryGuard
+}
+
+// RecordPublish writes one ledger entry. A failure is logged, never returned:
+// the review task has already been sent, and the caller's publish result must
+// not be turned into a retry by a bookkeeping error.
+func (r *publishRecorder) RecordPublish(
+	ctx context.Context,
+	pr RetryGuardPR,
+	taskID string,
+) {
+	if r == nil || r.db == nil || r.guard == nil {
+		return
+	}
+	if err := r.db.Update(ctx, func(ctx context.Context, tx libkv.Tx) error {
+		return r.guard.Record(ctx, tx, pr, taskID)
+	}); err != nil {
+		glog.Warningf(
+			"retry guard: record publish failed pr=%s/%s#%d sha=%s task_id=%s err=%v",
+			pr.Owner, pr.Repo, pr.Number, pr.HeadSHA, taskID, err,
+		)
+	}
+}
+
 // NewRetryGuard returns a RetryGuard backed by the in-process ledger.
 func NewRetryGuard(
 	ghClient GitHubClient,

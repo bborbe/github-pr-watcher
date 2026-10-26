@@ -74,6 +74,7 @@ func CreateWatcher(
 	trivialAutoMergeEnabled bool,
 	mechanicalOverrideAuthors []string,
 	unreviewedConfig pkg.UnreviewedConfig,
+	publishRecorder pkg.PublishRecorder,
 	currentDateTime libtime.CurrentDateTimeGetter,
 ) pkg.Watcher {
 	publisher := pkg.NewTaskPublisher(
@@ -90,6 +91,7 @@ func CreateWatcher(
 			MaxChangedFiles: maxChangedFiles,
 		},
 		ghClient,
+		pkg.WithPublishRecorder(publishRecorder),
 	)
 	unreviewedScanner := pkg.NewUnreviewedScanner(
 		ghClient,

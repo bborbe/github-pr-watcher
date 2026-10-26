@@ -185,7 +185,7 @@ func runTriggerPRReview(
 	); err != nil {
 		return nil, nil, err
 	}
-	recordRetryGuard(ctx, tx, retryGuard, cmd, guardPR, taskIDStr)
+	recordRetryGuard(ctx, tx, retryGuard, guardPR, taskIDStr)
 	return nil, nil, nil
 }
 
@@ -220,20 +220,20 @@ func checkRetryGuard(
 	return err
 }
 
-// recordRetryGuard notes a successful forced publish in the guard's ledger.
-// A record failure is logged, never returned: the create command was already
-// sent, and surfacing an error would make the framework redeliver it.
+// recordRetryGuard notes a successful publish in the guard's ledger, whether
+// the trigger was forced or not. The ledger must cover every publish that
+// creates a review task: a forced retry normally follows a poll-path or
+// webhook publish, and a ledger holding only forced publishes would let that
+// retry duplicate the review already running. A record failure is logged, never
+// returned: the create command was already sent, and surfacing an error would
+// make the framework redeliver it.
 func recordRetryGuard(
 	ctx context.Context,
 	tx libkv.Tx,
 	retryGuard pkg.RetryGuard,
-	cmd TriggerPRReviewCommand,
 	guardPR pkg.RetryGuardPR,
 	taskIDStr string,
 ) {
-	if !cmd.Force {
-		return
-	}
 	if err := retryGuard.Record(ctx, tx, guardPR, taskIDStr); err != nil {
 		glog.Warningf(
 			"retry guard: record publish failed pr=%s/%s#%d sha=%s task_id=%s err=%v",

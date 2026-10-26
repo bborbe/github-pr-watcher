@@ -141,7 +141,7 @@ type application struct {
 	AutoMergeLabel            string           `required:"false" arg:"auto-merge-label"            env:"AUTO_MERGE_LABEL"            usage:"PR label that opts the PR into GitHub-native auto-merge for trusted authors (watcher arms EnableAutoMerge; GitHub merges once checks + required reviews are green). Empty disables the auto-merge path. Requires the watcher GitHub App to hold Pull requests: Write."                                                 default:"auto-merge"`
 	TrivialAutoMerge          bool             `required:"false" arg:"trivial-auto-merge"          env:"TRIVIAL_AUTO_MERGE"          usage:"Automatically apply the auto-merge label to mechanically trivial PRs (go.mod / Dockerfile / CHANGELOG / workflow bumps) on repos opted in via .maintainer.yaml autoMerge.trivial. Stage-1 allow-list; the LLM stage-2 fallback is a follow-up. Off by default; the per-repo .maintainer.yaml flag is the kill switch."`
 	MechanicalOverrideAuthors string           `required:"false" arg:"mechanical-override-authors" env:"MECHANICAL_OVERRIDE_AUTHORS" usage:"Comma-separated GitHub logins that may be approved without an LLM review on a repo opted in via .maintainer.yaml autoMerge.trivial + prReviewer.autoApprove. Empty disables the mechanical override path."`
-	ReviewerBotLogins         string           `required:"false" arg:"reviewer-bot-logins"         env:"REVIEWER_BOT_LOGINS"         usage:"Comma-separated GitHub logins of the reviewer bots; a publishable PR whose head SHA has no review from one of them is reported on the github_pr_watcher_unreviewed_prs gauge. Empty disables the scan."`
+	ReviewerBotLogins         string           `required:"false" arg:"reviewer-bot-logins"         env:"REVIEWER_BOT_LOGINS"         usage:"Comma-separated GitHub logins of the reviewer bots; a publishable PR whose head SHA has no review from one of them is reported on the github_pr_watcher_unreviewed_prs gauge. Required: the retry guard's verdict check shares it, so an empty value fails startup."`
 	UnreviewedThreshold       string           `required:"false" arg:"unreviewed-threshold"        env:"UNREVIEWED_THRESHOLD"        usage:"How long a PR must wait without a reviewer-bot review before it is reported (Go duration; must be positive). Ignored (and not validated) when REVIEWER_BOT_LOGINS is empty"                                                                                                                                            default:"30m"`
 	UnreviewedRetryMax        int              `required:"false" arg:"unreviewed-retry-max"        env:"UNREVIEWED_RETRY_MAX"        usage:"How many times the scan re-publishes the original review task for a still-unreviewed PR, one threshold apart, before marking it retries_exhausted; 0 disables retrying"                                                                                                                                                default:"3"`
 
@@ -315,6 +315,26 @@ func (a *application) Run(ctx context.Context, _ libsentry.Client) error {
 	ghClient := pkg.NewGitHubClient(httpClient)
 	metrics := pkg.NewMetrics()
 
+	// The retry guard's verdict check reads reviews authored by the configured
+	// reviewer logins. With no logins it can never find a verdict, so every
+	// fresh ledger record suppresses for the full staleness bound and an
+	// operator loses the ability to re-run a review that already finished.
+	// Refuse to start rather than ship a guard whose escape hatch is silently
+	// disabled.
+	if len(unreviewedConfig.Logins) == 0 {
+		return errors.Errorf(
+			ctx,
+			"REVIEWER_BOT_LOGINS must name at least one reviewer login: without it the retry guard cannot tell a completed review from an in-flight one",
+		)
+	}
+
+	db := pkg.NewMemDB()
+	// Process-wide in-flight guard: suppresses a forced re-review whose review
+	// for the same head SHA is still running. Uses the same reviewer-login set
+	// as the unreviewed-PR scanner, and is written by both the command executor
+	// and every TaskPublisher publish (poll loop and unreviewed scanner).
+	retryGuard := pkg.NewRetryGuard(ghClient, metrics, unreviewedConfig.Logins, currentDateTime)
+
 	w := factory.CreateWatcher(
 		ghClient,
 		createSender,
@@ -337,6 +357,7 @@ func (a *application) Run(ctx context.Context, _ libsentry.Client) error {
 		a.TrivialAutoMerge,
 		pkg.ParseMechanicalOverrideAuthors(a.MechanicalOverrideAuthors),
 		unreviewedConfig,
+		pkg.NewPublishRecorder(db, retryGuard),
 		currentDateTime,
 	)
 
@@ -365,11 +386,6 @@ func (a *application) Run(ctx context.Context, _ libsentry.Client) error {
 	// on pod restart; safe because the downstream CreateTaskCommand is idempotent
 	// via the derived task_id.
 	saramaClientProvider := libkafka.NewSaramaClientProviderNew(a.KafkaBrokers)
-	db := pkg.NewMemDB()
-	// Process-wide in-flight guard: suppresses a forced re-review whose review
-	// for the same head SHA is still running. Uses the same reviewer-login set
-	// as the unreviewed-PR scanner.
-	retryGuard := pkg.NewRetryGuard(ghClient, metrics, unreviewedConfig.Logins, currentDateTime)
 	commandConsumer := factory.CreateCommandConsumer(
 		saramaClientProvider,
 		syncProducer,

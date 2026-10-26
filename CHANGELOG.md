@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
-- fix: suppress a forced re-review while a review for the same head SHA is still in flight, so an operator retry no longer publishes a second task alongside the running one — the forced path consults an in-memory ledger of published reviews plus a reviewer-verdict lookup, counts a suppression under the new `inflight_skipped` label on `github_pr_watcher_prs_total`, and still re-runs after a verdict or once the one-hour staleness bound passes
+- fix: suppress a forced re-review while a review for the same head SHA is still in flight, so an operator retry no longer publishes a second task alongside the running one — the forced path consults an in-memory ledger of published reviews plus a reviewer-verdict lookup, counts a suppression under the new `inflight_skipped` label on `github_pr_watcher_prs_total`, and still re-runs after a verdict or once the one-hour staleness bound passes. The ledger records every publish that creates a review task, the poll loop and the unreviewed scanner included, so retrying the review the poll path published is suppressed too; startup now fails loudly when `REVIEWER_BOT_LOGINS` is empty, because the verdict check that lets an operator re-run a finished review is dead without it
 
 ## v0.15.1
 
