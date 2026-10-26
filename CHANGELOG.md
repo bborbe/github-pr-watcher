@@ -5,10 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+- fix: suppress a forced re-review while a review for the same head SHA is still in flight, so an operator retry no longer publishes a second task alongside the running one — the forced path consults an in-memory ledger of published reviews plus a reviewer-verdict lookup, counts a suppression under the new `inflight_skipped` label on `github_pr_watcher_prs_total`, and still re-runs after a verdict or once the one-hour staleness bound passes. The ledger records every publish that creates a review task, the poll loop and the unreviewed scanner included, so retrying the review the poll path published is suppressed too; startup now fails loudly when `REVIEWER_BOT_LOGINS` is empty, because the verdict check that lets an operator re-run a finished review is dead without it
 ## v0.16.0
 
 - feat: require a pull request's head repository to match its base repository before trusting it, closing the fork-PR trust hole — a workflow running in a fork that opens a PR against upstream renders as the same author login, so the trusted-author list alone would have let a fork PR be auto-reviewed. `trust.PR` and `PRDetails` gain `HeadRepoFullName`/`BaseRepoFullName`, populated from `pr.head.repo.full_name` and `pr.base.repo.full_name` in `GetPRDetails`; the new `trust.NewSameRepo()` leaf denies an unknown head or base repo (fail-closed) and is registered in the production `trust.And` chain shared by the watcher, the command consumer and the single-PR trigger, so a fork PR is denied on every path including an explicit `/trigger` (non-retryable `ErrCommandObjectSkipped`). The unreviewed-PR scan now runs its trust check after the details fetch, because the head repo only arrives with the details
-
 ## v0.15.1
 
 - fix: defer a **webhook**-published review to the poll path when the PR author is on `MECHANICAL_OVERRIDE_AUTHORS`, so a trivial bot bump no longer receives both an LLM review and a mechanical override on the same head SHA — the webhook arrives seconds after the PR is created, always before the poll path can act, and the poll path owns the override-vs-review decision. `TriggerPRReviewCommand` gains a `webhook` flag set only by the webhook handler, so every operator command on the `/trigger` endpoint — forced or not — still gets a full review; a deferral is counted under a new `deferred` label on `github_pr_watcher_prs_total` rather than `skipped`, which keeps meaning "dropped"
