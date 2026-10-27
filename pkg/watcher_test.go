@@ -3217,6 +3217,13 @@ var _ = Describe("BuildCreateCommand oversized PR park", func() {
 		)
 		Expect(cmd.Body).To(ContainSubstring("TRUSTED_AUTHORS"))
 		Expect(cmd.Body).To(ContainSubstring("A forced re-trigger also fails"))
+		// The lever must name what actually works once trust is granted: a new
+		// push or a forced /trigger. A plain /trigger recomputes the same title
+		// for the same SHA, so create-if-not-exists dedupes it.
+		Expect(cmd.Body).To(ContainSubstring("restart the watcher"))
+		Expect(cmd.Body).To(ContainSubstring("a forced `/trigger`"))
+		Expect(cmd.Body).To(ContainSubstring("A plain `/trigger` for this same SHA does not"))
+		Expect(cmd.Body).NotTo(ContainSubstring("next push or trigger"))
 		Expect(cmd.Body).NotTo(ContainSubstring("To auto-process this PR"))
 		Expect(cmd.Body).NotTo(ContainSubstring("https://github.com/owner/repo/pull/1"))
 	})

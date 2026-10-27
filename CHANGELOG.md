@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - fix: park bodies describe a working un-park lever (forced `/trigger` for oversized, `TRUSTED_AUTHORS` for untrusted) instead of a frontmatter edit the reviewer always fails, because the URL-less park body cannot be reviewed; the README names the same levers
 - feat: require a pull request's head repository to match its base repository before trusting it, closing the fork-PR trust hole — a workflow running in a fork that opens a PR against upstream renders as the same author login, so the trusted-author list alone would have let a fork PR be auto-reviewed. `trust.PR` and `PRDetails` gain `HeadRepoFullName`/`BaseRepoFullName`, populated from `pr.head.repo.full_name` and `pr.base.repo.full_name` in `GetPRDetails`; the new `trust.NewSameRepo()` leaf denies an unknown head or base repo (fail-closed) and is registered in the production `trust.And` chain shared by the watcher, the command consumer and the single-PR trigger, so a fork PR is denied on every path including an explicit `/trigger` (non-retryable `ErrCommandObjectSkipped`). The unreviewed-PR scan now runs its trust check after the details fetch, because the head repo only arrives with the details
+- chore: update golang.org/x/net to v0.62.0, clearing GO-2026-6860 and GO-2026-6866 (quadratic text-node coalescing and missing ancestor namespace transitions in `html`), which the `vulncheck` precommit gate reports as reachable
 
 ## v0.15.1
 

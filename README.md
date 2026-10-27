@@ -202,7 +202,7 @@ If a vault task already exists for the same `(PR, SHA)`, the controller's `creat
 A parked record (oversized or untrusted author) carries no PR URL in its body, so the reviewer fails it if it is un-parked by editing its frontmatter. Use the lever for the park reason instead:
 
 - **Oversized PR** — call `/trigger?url=<pr_url>&force=true`. Force skips the oversized park and composes a fresh, reviewable record.
-- **Untrusted author** — add the login to `TRUSTED_AUTHORS`; the next push or trigger creates a reviewable record. Force does not skip the trust check.
+- **Untrusted author** — add the login to `TRUSTED_AUTHORS` and restart the watcher: the list is read at startup, so the change takes effect only after a restart. Then push a new commit (new SHA), or call `/trigger?url=<pr_url>&force=true` — the forced run salts the title with a retry token, so it lands on a fresh record. A plain `/trigger` for the same SHA does not: it composes the same title as the parked record, and the controller's `create-if-not-exists` is idempotent (see above). Force does not skip the trust check.
 
 ## Development
 

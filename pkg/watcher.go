@@ -1699,7 +1699,7 @@ func buildMechanicalOverrideBody(pr PullRequest) string {
 
 func buildUntrustedBody(author, reasons string) string {
 	return fmt.Sprintf(
-		"## Untrusted author\n\nThis PR is by GitHub user **%s** which did not pass the trust check:\n\n- %s\n\nThis record cannot be made reviewable from here. Editing the frontmatter fails, because this body carries no PR URL. A forced re-trigger also fails, because force skips only the oversized park and not the trust check.\n\nTo have this author's PRs reviewed, add the login to the watcher's `TRUSTED_AUTHORS` list; the next push or trigger then creates a reviewable record.\n\nTo dismiss, set `status: aborted`.\n",
+		"## Untrusted author\n\nThis PR is by GitHub user **%s** which did not pass the trust check:\n\n- %s\n\nThis record cannot be made reviewable from here. Editing the frontmatter fails, because this body carries no PR URL. A forced re-trigger also fails, because force skips only the oversized park and not the trust check.\n\nTo have this author's PRs reviewed, add the login to the watcher's `TRUSTED_AUTHORS` list and restart the watcher — the list is read at startup, so the change takes effect only after a restart. After that, the next push (new SHA), or a forced `/trigger`, creates a reviewable record. A plain `/trigger` for this same SHA does not: it composes the same title as this record, so the controller's create-if-not-exists dedupes it and no reviewable record appears.\n\nTo dismiss, set `status: aborted`.\n",
 		author,
 		reasons,
 	)
