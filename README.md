@@ -3,6 +3,8 @@
 Polls the GitHub Search API for open pull requests and publishes a `CreateTaskCommand` to Kafka
 for each new or force-pushed PR so the [`github-pr-review-agent`](https://github.com/bborbe/github-pr-review-agent) picks it up automatically.
 
+<!-- fixture head move for the prod retry-guard verification -->
+
 ## Links
 
 Dev:
