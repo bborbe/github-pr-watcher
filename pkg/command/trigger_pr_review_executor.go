@@ -56,6 +56,7 @@ func NewTriggerPRReviewCommandExecutor(
 	maxChangedFiles int,
 	metrics pkg.Metrics,
 	retryGuard pkg.RetryGuard,
+	overrideLedger pkg.OverrideLedger,
 	currentDateTime libtime.CurrentDateTimeGetter,
 ) cdb.CommandObjectExecutorTx {
 	return cdb.CommandObjectExecutorTxFunc(
@@ -68,7 +69,7 @@ func NewTriggerPRReviewCommandExecutor(
 				mechanicalOverrideAuthors,
 				stage, maxSlugLen, maxTitleLen, taskSuffix, targetVault,
 				maxAdditions, maxChangedFiles, metrics,
-				retryGuard, currentDateTime,
+				retryGuard, overrideLedger, currentDateTime,
 			)
 		},
 	)
@@ -103,6 +104,7 @@ func runTriggerPRReview(
 	maxChangedFiles int,
 	metrics pkg.Metrics,
 	retryGuard pkg.RetryGuard,
+	overrideLedger pkg.OverrideLedger,
 	currentDateTime libtime.CurrentDateTimeGetter,
 ) (*base.EventID, base.Event, error) {
 	cmd, err := unmarshalAndValidate(ctx, commandObject)
@@ -166,6 +168,18 @@ func runTriggerPRReview(
 	// URL, a filter skip, an untrusted author or a webhook deferral never
 	// touches the ledger. It is consulted only for a forced trigger.
 	guardPR := newRetryGuardPR(prInfo, details)
+	// A review is never published for a SHA a fresh override owns — whoever
+	// asked. The deferral above covers ONE origin (a webhook command from a
+	// mechanical-override author), and gating on cmd.Webhook left every other
+	// origin uncovered: bborbe/kafka-topic-reader#26 published a review 44 s
+	// after its override, on a command whose Webhook flag was false, so the
+	// deferral never applied. Asking the ledger covers this producer, the poll
+	// loop, the scanner and any producer added later, without naming any of
+	// them — and the #26 producer could not be named at all: it arrived on the
+	// command topic with no inbound HTTP request logged anywhere.
+	if err := suppressForOverride(ctx, tx, overrideLedger, guardPR, metrics); err != nil {
+		return nil, nil, err
+	}
 	if err := checkRetryGuard(ctx, tx, retryGuard, cmd, guardPR); err != nil {
 		return nil, nil, err
 	}
@@ -200,6 +214,47 @@ func newRetryGuardPR(
 		Number:  prInfo.Number,
 		HeadSHA: details.HeadSHA,
 	}
+}
+
+// suppressForOverride refuses to publish a review for a head SHA that a fresh
+// pr-override already owns. It returns the guard's cdb.ErrCommandObjectSkipped
+// so the framework treats the refusal as a skip rather than a failure — the
+// same contract the webhook deferral above uses.
+//
+// A ledger that cannot be read fails OPEN and the review is published: the
+// pre-change behaviour is to publish, and losing a review is worse than the
+// duplicate this suppresses.
+func suppressForOverride(
+	ctx context.Context,
+	tx libkv.Tx,
+	overrideLedger pkg.OverrideLedger,
+	pr pkg.RetryGuardPR,
+	metrics pkg.Metrics,
+) error {
+	if overrideLedger == nil {
+		return nil
+	}
+	suppressed, err := overrideLedger.SuppressedTx(ctx, tx, pr)
+	if err != nil {
+		glog.Warningf(
+			"trigger executor: override ledger read failed, publishing review pr=%s/%s#%d sha=%s err=%v",
+			pr.Owner, pr.Repo, pr.Number, pr.HeadSHA, err,
+		)
+		return nil
+	}
+	if !suppressed {
+		return nil
+	}
+	metrics.IncPRPublished("override_owns_sha")
+	glog.V(2).Infof(
+		"trigger executor: review suppressed, override owns sha pr=%s/%s#%d sha=%s",
+		pr.Owner, pr.Repo, pr.Number, pr.HeadSHA,
+	)
+	return errors.Wrapf(
+		ctx, cdb.ErrCommandObjectSkipped,
+		"override owns sha pr=%s/%s#%d sha=%s",
+		pr.Owner, pr.Repo, pr.Number, pr.HeadSHA,
+	)
 }
 
 // checkRetryGuard consults the in-flight guard for a forced trigger. An

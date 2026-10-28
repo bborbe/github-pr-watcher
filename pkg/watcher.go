@@ -97,6 +97,16 @@ func WithPublishRecorder(recorder PublishRecorder) TaskPublisherOption {
 	}
 }
 
+// WithOverrideLedger makes the publisher record every pr-override it sends and
+// refuse to publish a review for a head SHA that a fresh override owns. It is
+// what keeps the two override-only invariants from being broken by a producer
+// that does not own the mechanical decision — see OverrideLedger.
+func WithOverrideLedger(ledger OverrideLedger) TaskPublisherOption {
+	return func(p *taskPublisher) {
+		p.overrideLedger = ledger
+	}
+}
+
 // NewTaskPublisher returns a TaskPublisher that performs trust evaluation
 // then publishes a CreateTaskCommand via the given CreateCommandSender.
 func NewTaskPublisher(
@@ -133,6 +143,12 @@ type taskPublisher struct {
 	// Nil-tolerant: a publisher built without one records nothing, which is the
 	// pre-guard behaviour.
 	recorder PublishRecorder
+	// overrideLedger records the pr-override this publisher sends and gates
+	// reviews on it, so a producer that does not own the mechanical decision
+	// cannot publish a review for a SHA an override already owns.
+	// Nil-tolerant: a publisher built without one never suppresses a review,
+	// which is the pre-ledger behaviour.
+	overrideLedger OverrideLedger
 }
 
 // PublishCreate implements TaskPublisher.
@@ -142,6 +158,16 @@ func (p *taskPublisher) PublishCreate(
 	taskIDStr string,
 	details PRDetails,
 ) bool {
+	// A review is never published for a SHA a fresh override owns.
+	//
+	// Returning false is the honest answer: nothing was published. The poll loop
+	// then re-evaluates next poll, where its own override cursor entry handles
+	// the PR; the scanner simply retries after its threshold, by which time the
+	// override has either landed its APPROVE or the suppression window expired.
+	if p.suppressedByOverride(ctx, pr, details) {
+		return false
+	}
+
 	author := pr.AuthorLogin
 
 	trustResult, err := p.trustDecision.IsTrusted(ctx, trust.PR{
@@ -318,6 +344,7 @@ func (p *taskPublisher) PublishOverride(
 	glog.V(2).Infof("published override CreateTaskCommand pr=%s/%s#%d sha=%s taskID=%s",
 		pr.Owner, pr.Repo, pr.Number, details.HeadSHA, taskIDStr)
 	p.metrics.IncPRPublished("override")
+	p.recordOverride(ctx, pr, taskIDStr, details)
 	return true, true
 }
 
@@ -351,7 +378,56 @@ func (p *taskPublisher) PublishMechanicalOverride(
 	glog.Infof("mechanical override pr=%s/%s#%d sha=%s rule=%s",
 		pr.Owner, pr.Repo, pr.Number, details.HeadSHA, overrideReasonTrivialBotBump)
 	p.metrics.IncPRPublished("override_mechanical")
+	p.recordOverride(ctx, pr, taskIDStr, details)
 	return true
+}
+
+// suppressedByOverride reports whether a fresh override owns this head SHA, and
+// records the refusal when it does.
+//
+// The poll loop already knows the answer — it is the producer that made the
+// mechanical decision — but the unreviewed scanner and the trigger executor
+// reach their publish paths without that knowledge, and a review published for
+// an override-owned SHA spends exactly the reviewer pod the override exists to
+// save. Observed twice in the first measured population: kafka-topic-reader#26
+// (the executor, 44 s after the override) and alert#29 (the scanner, 30 min
+// after it).
+func (p *taskPublisher) suppressedByOverride(
+	ctx context.Context,
+	pr PullRequest,
+	details PRDetails,
+) bool {
+	if p.overrideLedger == nil {
+		return false
+	}
+	if !p.overrideLedger.Suppressed(ctx, RetryGuardPR{
+		Owner: pr.Owner, Repo: pr.Repo, Number: pr.Number, HeadSHA: details.HeadSHA,
+	}) {
+		return false
+	}
+	glog.V(2).Infof(
+		"review suppressed, override owns this sha pr=%s/%s#%d sha=%s",
+		pr.Owner, pr.Repo, pr.Number, details.HeadSHA,
+	)
+	p.metrics.IncPRPublished("override_owns_sha")
+	return true
+}
+
+// recordOverride notes the override against its head SHA so no producer
+// publishes a review for it while the override is still in flight. It is a
+// no-op when no ledger is configured.
+func (p *taskPublisher) recordOverride(
+	ctx context.Context,
+	pr PullRequest,
+	taskIDStr string,
+	details PRDetails,
+) {
+	if p.overrideLedger == nil {
+		return
+	}
+	p.overrideLedger.Record(ctx, RetryGuardPR{
+		Owner: pr.Owner, Repo: pr.Repo, Number: pr.Number, HeadSHA: details.HeadSHA,
+	}, taskIDStr)
 }
 
 // NewWatcher returns a Watcher that polls GitHub and publishes commands.

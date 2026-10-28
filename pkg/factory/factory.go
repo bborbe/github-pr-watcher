@@ -75,6 +75,7 @@ func CreateWatcher(
 	mechanicalOverrideAuthors []string,
 	unreviewedConfig pkg.UnreviewedConfig,
 	publishRecorder pkg.PublishRecorder,
+	overrideLedger pkg.OverrideLedger,
 	currentDateTime libtime.CurrentDateTimeGetter,
 ) pkg.Watcher {
 	publisher := pkg.NewTaskPublisher(
@@ -92,6 +93,7 @@ func CreateWatcher(
 		},
 		ghClient,
 		pkg.WithPublishRecorder(publishRecorder),
+		pkg.WithOverrideLedger(overrideLedger),
 	)
 	unreviewedScanner := pkg.NewUnreviewedScanner(
 		ghClient,
@@ -178,6 +180,7 @@ func CreateCommandConsumer(
 	maxChangedFiles int,
 	metrics pkg.Metrics,
 	retryGuard pkg.RetryGuard,
+	overrideLedger pkg.OverrideLedger,
 	topicPrefix base.TopicPrefix,
 	currentDateTime libtime.CurrentDateTimeGetter,
 ) run.Func {
@@ -197,6 +200,7 @@ func CreateCommandConsumer(
 			maxChangedFiles,
 			metrics,
 			retryGuard,
+			overrideLedger,
 			currentDateTime,
 		),
 	}
