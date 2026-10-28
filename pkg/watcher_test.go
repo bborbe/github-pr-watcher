@@ -1214,7 +1214,8 @@ var _ = Describe("pkg.Watcher", func() {
 					Expect(cmd.Frontmatter["status"]).To(Equal("todo"))
 					Expect(cmd.Body).To(ContainSubstring("alice"))
 					Expect(cmd.Body).To(ContainSubstring("Untrusted author"))
-					Expect(cmd.Body).To(ContainSubstring("phase: in_progress"))
+					Expect(cmd.Body).To(ContainSubstring("TRUSTED_AUTHORS"))
+					Expect(cmd.Body).NotTo(ContainSubstring("phase: in_progress"))
 					Expect(
 						cmd.Title,
 					).To(Equal("PR Review github - bborbe-repo - 10 - sha1 - some-pr"))
@@ -3270,6 +3271,52 @@ var _ = Describe("BuildCreateCommand oversized PR park", func() {
 		Expect(cmd.Body).To(ContainSubstring("Oversized PR"))
 		Expect(cmd.Body).To(ContainSubstring("600 added lines"))
 		Expect(cmd.Body).To(ContainSubstring("2 changed files"))
+	})
+
+	// The park body carries no PR URL, so the reviewer fails any record that
+	// is un-parked by editing its frontmatter. The body must name the lever
+	// that works (a forced /trigger) and must not offer the frontmatter edit.
+	It("oversized park body names the forced-trigger lever, not a frontmatter edit", func() {
+		cmd := pkg.BuildCreateCommand(
+			makePR("trusted-user"), makeOversized(), "00000000-0000-0000-0000-000000000017",
+			"dev", 80, 60, "pr-reviewer", "agent",
+			trust.NewResult(true, "author allowlist"), false, 500, 100,
+			pkg.Exclusion{},
+		)
+		Expect(cmd.Body).To(ContainSubstring("/trigger?url="))
+		Expect(cmd.Body).To(ContainSubstring("force=true"))
+		Expect(cmd.Body).To(ContainSubstring("Do not paste the URL into this record"))
+		// A forced run is suppressed by the retry guard for an hour after the
+		// parked publish, so the body must not present it as immediately
+		// effective: it names the wait and the restart that clears the ledger.
+		Expect(cmd.Body).To(ContainSubstring("suppressed for up to an hour"))
+		Expect(cmd.Body).To(ContainSubstring("restart the watcher"))
+		Expect(cmd.Body).NotTo(ContainSubstring("edit the frontmatter:"))
+		Expect(cmd.Body).NotTo(ContainSubstring("https://github.com/owner/repo/pull/1"))
+	})
+
+	It("untrusted body names TRUSTED_AUTHORS, not a frontmatter edit", func() {
+		cmd := pkg.BuildCreateCommand(
+			makePR("unknown-user"), makeOversized(), "00000000-0000-0000-0000-000000000018",
+			"dev", 80, 60, "pr-reviewer", "agent",
+			trust.NewResult(false, "author not in allowlist"), false, 500, 100,
+			pkg.Exclusion{},
+		)
+		Expect(cmd.Body).To(ContainSubstring("TRUSTED_AUTHORS"))
+		Expect(cmd.Body).To(ContainSubstring("A forced re-trigger also fails"))
+		// The lever must name what actually works once trust is granted: a new
+		// push or a forced /trigger. A plain /trigger recomputes the same title
+		// for the same SHA, so create-if-not-exists dedupes it.
+		Expect(cmd.Body).To(ContainSubstring("restart the watcher"))
+		Expect(cmd.Body).To(ContainSubstring("a forced `/trigger`"))
+		Expect(cmd.Body).To(ContainSubstring("A plain `/trigger` for this same SHA does not"))
+		// Same retry-guard caveat as the park body, plus the oversized
+		// interaction: once trust is granted a new SHA still parks.
+		Expect(cmd.Body).To(ContainSubstring("suppressed as in-flight"))
+		Expect(cmd.Body).To(ContainSubstring("only the forced `/trigger` path applies"))
+		Expect(cmd.Body).NotTo(ContainSubstring("next push or trigger"))
+		Expect(cmd.Body).NotTo(ContainSubstring("To auto-process this PR"))
+		Expect(cmd.Body).NotTo(ContainSubstring("https://github.com/owner/repo/pull/1"))
 	})
 
 	It("trusted oversized author with thresholds disabled — reviews normally", func() {

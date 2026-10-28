@@ -196,7 +196,16 @@ the shared App token.
 
 ### Single-PR Trigger Known Limit
 
-If a vault task already exists for the same `(PR, SHA)`, the controller's `create-if-not-exists` is idempotent and no fresh agent Job spawns. To force a re-run in that case, reset the vault task's frontmatter (`phase`, `status`, `trigger_count`) manually OR push a new commit so the SHA changes.
+If a vault task already exists for the same `(PR, SHA)`, the controller's `create-if-not-exists` is idempotent and no fresh agent Job spawns. To force a re-run in that case, call `/trigger?url=<pr_url>&force=true` (the forced run salts the task title with a retry token, so it lands on a fresh record) OR push a new commit so the SHA changes.
+
+A forced run is additionally suppressed while the retry guard still holds a fresh record for that `(PR, SHA)` — up to an hour after the publish — unless a configured reviewer has already posted a verdict at the head SHA. The endpoint answers 202 either way, so a suppressed force looks identical to a queued one: no record appears. Wait out the hour, or restart the watcher (the retry-guard ledger is in memory, so a restart clears it), before forcing.
+
+### Un-parking a Parked Record
+
+A parked record (oversized or untrusted author) carries no PR URL in its body, so the reviewer fails it if it is un-parked by editing its frontmatter. Use the lever for the park reason instead:
+
+- **Oversized PR** — call `/trigger?url=<pr_url>&force=true`. Force skips the oversized park and composes a fresh, reviewable record. A forced run within an hour of the park being published is suppressed as in-flight (the parked publish counts as an in-flight review and the SHA carries no verdict), so wait out that hour or restart the watcher before forcing.
+- **Untrusted author** — add the login to `TRUSTED_AUTHORS` and restart the watcher: the list is read at startup, so the change takes effect only after a restart. Then push a new commit (new SHA), or call `/trigger?url=<pr_url>&force=true` — the forced run salts the title with a retry token, so it lands on a fresh record. A plain `/trigger` for the same SHA does not: it composes the same title as the parked record, and the controller's `create-if-not-exists` is idempotent (see above). Force does not skip the trust check. A forced run within an hour of the park is likewise suppressed as in-flight — wait it out or restart the watcher. If the PR is also oversized, a new push parks again, so only the forced `/trigger` path applies.
 
 ## Development
 

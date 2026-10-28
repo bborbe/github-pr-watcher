@@ -1807,7 +1807,7 @@ func buildParkedBody(
 		)
 	}
 	return fmt.Sprintf(
-		"## Oversized PR — parked for human review\n\nThis PR has %s, which exceeds the auto-reviewer's context budget. Spawning a review pod would overflow its context window (`claude CLI failed: Prompt is too long`) and die before posting a verdict.\n%s\nTo review anyway, edit the frontmatter: `assignee: pr-reviewer-agent`, `phase: in_progress`, `status: in_progress`. To dismiss, set `status: aborted`.\n",
+		"## Oversized PR — parked for human review\n\nThis PR has %s, which exceeds the auto-reviewer's context budget. Spawning a review pod would overflow its context window (`claude CLI failed: Prompt is too long`) and die before posting a verdict.\n%s\nTo review anyway, request a forced re-review on github-pr-watcher: `/trigger?url=<this PR's GitHub URL>&force=true` (the endpoint needs no token). Build the URL from this record's `clone_url` frontmatter with the trailing `.git` replaced by `/pull/<number>`, where `<number>` is the PR number in this record's title (`PR Review github - <owner>-<repo> - <number> - …`). Do not paste the URL into this record. The forced run skips only the oversized park and composes a fresh, reviewable record — but it is suppressed for up to an hour after this record was composed: the parked publish counts as an in-flight review and this SHA carries no verdict, so the retry guard skips the forced run after the endpoint has already answered 202, and no record appears. Wait out that hour, or restart the watcher (the retry-guard ledger is in memory, and a restart clears it), then retry.\n\nEditing this record's frontmatter does not work: this body carries no PR URL, so the reviewer fails the record.\n\nTo dismiss, set `status: aborted`.\n",
 		strings.Join(reasons, " and "),
 		buildExclusionNote(exclusion),
 	)
@@ -1897,7 +1897,7 @@ func buildMechanicalOverrideBody(pr PullRequest) string {
 
 func buildUntrustedBody(author, reasons string) string {
 	return fmt.Sprintf(
-		"## Untrusted author\n\nThis PR is by GitHub user **%s** which did not pass the trust check:\n\n- %s\n\nTo auto-process this PR, edit the frontmatter above:\n- `phase: in_progress`\n- `status: in_progress`\n\nTo dismiss, set `status: aborted`.\n",
+		"## Untrusted author\n\nThis PR is by GitHub user **%s** which did not pass the trust check:\n\n- %s\n\nThis record cannot be made reviewable from here. Editing the frontmatter fails, because this body carries no PR URL. A forced re-trigger also fails, because force skips only the oversized park and not the trust check.\n\nTo have this author's PRs reviewed, add the login to the watcher's `TRUSTED_AUTHORS` list and restart the watcher — the list is read at startup, so the change takes effect only after a restart. After that, the next push (new SHA), or a forced `/trigger`, creates a reviewable record — but a forced run within an hour of this record being composed is suppressed as in-flight, because the parked publish counts as an in-flight review and this SHA carries no verdict; wait out that hour, or restart the watcher again, before forcing. A plain `/trigger` for this same SHA does not create anything: it composes the same title as this record, so the controller's create-if-not-exists dedupes it. If this PR is also oversized, a new push parks again, so only the forced `/trigger` path applies.\n\nTo dismiss, set `status: aborted`.\n",
 		author,
 		reasons,
 	)
