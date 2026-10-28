@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
-- fix: park bodies describe a working un-park lever (forced `/trigger` for oversized, `TRUSTED_AUTHORS` for untrusted) instead of a frontmatter edit the reviewer always fails, because the URL-less park body cannot be reviewed; the README names the same levers
+- fix: park bodies describe a working un-park lever (forced `/trigger` for oversized, `TRUSTED_AUTHORS` for untrusted) instead of a frontmatter edit the reviewer always fails, because the URL-less park body cannot be reviewed; the README names the same levers. Both bodies and the README also state that a forced run is suppressed for up to an hour after the park — the parked publish is recorded in the retry guard's ledger and the SHA carries no verdict, so the guard skips it after the endpoint has already answered 202 — and name waiting out that hour or restarting the watcher as the way past it, so the lever is never presented as immediately effective
 - chore: update golang.org/x/net to v0.62.0, clearing GO-2026-6860 and GO-2026-6866 (quadratic text-node coalescing and missing ancestor namespace transitions in `html`), which the `vulncheck` precommit gate reports as reachable
 
 ## v0.17.1
