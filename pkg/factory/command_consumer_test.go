@@ -57,6 +57,7 @@ var _ = Describe("CreateCommandConsumer", func() {
 			nil,
 			"dev", 80, 200, "", "", 0, 0,
 			pkg.NewMetrics(),
+			new(mocks.RetryGuard),
 			base.TopicPrefix("develop"),
 			libtime.NewCurrentDateTime(),
 		)

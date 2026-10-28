@@ -74,6 +74,7 @@ func CreateWatcher(
 	trivialAutoMergeEnabled bool,
 	mechanicalOverrideAuthors []string,
 	unreviewedConfig pkg.UnreviewedConfig,
+	publishRecorder pkg.PublishRecorder,
 	currentDateTime libtime.CurrentDateTimeGetter,
 ) pkg.Watcher {
 	publisher := pkg.NewTaskPublisher(
@@ -90,6 +91,7 @@ func CreateWatcher(
 			MaxChangedFiles: maxChangedFiles,
 		},
 		ghClient,
+		pkg.WithPublishRecorder(publishRecorder),
 	)
 	unreviewedScanner := pkg.NewUnreviewedScanner(
 		ghClient,
@@ -151,6 +153,9 @@ func CreateTriggerPRReviewCommandSender(
 // the TriggerPRReviewCommand has Force=true (spec 067). The non-force path
 // does not consult the clock.
 //
+// retryGuard is the process-wide in-flight guard consulted only for forced
+// triggers.
+//
 // The function is pure composition: no business logic, no conditionals.
 // It uses cdb.RunCommandConsumerTxDefault (auto-wraps the transaction) per
 // the go-cqrs/auto-tx-wrapper-no-manual-wrap rule — do NOT manually wrap
@@ -172,6 +177,7 @@ func CreateCommandConsumer(
 	maxAdditions int,
 	maxChangedFiles int,
 	metrics pkg.Metrics,
+	retryGuard pkg.RetryGuard,
 	topicPrefix base.TopicPrefix,
 	currentDateTime libtime.CurrentDateTimeGetter,
 ) run.Func {
@@ -190,6 +196,7 @@ func CreateCommandConsumer(
 			maxAdditions,
 			maxChangedFiles,
 			metrics,
+			retryGuard,
 			currentDateTime,
 		),
 	}

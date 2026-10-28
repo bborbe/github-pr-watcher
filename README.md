@@ -46,7 +46,7 @@ Two independent decision chains run per PR — see [`docs/watcher-decision-chain
 | `MAX_CHANGED_FILES` | no | `0` | Park PRs touching more files than this at `human_review` instead of spawning a review pod; `0` disables |
 | `MAX_PR_AGE` | no | `2160h` (90d) | Skip PRs older than this; empty disables |
 | `BACKFILL_DURATION` | no | `720h` (30d) | On cold start, backdate the initial cursor by this; empty disables |
-| `REVIEWER_BOT_LOGINS` | no | — | Comma-separated GitHub logins of the reviewer bots. A publishable PR whose current head SHA has no review from one of them, after waiting longer than `UNREVIEWED_THRESHOLD`, is reported on `github_pr_watcher_unreviewed_prs`. Empty disables the scan (no extra GitHub calls) |
+| `REVIEWER_BOT_LOGINS` | yes | — | Comma-separated GitHub logins of the reviewer bots. A publishable PR whose current head SHA has no review from one of them, after waiting longer than `UNREVIEWED_THRESHOLD`, is reported on `github_pr_watcher_unreviewed_prs`. Required: the retry guard's verdict check cannot tell a finished review from an in-flight one without it, so the watcher refuses to start when it is empty |
 | `UNREVIEWED_THRESHOLD` | no | `30m` | How long a PR must wait without a reviewer-bot review before it is reported (Go duration; must be positive), and how long to wait between retries of an unreviewed PR. Ignored (and not validated) when `REVIEWER_BOT_LOGINS` is empty |
 | `UNREVIEWED_RETRY_MAX` | no | `3` | How many times the scan re-publishes the original review task for a still-unreviewed PR, one threshold apart, before marking it `retries_exhausted`; `0` disables retrying. Ignored (and not range-validated) when `REVIEWER_BOT_LOGINS` is empty |
 | `SENTRY_DSN` | no | — | Sentry DSN for error tracking |
@@ -141,9 +141,10 @@ All metrics use the `github_pr_watcher_` prefix and are exposed on `/metrics`.
 The scan runs once per poll cycle, after the cursor is saved and before the cycle
 is counted successful, so a slow or failing scan never changes the poll result.
 A failed or interrupted scan leaves the previous gauge values in place; only a
-complete scan replaces them (an empty result clears the gauge). With
-`REVIEWER_BOT_LOGINS` empty the feature is off: no extra GitHub calls, no
-`github_pr_watcher_unreviewed_prs` series, and the timestamp gauge stays `0`.
+complete scan replaces them (an empty result clears the gauge).
+`REVIEWER_BOT_LOGINS` is required: the retry guard's verdict check shares it, so
+an empty value fails startup instead of silently disabling both the scan and the
+guard's ability to re-run a review that already posted a verdict.
 
 A PR whose head SHA has been confirmed reviewed is remembered until it changes,
 so a settled PR costs no `GetPRDetails`/`ListReviews` calls on later scans. Any
