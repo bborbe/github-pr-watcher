@@ -150,19 +150,10 @@ func runTriggerPRReview(
 	// publishes Force=false, so keying on Force would silently swallow an
 	// operator's explicit review request. An operator command — forced or not
 	// — always gets a full review.
-	if cmd.Webhook && !cmd.Force &&
-		slices.Contains(mechanicalOverrideAuthors, details.AuthorLogin) {
-		metrics.IncPRPublished("deferred")
-		glog.V(2).Infof(
-			"trigger executor: deferred to poll path for mechanical override pr=%s/%s#%d author=%s",
-			prInfo.Owner, prInfo.Repo, prInfo.Number, details.AuthorLogin,
-		)
-		return nil, nil, errors.Wrapf(
-			ctx,
-			cdb.ErrCommandObjectSkipped,
-			"mechanical-override author deferred to poll path pr=%s/%s#%d",
-			prInfo.Owner, prInfo.Repo, prInfo.Number,
-		)
+	if err := deferWebhookMechanicalOverride(
+		ctx, cmd, prInfo, details, mechanicalOverrideAuthors, metrics,
+	); err != nil {
+		return nil, nil, err
 	}
 	// The in-flight guard runs after every existing skip path, so an invalid
 	// URL, a filter skip, an untrusted author or a webhook deferral never
@@ -209,6 +200,41 @@ func newRetryGuardPR(
 		Number:  prInfo.Number,
 		HeadSHA: details.HeadSHA,
 	}
+}
+
+// deferWebhookMechanicalOverride defers a WEBHOOK-created command from a
+// mechanical-override author to the poll path, which owns the mechanical
+// decision. It returns the skip error to propagate, or nil to continue.
+//
+// The gate is cmd.Webhook, NOT cmd.Force: the plain /trigger endpoint also
+// publishes Force=false, so keying on Force would silently swallow an
+// operator's explicit review request. An operator command — forced or not —
+// always gets a full review from this deferral. The ledger gate below is a
+// separate decision and deliberately does override that promise: an override
+// already owns the SHA, whoever asked.
+func deferWebhookMechanicalOverride(
+	ctx context.Context,
+	cmd TriggerPRReviewCommand,
+	prInfo *prurl.PRInfo,
+	details pkg.PRDetails,
+	mechanicalOverrideAuthors []string,
+	metrics pkg.Metrics,
+) error {
+	if !cmd.Webhook || cmd.Force ||
+		!slices.Contains(mechanicalOverrideAuthors, details.AuthorLogin) {
+		return nil
+	}
+	metrics.IncPRPublished("deferred")
+	glog.V(2).Infof(
+		"trigger executor: deferred to poll path for mechanical override pr=%s/%s#%d author=%s",
+		prInfo.Owner, prInfo.Repo, prInfo.Number, details.AuthorLogin,
+	)
+	return errors.Wrapf(
+		ctx,
+		cdb.ErrCommandObjectSkipped,
+		"mechanical-override author deferred to poll path pr=%s/%s#%d",
+		prInfo.Owner, prInfo.Repo, prInfo.Number,
+	)
 }
 
 // suppressForOverride refuses to publish a review for a head SHA that a fresh
