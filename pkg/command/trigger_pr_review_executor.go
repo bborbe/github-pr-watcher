@@ -14,6 +14,7 @@ import (
 	cdb "github.com/bborbe/cqrs/cdb"
 	"github.com/bborbe/errors"
 	"github.com/bborbe/github-pr-watcher/pkg"
+	"github.com/bborbe/github-pr-watcher/pkg/coalesce"
 	"github.com/bborbe/github-pr-watcher/pkg/filter"
 	"github.com/bborbe/github-pr-watcher/pkg/trust"
 	libkv "github.com/bborbe/kv"
@@ -57,6 +58,7 @@ func NewTriggerPRReviewCommandExecutor(
 	metrics pkg.Metrics,
 	retryGuard pkg.RetryGuard,
 	overrideLedger pkg.OverrideLedger,
+	coalescer coalesce.Coalescer,
 	currentDateTime libtime.CurrentDateTimeGetter,
 ) cdb.CommandObjectExecutorTx {
 	return cdb.CommandObjectExecutorTxFunc(
@@ -69,7 +71,7 @@ func NewTriggerPRReviewCommandExecutor(
 				mechanicalOverrideAuthors,
 				stage, maxSlugLen, maxTitleLen, taskSuffix, targetVault,
 				maxAdditions, maxChangedFiles, metrics,
-				retryGuard, overrideLedger, currentDateTime,
+				retryGuard, overrideLedger, coalescer, currentDateTime,
 			)
 		},
 	)
@@ -105,6 +107,7 @@ func runTriggerPRReview(
 	metrics pkg.Metrics,
 	retryGuard pkg.RetryGuard,
 	overrideLedger pkg.OverrideLedger,
+	coalescer coalesce.Coalescer,
 	currentDateTime libtime.CurrentDateTimeGetter,
 ) (*base.EventID, base.Event, error) {
 	cmd, err := unmarshalAndValidate(ctx, commandObject)
@@ -151,7 +154,7 @@ func runTriggerPRReview(
 	// operator's explicit review request. An operator command — forced or not
 	// — always gets a full review.
 	if err := deferWebhookMechanicalOverride(
-		ctx, cmd, prInfo, details, mechanicalOverrideAuthors, metrics,
+		ctx, cmd, prInfo, details, mechanicalOverrideAuthors, metrics, coalescer,
 	); err != nil {
 		return nil, nil, err
 	}
@@ -219,11 +222,23 @@ func deferWebhookMechanicalOverride(
 	details pkg.PRDetails,
 	mechanicalOverrideAuthors []string,
 	metrics pkg.Metrics,
+	coalescer coalesce.Coalescer,
 ) error {
 	if !cmd.Webhook || cmd.Force ||
 		!slices.Contains(mechanicalOverrideAuthors, details.AuthorLogin) {
 		return nil
 	}
+	// The webhook handler claimed this head when its command reached Kafka, on
+	// MarkEmitted's contract that a record was published for it. This deferral
+	// is the opposite outcome: nothing was published, and the poll path owns
+	// the decision. Leaving the claim in place would make that poll path read
+	// Settled from Admit and publish nothing either, so a PR whose override
+	// then does not qualify is stranded until the unreviewed scanner's
+	// threshold fires and spends the full review this deferral exists to save.
+	coalescer.Release(
+		coalesce.Key{Owner: prInfo.Owner, Repo: prInfo.Repo, Number: prInfo.Number},
+		details.HeadSHA,
+	)
 	metrics.IncPRPublished("deferred")
 	glog.V(2).Infof(
 		"trigger executor: deferred to poll path for mechanical override pr=%s/%s#%d author=%s",
@@ -259,7 +274,11 @@ func suppressForOverride(
 	if err != nil {
 		glog.Warningf(
 			"trigger executor: override ledger read failed, publishing review pr=%s/%s#%d sha=%s err=%v",
-			pr.Owner, pr.Repo, pr.Number, pr.HeadSHA, err,
+			pr.Owner,
+			pr.Repo,
+			pr.Number,
+			pr.HeadSHA,
+			err,
 		)
 		return nil
 	}

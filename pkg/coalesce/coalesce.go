@@ -128,6 +128,24 @@ type Coalescer interface {
 	// leaves the head claimable.
 	MarkEmitted(key Key, headSHA string, now libtime.DateTime)
 
+	// Release drops the claim MarkEmitted recorded for headSHA, so a head whose
+	// record was never published becomes claimable again.
+	//
+	// It exists because one caller cannot honour MarkEmitted's contract above.
+	// The webhook handler claims a head as soon as its command reaches Kafka,
+	// which is correct — that claim is what stops the poll path publishing a
+	// second record for a head the webhook already dispatched. But the command
+	// is consumed downstream, and the consumer may decline it: the
+	// mechanical-override deferral does exactly that for every trivial bot
+	// bump. The claim then describes a publish that never happened, and
+	// because Admit reports Settled for it, the poll path publishes nothing
+	// either — the head is stranded until the unreviewed scanner's threshold
+	// fires and spends the full LLM review this feature exists to remove.
+	//
+	// A release that names a head the entry no longer holds is ignored, so a
+	// late release can never unclaim a head that was published afterwards.
+	Release(key Key, headSHA string)
+
 	// Close stops every scheduled trailing dispatch. Call it on shutdown.
 	Close()
 }
@@ -298,6 +316,30 @@ func (c *coalescer) MarkEmitted(key Key, headSHA string, now libtime.DateTime) {
 	e.lastEmitAt = now
 	e.lastHead = headSHA
 	c.clearPending(e)
+}
+
+// Release implements Coalescer.
+//
+// It restores the entry to the state it had before anything was published for
+// this PR: lastHead empty and lastEmitAt zero, which is the documented "nothing
+// has been published in this process" value that makes the next admission a
+// leading one. Pending trailing-dispatch state is deliberately left alone —
+// it describes the push stream, not the claim being withdrawn.
+//
+// The headSHA guard is what makes a late release harmless. The deferral that
+// calls this can land after the poll path has published a different head for
+// the same PR, and clearing that claim would let the next poll publish a
+// duplicate. Only the exact head that was claimed may be unclaimed.
+func (c *coalescer) Release(key Key, headSHA string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	e, ok := c.entries[key]
+	if !ok || e.lastHead != headSHA {
+		return
+	}
+	e.lastEmitAt = libtime.DateTime{}
+	e.lastHead = ""
 }
 
 // Close implements Coalescer.

@@ -178,7 +178,11 @@ var _ = Describe("TaskPublisher override ledger gate", func() {
 			createSender,
 			trust.And{trust.NewAuthorAllowlist([]string{"alice"})},
 			metrics,
-			pkg.TaskConfig{Stage: "prod", MaxSlugLen: pkg.DefaultMaxSlugLen, MaxTitleLen: pkg.DefaultMaxTitleLen},
+			pkg.TaskConfig{
+				Stage:       "prod",
+				MaxSlugLen:  pkg.DefaultMaxSlugLen,
+				MaxTitleLen: pkg.DefaultMaxTitleLen,
+			},
 			ghClient,
 		)
 		createSender.SendCommandReturns(nil)
