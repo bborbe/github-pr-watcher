@@ -16,6 +16,7 @@ import (
 	taskmocks "github.com/bborbe/agent/mocks"
 	"github.com/bborbe/github-pr-watcher/mocks"
 	"github.com/bborbe/github-pr-watcher/pkg"
+	"github.com/bborbe/github-pr-watcher/pkg/coalesce"
 	"github.com/bborbe/github-pr-watcher/pkg/filter"
 	"github.com/bborbe/github-pr-watcher/pkg/reviewignore"
 	"github.com/bborbe/github-pr-watcher/pkg/trust"
@@ -25,6 +26,19 @@ import (
 
 	"github.com/bborbe/maintainer/maintainerconfig"
 )
+
+// noOpCoalescer admits every head. A zero hold window makes the coalescer
+// decide "leading" on every observation, which is the pre-coalesce behaviour
+// these tests were written against.
+func noOpCoalescer() coalesce.Coalescer {
+	return coalesce.NewCoalescer(
+		context.Background(),
+		0,
+		coalesce.NewTimerScheduler(),
+		nil,
+		libtime.NewCurrentDateTime(),
+	)
+}
 
 func newTestWatcher(
 	ghClient pkg.GitHubClient,
@@ -66,6 +80,8 @@ func newTestWatcher(
 		nil,
 		trustDecision,
 		newDisabledUnreviewedScanner(),
+		noOpCoalescer(),
+		libtime.NewCurrentDateTime(),
 	)
 }
 
@@ -110,6 +126,8 @@ func newTestWatcherWithOverride(
 		nil,
 		trustDecision,
 		newDisabledUnreviewedScanner(),
+		noOpCoalescer(),
+		libtime.NewCurrentDateTime(),
 	)
 }
 
@@ -154,6 +172,8 @@ func newTestWatcherWithAutoMerge(
 		nil,
 		trustDecision,
 		newDisabledUnreviewedScanner(),
+		noOpCoalescer(),
+		libtime.NewCurrentDateTime(),
 	)
 }
 
@@ -198,6 +218,8 @@ func newTestWatcherWithTrivialAutoMerge(
 		nil,
 		trustDecision,
 		newDisabledUnreviewedScanner(),
+		noOpCoalescer(),
+		libtime.NewCurrentDateTime(),
 	)
 }
 
@@ -244,6 +266,8 @@ func newTestWatcherWithMechanicalOverride(
 		mechanicalOverrideAuthors,
 		trustDecision,
 		newDisabledUnreviewedScanner(),
+		noOpCoalescer(),
+		libtime.NewCurrentDateTime(),
 	)
 }
 
@@ -1366,6 +1390,8 @@ var _ = Describe("pkg.Watcher", func() {
 				nil,
 				trust.NewAuthorAllowlist(nil),
 				newDisabledUnreviewedScanner(),
+				noOpCoalescer(),
+				libtime.NewCurrentDateTime(),
 			)
 			err := w.Poll(ctx)
 			Expect(err).NotTo(HaveOccurred())
@@ -1922,6 +1948,8 @@ var _ = Describe("pkg.Watcher", func() {
 				nil,
 				trustAlice,
 				newDisabledUnreviewedScanner(),
+				noOpCoalescer(),
+				libtime.NewCurrentDateTime(),
 			)
 		}
 
@@ -2937,6 +2965,8 @@ var _ = Describe("pkg.Watcher", func() {
 				nil,
 				trust.NewAuthorAllowlist([]string{"alice"}),
 				scanner,
+				noOpCoalescer(),
+				libtime.NewCurrentDateTime(),
 			)
 		}
 

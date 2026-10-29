@@ -15,10 +15,13 @@ import (
 	"strings"
 
 	"github.com/bborbe/errors"
+	"github.com/bborbe/github-pr-watcher/pkg/coalesce"
 	"github.com/bborbe/github-pr-watcher/pkg/command"
 	libhttp "github.com/bborbe/http"
 	libtime "github.com/bborbe/time"
 	"github.com/golang/glog"
+
+	"github.com/bborbe/maintainer/prurl"
 )
 
 // WebhookHeader is a typed GitHub webhook header name, so header-name typos
@@ -54,26 +57,30 @@ type WebhookMetrics interface {
 type WebhookHandler = libhttp.WithError
 
 // NewWebhookHandler returns a handler that publishes a TriggerPRReviewCommand
-// for each signature-verified pull_request webhook delivery.
+// for each signature-verified pull_request webhook delivery, unless the
+// coalescer holds the push for its trailing dispatch.
 func NewWebhookHandler(
 	sender command.TriggerPRReviewCommandSender,
+	coalescer coalesce.Coalescer,
 	secret string,
 	metrics WebhookMetrics,
 	clock libtime.CurrentDateTimeGetter,
 ) WebhookHandler {
 	return &webhookHandler{
-		sender:  sender,
-		secret:  secret,
-		metrics: metrics,
-		clock:   clock,
+		sender:    sender,
+		coalescer: coalescer,
+		secret:    secret,
+		metrics:   metrics,
+		clock:     clock,
 	}
 }
 
 type webhookHandler struct {
-	sender  command.TriggerPRReviewCommandSender
-	secret  string
-	metrics WebhookMetrics
-	clock   libtime.CurrentDateTimeGetter
+	sender    command.TriggerPRReviewCommandSender
+	coalescer coalesce.Coalescer
+	secret    string
+	metrics   WebhookMetrics
+	clock     libtime.CurrentDateTimeGetter
 }
 
 // dispatchActions are the pull_request actions worth triggering a review for.
@@ -137,6 +144,14 @@ func (h *webhookHandler) ServeHTTP(
 		)
 	}
 
+	key, publish, err := h.shouldDispatch(ctx, payload)
+	if err != nil {
+		return libhttp.WrapWithStatusCode(err, http.StatusBadRequest)
+	}
+	if !publish {
+		return writeWebhookDispatched(resp)
+	}
+
 	if err := h.sender.SendCommand(ctx, command.TriggerPRReviewCommand{
 		URL:     payload.PullRequest.HTMLURL,
 		Webhook: true,
@@ -146,6 +161,9 @@ func (h *webhookHandler) ServeHTTP(
 			http.StatusBadGateway,
 		)
 	}
+	// Only a publish that actually reached Kafka claims the head. A failed send
+	// leaves it claimable, so GitHub's retry or the poll path can still emit it.
+	h.coalescer.MarkEmitted(key, payload.PullRequest.Head.SHA, h.clock.Now())
 
 	h.metrics.IncWebhookDelivery("success")
 	h.metrics.ObserveWebhookDispatchLatency(h.clock.Now().Sub(start).Duration().Seconds())
@@ -157,12 +175,62 @@ func (h *webhookHandler) ServeHTTP(
 	return writeWebhookDispatched(resp)
 }
 
+// coalescingActions are the deliveries that represent a new push to the head.
+//
+// Only these go through the coalescer. Every other dispatchable action is a
+// state transition — opened, reopened, ready_for_review — and may carry an
+// UNCHANGED head SHA. Gating those on the head would swallow them: a draft PR's
+// push is dispatched as the leading edge and dropped by the consumer's draft
+// gate, then `ready_for_review` arrives with the same SHA, the coalescer sees a
+// head it already emitted and publishes nothing, and the poll settles that same
+// head too — so the now-ready PR is never reviewed at all.
+var coalescingActions = map[string]bool{
+	"synchronize": true,
+}
+
+// shouldDispatch reports whether this delivery should publish now. Trailing
+// coalesce: the first push of a burst is dispatched at once, every push behind
+// it collapses into one trailing dispatch, so a burst of six pushes produces
+// two review records rather than five. A false return with a nil error means
+// the push was coalesced and nothing is published now.
+func (h *webhookHandler) shouldDispatch(
+	ctx context.Context,
+	payload webhookPullRequestEvent,
+) (coalesce.Key, bool, error) {
+	prInfo, err := prurl.ParsePRURL(ctx, payload.PullRequest.HTMLURL)
+	if err != nil {
+		return coalesce.Key{}, false, errors.Wrap(ctx, err, "parse pull_request.html_url")
+	}
+	key := coalesce.Key{Owner: prInfo.Owner, Repo: prInfo.Repo, Number: prInfo.Number}
+	if !coalescingActions[payload.Action] {
+		return key, true, nil
+	}
+	if h.coalescer.Push(
+		key,
+		payload.PullRequest.Head.SHA,
+		payload.PullRequest.HTMLURL,
+		h.clock.Now(),
+	) {
+		return key, true, nil
+	}
+	h.metrics.IncWebhookDelivery("coalesced")
+	glog.V(2).Infof(
+		"webhook coalesced url=%s action=%s",
+		payload.PullRequest.HTMLURL,
+		payload.Action,
+	)
+	return key, false, nil
+}
+
 // webhookPullRequestEvent is the subset of a GitHub pull_request event the
-// handler reads: the action plus the PR's html_url.
+// handler reads: the action plus the PR's html_url and head SHA.
 type webhookPullRequestEvent struct {
 	Action      string `json:"action"`
 	PullRequest struct {
 		HTMLURL string `json:"html_url"`
+		Head    struct {
+			SHA string `json:"sha"`
+		} `json:"head"`
 	} `json:"pull_request"`
 }
 

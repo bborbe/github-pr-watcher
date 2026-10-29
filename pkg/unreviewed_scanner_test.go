@@ -410,6 +410,8 @@ var _ = Describe("pkg.UnreviewedScanner", func() {
 			ghClient, publisher, fakeMetrics, cursorPath, now, "bborbe",
 			defaultFilter(), defaultFilter(), "override-review", "", false, nil,
 			trustAlice(), scanner,
+			noOpCoalescer(),
+			libtime.NewCurrentDateTime(),
 		)
 
 		Expect(w.Poll(ctx)).To(Succeed())
