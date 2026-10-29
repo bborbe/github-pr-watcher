@@ -42,10 +42,12 @@ func (k Key) String() string {
 	return k.Owner + "/" + k.Repo + "#" + strconv.Itoa(k.Number)
 }
 
-// Dispatcher publishes a review request for one PR URL. It is the webhook
+// DispatchFunc publishes a review request for one PR URL. It is the webhook
 // receiver's own dispatch path, injected so the trailing edge reuses it rather
 // than duplicating the command construction.
-type Dispatcher func(ctx context.Context, url string) error
+type DispatchFunc func(ctx context.Context, url string) error
+
+//counterfeiter:generate -o ../../mocks/timer.go --fake-name Timer . Timer
 
 // Timer is the handle a scheduled callback can be cancelled through.
 type Timer interface {
@@ -53,11 +55,15 @@ type Timer interface {
 	Stop()
 }
 
+//counterfeiter:generate -o ../../mocks/scheduler.go --fake-name Scheduler . Scheduler
+
 // Scheduler schedules a one-shot callback. The production implementation is
 // stdtime.AfterFunc; tests inject a manual scheduler so no test sleeps.
 type Scheduler interface {
 	AfterFunc(d stdtime.Duration, f func()) Timer
 }
+
+//counterfeiter:generate -o ../../mocks/coalescer.go --fake-name Coalescer . Coalescer
 
 // Coalescer decides whether a review record may be emitted for a PR's head.
 //
@@ -84,16 +90,21 @@ type Coalescer interface {
 
 // NewCoalescer returns a Coalescer with the given hold window.
 //
-// hold is how long a PR must stay quiet before its trailing dispatch fires; it
-// should exceed the gap between pushes inside a burst and no more. dispatch is
-// invoked from a timer goroutine, never from the caller's goroutine.
+// ctx is the process lifetime the trailing dispatch runs under; the dispatch
+// never runs on context.Background(), so shutting the watcher down cancels a
+// pending trailing publish rather than leaving it in flight. hold is how long a
+// PR must stay quiet before its trailing dispatch fires; it should exceed the
+// gap between pushes inside a burst and no more. dispatch is invoked from a
+// timer goroutine, never from the caller's goroutine.
 func NewCoalescer(
+	ctx context.Context,
 	hold stdtime.Duration,
 	scheduler Scheduler,
-	dispatch Dispatcher,
+	dispatch DispatchFunc,
 	clock libtime.CurrentDateTimeGetter,
 ) Coalescer {
 	return &coalescer{
+		ctx:       ctx,
 		hold:      hold,
 		scheduler: scheduler,
 		dispatch:  dispatch,
@@ -103,9 +114,10 @@ func NewCoalescer(
 }
 
 type coalescer struct {
+	ctx       context.Context
 	hold      stdtime.Duration
 	scheduler Scheduler
-	dispatch  Dispatcher
+	dispatch  DispatchFunc
 	clock     libtime.CurrentDateTimeGetter
 
 	mu      sync.Mutex
@@ -224,6 +236,11 @@ func (c *coalescer) Close() {
 	defer c.mu.Unlock()
 
 	for _, e := range c.entries {
+		select {
+		case <-c.ctx.Done():
+			return
+		default:
+		}
 		c.stopTimer(e)
 	}
 }
@@ -245,7 +262,7 @@ func (c *coalescer) fire(key Key, url string) {
 	e.lastHead = headSHA
 	c.mu.Unlock()
 
-	if err := c.dispatch(context.Background(), url); err != nil {
+	if err := c.dispatch(c.ctx, url); err != nil {
 		glog.Errorf("trailing dispatch failed pr=%s err=%v", key, err)
 	}
 	glog.V(2).Infof("trailing dispatch pr=%s sha=%s", key, headSHA)

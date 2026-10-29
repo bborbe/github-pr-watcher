@@ -37,6 +37,7 @@ func signBody(secret string, body []byte) string {
 // the leading edge, which is the pre-coalesce behaviour these cases assert.
 func noOpCoalescer() coalesce.Coalescer {
 	return coalesce.NewCoalescer(
+		context.Background(),
 		0,
 		coalesce.NewTimerScheduler(),
 		nil,
@@ -249,6 +250,7 @@ var _ = Describe("WebhookHandler", func() {
 				return libtime.DateTime(now)
 			})
 			gate = coalesce.NewCoalescer(
+				context.Background(),
 				3*stdtime.Minute,
 				coalesce.NewTimerScheduler(),
 				func(context.Context, string) error { return nil },

@@ -35,7 +35,7 @@ func CreateWebhookHandler(
 func CreateWebhookDispatcher(
 	sender command.TriggerPRReviewCommandSender,
 	metrics handler.WebhookMetrics,
-) coalesce.Dispatcher {
+) coalesce.DispatchFunc {
 	return func(ctx context.Context, url string) error {
 		if err := sender.SendCommand(ctx, command.TriggerPRReviewCommand{
 			URL:     url,

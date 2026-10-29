@@ -100,7 +100,7 @@ var _ = Describe("Coalescer", func() {
 		now = stdtime.Date(2026, 10, 27, 12, 0, 0, 0, stdtime.UTC)
 		scheduler = &manualScheduler{}
 		dispatched = nil
-		gate = coalesce.NewCoalescer(hold, scheduler, dispatch, clock)
+		gate = coalesce.NewCoalescer(context.Background(), hold, scheduler, dispatch, clock)
 		key = coalesce.Key{Owner: "bborbe", Repo: "nuke", Number: 815}
 	})
 

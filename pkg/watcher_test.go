@@ -32,6 +32,7 @@ import (
 // these tests were written against.
 func noOpCoalescer() coalesce.Coalescer {
 	return coalesce.NewCoalescer(
+		context.Background(),
 		0,
 		coalesce.NewTimerScheduler(),
 		nil,

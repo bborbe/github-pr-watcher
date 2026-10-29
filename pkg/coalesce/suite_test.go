@@ -4,6 +4,8 @@
 
 package coalesce_test
 
+//go:generate go run github.com/maxbrunsfeld/counterfeiter/v6@v6.12.2 -generate
+
 import (
 	"testing"
 	"time"

@@ -359,6 +359,7 @@ func (a *application) Run(ctx context.Context, _ libsentry.Client) error {
 	// leading one dispatched at once and a single trailing one. A gate on
 	// either path alone still lets the other emit a third.
 	coalescer := coalesce.NewCoalescer(
+		ctx,
 		coalesceHold,
 		coalesce.NewTimerScheduler(),
 		factory.CreateWebhookDispatcher(triggerPRReviewSender, metrics),
