@@ -304,5 +304,27 @@ var _ = Describe("WebhookHandler", func() {
 			Expect(second.Code).To(Equal(http.StatusAccepted))
 			Expect(sender.SendCommandCallCount()).To(Equal(2))
 		})
+
+		It("dispatches ready_for_review even when the head SHA is unchanged", func() {
+			// A draft PR's push is dispatched as the leading edge and dropped by
+			// the consumer's draft gate. The ready_for_review transition carries
+			// the same SHA, so coalescing it on the head would swallow it and the
+			// PR would never be reviewed.
+			draft := `{"action":"synchronize","pull_request":{` +
+				`"html_url":"https://github.com/bborbe/repo/pull/42",` +
+				`"head":{"sha":"head-a"}}}`
+			first := httptest.NewRecorder()
+			hc.ServeHTTP(first, webhookRequest("pull_request", draft))
+			Expect(sender.SendCommandCallCount()).To(Equal(1))
+
+			ready := `{"action":"ready_for_review","pull_request":{` +
+				`"html_url":"https://github.com/bborbe/repo/pull/42",` +
+				`"head":{"sha":"head-a"}}}`
+			second := httptest.NewRecorder()
+			hc.ServeHTTP(second, webhookRequest("pull_request", ready))
+
+			Expect(second.Code).To(Equal(http.StatusAccepted))
+			Expect(sender.SendCommandCallCount()).To(Equal(2))
+		})
 	})
 })

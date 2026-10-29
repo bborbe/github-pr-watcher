@@ -36,15 +36,26 @@ func CreateWebhookDispatcher(
 	sender command.TriggerPRReviewCommandSender,
 	metrics handler.WebhookMetrics,
 ) coalesce.DispatchFunc {
-	return func(ctx context.Context, url string) error {
-		if err := sender.SendCommand(ctx, command.TriggerPRReviewCommand{
-			URL:     url,
-			Webhook: true,
-		}); err != nil {
-			metrics.IncWebhookDelivery("error")
-			return err
-		}
-		metrics.IncWebhookDelivery("trailing")
-		return nil
+	return (&webhookDispatcher{sender: sender, metrics: metrics}).Dispatch
+}
+
+// webhookDispatcher is the trailing-edge publisher. It is a type rather than an
+// inline closure so this package stays free of conditionals in its factory
+// bodies: the error branch and the metric calls live here, not in the factory.
+type webhookDispatcher struct {
+	sender  command.TriggerPRReviewCommandSender
+	metrics handler.WebhookMetrics
+}
+
+// Dispatch publishes the trailing TriggerPRReviewCommand for one PR URL.
+func (d *webhookDispatcher) Dispatch(ctx context.Context, url string) error {
+	if err := d.sender.SendCommand(ctx, command.TriggerPRReviewCommand{
+		URL:     url,
+		Webhook: true,
+	}); err != nil {
+		d.metrics.IncWebhookDelivery("error")
+		return err
 	}
+	d.metrics.IncWebhookDelivery("trailing")
+	return nil
 }

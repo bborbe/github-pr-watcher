@@ -850,13 +850,48 @@ func (w *watcher) processPR(
 	}
 
 	// New (PR, SHA) pair — publish a fresh CreateTaskCommand.
-	if !w.admitReview(pr, details) {
+	return w.publishReviewOutcome(ctx, pr, details, taskIDStr, cursorState, newHeadSHAs)
+}
+
+// publishReviewOutcome applies the coalescer's decision for a new (PR, SHA) pair
+// and publishes the review record when the decision allows it.
+func (w *watcher) publishReviewOutcome(
+	ctx context.Context,
+	pr PullRequest,
+	details PRDetails,
+	taskIDStr string,
+	cursorState *Cursor,
+	newHeadSHAs map[string]string,
+) prOutcome {
+	switch decision := w.admitReview(pr, details); decision {
+	case coalesce.Settled:
+		// A record for this head was already published by the webhook path.
+		// Nothing is owed, and the cursor MUST advance: mapping this to the
+		// deferral outcome instead would pin the search window to this PR for
+		// the process lifetime, re-fetching it and everything newer every poll.
+		glog.V(2).Infof(
+			"already emitted pr=%s/%s#%d sha=%s",
+			pr.Owner, pr.Repo, pr.Number, details.HeadSHA,
+		)
+		cursorState.HeadSHAs[taskIDStr] = details.HeadSHA
+		newHeadSHAs[taskIDStr] = details.HeadSHA
+		return prOutcome{updatedAt: pr.UpdatedAt, handled: true}
+	case coalesce.Hold:
 		// Deferred, not handled: nothing was published and no cursor entry was
 		// written, so the cursor must be clamped to this PR or the next search
 		// window would never return it and the trailing review would be lost.
+		glog.V(2).Infof(
+			"coalesced pr=%s/%s#%d sha=%s", pr.Owner, pr.Repo, pr.Number, details.HeadSHA,
+		)
+		w.metrics.IncPRPublished("coalesced")
 		return prOutcome{deferred: true}
 	}
 	if w.publisher.PublishCreate(ctx, pr, taskIDStr, details) {
+		w.coalescer.MarkEmitted(
+			coalesce.Key{Owner: pr.Owner, Repo: pr.Repo, Number: pr.Number},
+			details.HeadSHA,
+			w.currentDateTime.Now(),
+		)
 		// Update cursorState in-place so duplicate PR entries in the same poll batch
 		// are deduplicated without a second create publish.
 		cursorState.HeadSHAs[taskIDStr] = details.HeadSHA
@@ -867,26 +902,18 @@ func (w *watcher) processPR(
 	return prOutcome{}
 }
 
-// admitReview reports whether the coalescer allows a review record for this
-// head. Trailing coalesce: a push that lands while the PR is still moving is
-// held for the trailing dispatch instead of becoming its own record. The same
-// coalescer instance gates the webhook path, so a burst cannot gain a third
-// record here after the webhook already emitted one.
-func (w *watcher) admitReview(pr PullRequest, details PRDetails) bool {
-	key := coalesce.Key{Owner: pr.Owner, Repo: pr.Repo, Number: pr.Number}
-	if w.coalescer.Admit(
-		key,
+// admitReview asks the coalescer what to do with this head. Trailing coalesce:
+// a push that lands while the PR is still moving is held for the trailing
+// dispatch instead of becoming its own record. The same coalescer instance
+// gates the webhook path, so a burst cannot gain a third record here after the
+// webhook already emitted one.
+func (w *watcher) admitReview(pr PullRequest, details PRDetails) coalesce.Decision {
+	return w.coalescer.Admit(
+		coalesce.Key{Owner: pr.Owner, Repo: pr.Repo, Number: pr.Number},
 		details.HeadSHA,
 		details.UpdatedAt,
 		w.currentDateTime.Now(),
-	) {
-		return true
-	}
-	glog.V(2).Infof(
-		"coalesced pr=%s/%s#%d sha=%s", pr.Owner, pr.Repo, pr.Number, details.HeadSHA,
 	)
-	w.metrics.IncPRPublished("coalesced")
-	return false
 }
 
 // mechanicalOverrideOutcome runs the mechanical-override attempt and owns the

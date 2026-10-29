@@ -144,11 +144,11 @@ func (h *webhookHandler) ServeHTTP(
 		)
 	}
 
-	dispatch, err := h.shouldDispatch(ctx, payload)
+	key, publish, err := h.shouldDispatch(ctx, payload)
 	if err != nil {
 		return libhttp.WrapWithStatusCode(err, http.StatusBadRequest)
 	}
-	if !dispatch {
+	if !publish {
 		return writeWebhookDispatched(resp)
 	}
 
@@ -161,6 +161,9 @@ func (h *webhookHandler) ServeHTTP(
 			http.StatusBadGateway,
 		)
 	}
+	// Only a publish that actually reached Kafka claims the head. A failed send
+	// leaves it claimable, so GitHub's retry or the poll path can still emit it.
+	h.coalescer.MarkEmitted(key, payload.PullRequest.Head.SHA, h.clock.Now())
 
 	h.metrics.IncWebhookDelivery("success")
 	h.metrics.ObserveWebhookDispatchLatency(h.clock.Now().Sub(start).Duration().Seconds())
@@ -172,6 +175,19 @@ func (h *webhookHandler) ServeHTTP(
 	return writeWebhookDispatched(resp)
 }
 
+// coalescingActions are the deliveries that represent a new push to the head.
+//
+// Only these go through the coalescer. Every other dispatchable action is a
+// state transition — opened, reopened, ready_for_review — and may carry an
+// UNCHANGED head SHA. Gating those on the head would swallow them: a draft PR's
+// push is dispatched as the leading edge and dropped by the consumer's draft
+// gate, then `ready_for_review` arrives with the same SHA, the coalescer sees a
+// head it already emitted and publishes nothing, and the poll settles that same
+// head too — so the now-ready PR is never reviewed at all.
+var coalescingActions = map[string]bool{
+	"synchronize": true,
+}
+
 // shouldDispatch reports whether this delivery should publish now. Trailing
 // coalesce: the first push of a burst is dispatched at once, every push behind
 // it collapses into one trailing dispatch, so a burst of six pushes produces
@@ -180,19 +196,22 @@ func (h *webhookHandler) ServeHTTP(
 func (h *webhookHandler) shouldDispatch(
 	ctx context.Context,
 	payload webhookPullRequestEvent,
-) (bool, error) {
+) (coalesce.Key, bool, error) {
 	prInfo, err := prurl.ParsePRURL(ctx, payload.PullRequest.HTMLURL)
 	if err != nil {
-		return false, errors.Wrap(ctx, err, "parse pull_request.html_url")
+		return coalesce.Key{}, false, errors.Wrap(ctx, err, "parse pull_request.html_url")
 	}
 	key := coalesce.Key{Owner: prInfo.Owner, Repo: prInfo.Repo, Number: prInfo.Number}
+	if !coalescingActions[payload.Action] {
+		return key, true, nil
+	}
 	if h.coalescer.Push(
 		key,
 		payload.PullRequest.Head.SHA,
 		payload.PullRequest.HTMLURL,
 		h.clock.Now(),
 	) {
-		return true, nil
+		return key, true, nil
 	}
 	h.metrics.IncWebhookDelivery("coalesced")
 	glog.V(2).Infof(
@@ -200,7 +219,7 @@ func (h *webhookHandler) shouldDispatch(
 		payload.PullRequest.HTMLURL,
 		payload.Action,
 	)
-	return false, nil
+	return key, false, nil
 }
 
 // webhookPullRequestEvent is the subset of a GitHub pull_request event the

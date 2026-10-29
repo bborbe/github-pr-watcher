@@ -12,7 +12,7 @@ import (
 )
 
 type Coalescer struct {
-	AdmitStub        func(coalesce.Key, string, time.DateTime, time.DateTime) bool
+	AdmitStub        func(coalesce.Key, string, time.DateTime, time.DateTime) coalesce.Decision
 	admitMutex       sync.RWMutex
 	admitArgsForCall []struct {
 		arg1 coalesce.Key
@@ -21,14 +21,21 @@ type Coalescer struct {
 		arg4 time.DateTime
 	}
 	admitReturns struct {
-		result1 bool
+		result1 coalesce.Decision
 	}
 	admitReturnsOnCall map[int]struct {
-		result1 bool
+		result1 coalesce.Decision
 	}
 	CloseStub        func()
 	closeMutex       sync.RWMutex
 	closeArgsForCall []struct {
+	}
+	MarkEmittedStub        func(coalesce.Key, string, time.DateTime)
+	markEmittedMutex       sync.RWMutex
+	markEmittedArgsForCall []struct {
+		arg1 coalesce.Key
+		arg2 string
+		arg3 time.DateTime
 	}
 	PushStub        func(coalesce.Key, string, string, time.DateTime) bool
 	pushMutex       sync.RWMutex
@@ -48,7 +55,7 @@ type Coalescer struct {
 	invocationsMutex sync.RWMutex
 }
 
-func (fake *Coalescer) Admit(arg1 coalesce.Key, arg2 string, arg3 time.DateTime, arg4 time.DateTime) bool {
+func (fake *Coalescer) Admit(arg1 coalesce.Key, arg2 string, arg3 time.DateTime, arg4 time.DateTime) coalesce.Decision {
 	fake.admitMutex.Lock()
 	ret, specificReturn := fake.admitReturnsOnCall[len(fake.admitArgsForCall)]
 	fake.admitArgsForCall = append(fake.admitArgsForCall, struct {
@@ -76,7 +83,7 @@ func (fake *Coalescer) AdmitCallCount() int {
 	return len(fake.admitArgsForCall)
 }
 
-func (fake *Coalescer) AdmitCalls(stub func(coalesce.Key, string, time.DateTime, time.DateTime) bool) {
+func (fake *Coalescer) AdmitCalls(stub func(coalesce.Key, string, time.DateTime, time.DateTime) coalesce.Decision) {
 	fake.admitMutex.Lock()
 	defer fake.admitMutex.Unlock()
 	fake.AdmitStub = stub
@@ -89,26 +96,26 @@ func (fake *Coalescer) AdmitArgsForCall(i int) (coalesce.Key, string, time.DateT
 	return argsForCall.arg1, argsForCall.arg2, argsForCall.arg3, argsForCall.arg4
 }
 
-func (fake *Coalescer) AdmitReturns(result1 bool) {
+func (fake *Coalescer) AdmitReturns(result1 coalesce.Decision) {
 	fake.admitMutex.Lock()
 	defer fake.admitMutex.Unlock()
 	fake.AdmitStub = nil
 	fake.admitReturns = struct {
-		result1 bool
+		result1 coalesce.Decision
 	}{result1}
 }
 
-func (fake *Coalescer) AdmitReturnsOnCall(i int, result1 bool) {
+func (fake *Coalescer) AdmitReturnsOnCall(i int, result1 coalesce.Decision) {
 	fake.admitMutex.Lock()
 	defer fake.admitMutex.Unlock()
 	fake.AdmitStub = nil
 	if fake.admitReturnsOnCall == nil {
 		fake.admitReturnsOnCall = make(map[int]struct {
-			result1 bool
+			result1 coalesce.Decision
 		})
 	}
 	fake.admitReturnsOnCall[i] = struct {
-		result1 bool
+		result1 coalesce.Decision
 	}{result1}
 }
 
@@ -134,6 +141,40 @@ func (fake *Coalescer) CloseCalls(stub func()) {
 	fake.closeMutex.Lock()
 	defer fake.closeMutex.Unlock()
 	fake.CloseStub = stub
+}
+
+func (fake *Coalescer) MarkEmitted(arg1 coalesce.Key, arg2 string, arg3 time.DateTime) {
+	fake.markEmittedMutex.Lock()
+	fake.markEmittedArgsForCall = append(fake.markEmittedArgsForCall, struct {
+		arg1 coalesce.Key
+		arg2 string
+		arg3 time.DateTime
+	}{arg1, arg2, arg3})
+	stub := fake.MarkEmittedStub
+	fake.recordInvocation("MarkEmitted", []interface{}{arg1, arg2, arg3})
+	fake.markEmittedMutex.Unlock()
+	if stub != nil {
+		fake.MarkEmittedStub(arg1, arg2, arg3)
+	}
+}
+
+func (fake *Coalescer) MarkEmittedCallCount() int {
+	fake.markEmittedMutex.RLock()
+	defer fake.markEmittedMutex.RUnlock()
+	return len(fake.markEmittedArgsForCall)
+}
+
+func (fake *Coalescer) MarkEmittedCalls(stub func(coalesce.Key, string, time.DateTime)) {
+	fake.markEmittedMutex.Lock()
+	defer fake.markEmittedMutex.Unlock()
+	fake.MarkEmittedStub = stub
+}
+
+func (fake *Coalescer) MarkEmittedArgsForCall(i int) (coalesce.Key, string, time.DateTime) {
+	fake.markEmittedMutex.RLock()
+	defer fake.markEmittedMutex.RUnlock()
+	argsForCall := fake.markEmittedArgsForCall[i]
+	return argsForCall.arg1, argsForCall.arg2, argsForCall.arg3
 }
 
 func (fake *Coalescer) Push(arg1 coalesce.Key, arg2 string, arg3 string, arg4 time.DateTime) bool {
