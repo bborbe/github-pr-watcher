@@ -14,6 +14,7 @@ import (
 	"github.com/bborbe/cqrs/cdb"
 	cqrsiam "github.com/bborbe/cqrs/iam"
 	"github.com/bborbe/github-pr-watcher/pkg"
+	"github.com/bborbe/github-pr-watcher/pkg/coalesce"
 	"github.com/bborbe/github-pr-watcher/pkg/command"
 	"github.com/bborbe/github-pr-watcher/pkg/filter"
 	"github.com/bborbe/github-pr-watcher/pkg/trust"
@@ -77,6 +78,7 @@ func CreateWatcher(
 	publishRecorder pkg.PublishRecorder,
 	overrideLedger pkg.OverrideLedger,
 	currentDateTime libtime.CurrentDateTimeGetter,
+	coalescer coalesce.Coalescer,
 ) pkg.Watcher {
 	publisher := pkg.NewTaskPublisher(
 		createSender,
@@ -123,6 +125,8 @@ func CreateWatcher(
 		mechanicalOverrideAuthors,
 		trustDecision,
 		unreviewedScanner,
+		coalescer,
+		currentDateTime,
 	)
 }
 

@@ -12,9 +12,11 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	stdtime "time"
 
 	"github.com/bborbe/errors"
 	"github.com/bborbe/github-pr-watcher/mocks"
+	"github.com/bborbe/github-pr-watcher/pkg/coalesce"
 	"github.com/bborbe/github-pr-watcher/pkg/handler"
 	libhttp "github.com/bborbe/http"
 	libtime "github.com/bborbe/time"
@@ -29,6 +31,18 @@ func signBody(secret string, body []byte) string {
 	mac := hmac.New(sha256.New, []byte(secret))
 	mac.Write(body)
 	return "sha256=" + hex.EncodeToString(mac.Sum(nil))
+}
+
+// noOpCoalescer admits every push. A zero hold window makes every observation
+// the leading edge, which is the pre-coalesce behaviour these cases assert.
+func noOpCoalescer() coalesce.Coalescer {
+	return coalesce.NewCoalescer(
+		context.Background(),
+		0,
+		coalesce.NewTimerScheduler(),
+		nil,
+		libtime.NewCurrentDateTime(),
+	)
 }
 
 var _ = Describe("WebhookHandler", func() {
@@ -46,6 +60,7 @@ var _ = Describe("WebhookHandler", func() {
 		h = libhttp.NewErrorHandler(
 			handler.NewWebhookHandler(
 				sender,
+				noOpCoalescer(),
 				webhookTestSecret,
 				metrics,
 				libtime.NewCurrentDateTime(),
@@ -106,7 +121,13 @@ var _ = Describe("WebhookHandler", func() {
 
 		It("rejects everything when the secret is not configured (fail closed)", func() {
 			closed := libhttp.NewErrorHandler(
-				handler.NewWebhookHandler(sender, "", metrics, libtime.NewCurrentDateTime()),
+				handler.NewWebhookHandler(
+					sender,
+					noOpCoalescer(),
+					"",
+					metrics,
+					libtime.NewCurrentDateTime(),
+				),
 			)
 			req := webhookRequest("pull_request", pullRequestPayload("opened"))
 			resp := httptest.NewRecorder()
@@ -212,6 +233,98 @@ var _ = Describe("WebhookHandler", func() {
 
 			Expect(resp.Code).To(Equal(http.StatusBadGateway))
 			Expect(sender.SendCommandCallCount()).To(Equal(1))
+		})
+	})
+
+	Context("trailing coalesce", func() {
+		var (
+			now       stdtime.Time
+			fakeClock libtime.CurrentDateTimeGetter
+			gate      coalesce.Coalescer
+			hc        http.Handler
+		)
+
+		BeforeEach(func() {
+			now = stdtime.Date(2026, 10, 27, 12, 0, 0, 0, stdtime.UTC)
+			fakeClock = libtime.CurrentDateTimeGetterFunc(func() libtime.DateTime {
+				return libtime.DateTime(now)
+			})
+			gate = coalesce.NewCoalescer(
+				context.Background(),
+				3*stdtime.Minute,
+				coalesce.NewTimerScheduler(),
+				func(context.Context, string) error { return nil },
+				fakeClock,
+			)
+			hc = libhttp.NewErrorHandler(
+				handler.NewWebhookHandler(
+					sender,
+					gate,
+					webhookTestSecret,
+					metrics,
+					fakeClock,
+				),
+			)
+		})
+
+		AfterEach(func() {
+			gate.Close()
+		})
+
+		burstPayload := func(sha string) string {
+			return `{"action":"synchronize","pull_request":{` +
+				`"html_url":"https://github.com/bborbe/repo/pull/42",` +
+				`"head":{"sha":"` + sha + `"}}}`
+		}
+
+		It("dispatches the first push of a burst and coalesces the next", func() {
+			first := httptest.NewRecorder()
+			hc.ServeHTTP(first, webhookRequest("pull_request", burstPayload("head-a")))
+
+			Expect(first.Code).To(Equal(http.StatusAccepted))
+			Expect(sender.SendCommandCallCount()).To(Equal(1))
+
+			now = now.Add(stdtime.Minute)
+			second := httptest.NewRecorder()
+			hc.ServeHTTP(second, webhookRequest("pull_request", burstPayload("head-b")))
+
+			Expect(second.Code).To(Equal(http.StatusAccepted))
+			Expect(sender.SendCommandCallCount()).To(Equal(1))
+			Expect(metrics.IncWebhookDeliveryArgsForCall(1)).To(Equal("coalesced"))
+		})
+
+		It("dispatches again once the PR has been quiet past the hold window", func() {
+			first := httptest.NewRecorder()
+			hc.ServeHTTP(first, webhookRequest("pull_request", burstPayload("head-a")))
+
+			now = now.Add(10 * stdtime.Minute)
+			second := httptest.NewRecorder()
+			hc.ServeHTTP(second, webhookRequest("pull_request", burstPayload("head-b")))
+
+			Expect(second.Code).To(Equal(http.StatusAccepted))
+			Expect(sender.SendCommandCallCount()).To(Equal(2))
+		})
+
+		It("dispatches ready_for_review even when the head SHA is unchanged", func() {
+			// A draft PR's push is dispatched as the leading edge and dropped by
+			// the consumer's draft gate. The ready_for_review transition carries
+			// the same SHA, so coalescing it on the head would swallow it and the
+			// PR would never be reviewed.
+			draft := `{"action":"synchronize","pull_request":{` +
+				`"html_url":"https://github.com/bborbe/repo/pull/42",` +
+				`"head":{"sha":"head-a"}}}`
+			first := httptest.NewRecorder()
+			hc.ServeHTTP(first, webhookRequest("pull_request", draft))
+			Expect(sender.SendCommandCallCount()).To(Equal(1))
+
+			ready := `{"action":"ready_for_review","pull_request":{` +
+				`"html_url":"https://github.com/bborbe/repo/pull/42",` +
+				`"head":{"sha":"head-a"}}}`
+			second := httptest.NewRecorder()
+			hc.ServeHTTP(second, webhookRequest("pull_request", ready))
+
+			Expect(second.Code).To(Equal(http.StatusAccepted))
+			Expect(sender.SendCommandCallCount()).To(Equal(2))
 		})
 	})
 })
