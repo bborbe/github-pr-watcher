@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## Unreleased
+## v0.18.2
 
 - fix: release the webhook's coalescer claim when the trigger executor defers a command to the poll path, so a head whose record was never published stops reporting `Settled`. `MarkEmitted` documents that callers invoke it "only after a successful publish", but the webhook handler claims the head as soon as its command reaches Kafka — and the consumer then declines that command for every mechanical-override author. The claim described a publish that never happened, and because `Admit` answered `Settled` for it the poll path published nothing either, so the head was stranded until the unreviewed scanner's threshold fired and spent the full LLM review the override exists to remove. Observed on `bborbe/backup#41`, which logged `already emitted` three minutes after creation, produced neither an override nor a review, and was rescued only by the scanner 30 minutes later — after which it merged on a full review. The deferral now calls the new `Coalescer.Release`, which clears only the claim it names, so a late release cannot unclaim a head that was published afterwards
 
