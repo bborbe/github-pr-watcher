@@ -210,7 +210,7 @@ func (a *application) validateConfig(ctx context.Context) error {
 	return nil
 }
 
-//nolint:funlen // wires Run from validated config — extracting any chunk hurts readability without reducing complexity. 170 lines, 90 over the 80-line cap; the body is linear composition, not branching logic.
+//nolint:funlen,maintidx // wires Run from validated config — extracting any chunk hurts readability without reducing complexity. 180 lines, 100 over the 80-line cap, and the added wiring pushes the maintainability index to 19; the body is linear composition, not branching logic.
 func (a *application) Run(ctx context.Context, _ libsentry.Client) error {
 	if err := a.validateConfig(ctx); err != nil {
 		return errors.Wrap(ctx, err, "validate config")
@@ -344,6 +344,14 @@ func (a *application) Run(ctx context.Context, _ libsentry.Client) error {
 	// as the unreviewed-PR scanner, and is written by both the command executor
 	// and every TaskPublisher publish (poll loop and unreviewed scanner).
 	retryGuard := pkg.NewRetryGuard(ghClient, metrics, unreviewedConfig.Logins, currentDateTime)
+	// Process-wide record of which head SHAs already carry a published
+	// pr-override. It is the ONE state every review producer consults, so a
+	// producer that does not own the mechanical decision cannot publish a review
+	// for a SHA an override owns — the failure that spent a reviewer pod on
+	// kafka-topic-reader#26 and alert#29. Written by every TaskPublisher
+	// override publish, read by the poll loop, the unreviewed scanner and the
+	// in-pod command executor.
+	overrideLedger := pkg.NewOverrideLedger(db, currentDateTime)
 
 	// HTTP-side sender backs the /trigger handler.
 	triggerPRReviewSender := factory.CreateTriggerPRReviewCommandSender(
@@ -390,6 +398,7 @@ func (a *application) Run(ctx context.Context, _ libsentry.Client) error {
 		pkg.ParseMechanicalOverrideAuthors(a.MechanicalOverrideAuthors),
 		unreviewedConfig,
 		pkg.NewPublishRecorder(db, retryGuard),
+		overrideLedger,
 		currentDateTime,
 		coalescer,
 	)
@@ -429,6 +438,7 @@ func (a *application) Run(ctx context.Context, _ libsentry.Client) error {
 		a.MaxChangedFiles,
 		metrics, // shared with the watcher
 		retryGuard,
+		overrideLedger,
 		a.TopicPrefix,
 		currentDateTime, // spec 067: time-injected clock for Force=true nonce
 	)
