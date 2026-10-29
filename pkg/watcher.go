@@ -13,6 +13,7 @@ import (
 	agentlib "github.com/bborbe/agent"
 	task "github.com/bborbe/agent/command/task"
 	"github.com/bborbe/errors"
+	"github.com/bborbe/github-pr-watcher/pkg/coalesce"
 	"github.com/bborbe/github-pr-watcher/pkg/filter"
 	"github.com/bborbe/github-pr-watcher/pkg/reviewignore"
 	"github.com/bborbe/github-pr-watcher/pkg/trust"
@@ -370,6 +371,8 @@ func NewWatcher(
 	mechanicalOverrideAuthors []string,
 	trustDecision trust.Trust,
 	unreviewedScanner UnreviewedScanner,
+	coalescer coalesce.Coalescer,
+	currentDateTime libtime.CurrentDateTimeGetter,
 ) Watcher {
 	return &watcher{
 		ghClient:                  ghClient,
@@ -386,6 +389,8 @@ func NewWatcher(
 		mechanicalOverrideAuthors: mechanicalOverrideAuthors,
 		trustDecision:             trustDecision,
 		unreviewedScanner:         unreviewedScanner,
+		coalescer:                 coalescer,
+		currentDateTime:           currentDateTime,
 	}
 }
 
@@ -438,6 +443,13 @@ type watcher struct {
 	// review. It runs once per poll, after the cursor is saved, and never
 	// fails the poll — see UnreviewedScanner.
 	unreviewedScanner UnreviewedScanner
+	// coalescer bounds how many review records a burst of pushes to one PR can
+	// create. It is the same instance the webhook receiver consults, so the two
+	// emit paths cannot each admit a record for the same burst.
+	coalescer coalesce.Coalescer
+	// currentDateTime is the injected clock the coalescer's hold window is
+	// measured against.
+	currentDateTime libtime.CurrentDateTimeGetter
 }
 
 // rateLimitRemainingForGauge returns the value to publish to the gauge at the
@@ -838,6 +850,12 @@ func (w *watcher) processPR(
 	}
 
 	// New (PR, SHA) pair — publish a fresh CreateTaskCommand.
+	if !w.admitReview(pr, details) {
+		// Deferred, not handled: nothing was published and no cursor entry was
+		// written, so the cursor must be clamped to this PR or the next search
+		// window would never return it and the trailing review would be lost.
+		return prOutcome{deferred: true}
+	}
 	if w.publisher.PublishCreate(ctx, pr, taskIDStr, details) {
 		// Update cursorState in-place so duplicate PR entries in the same poll batch
 		// are deduplicated without a second create publish.
@@ -847,6 +865,28 @@ func (w *watcher) processPR(
 	}
 
 	return prOutcome{}
+}
+
+// admitReview reports whether the coalescer allows a review record for this
+// head. Trailing coalesce: a push that lands while the PR is still moving is
+// held for the trailing dispatch instead of becoming its own record. The same
+// coalescer instance gates the webhook path, so a burst cannot gain a third
+// record here after the webhook already emitted one.
+func (w *watcher) admitReview(pr PullRequest, details PRDetails) bool {
+	key := coalesce.Key{Owner: pr.Owner, Repo: pr.Repo, Number: pr.Number}
+	if w.coalescer.Admit(
+		key,
+		details.HeadSHA,
+		details.UpdatedAt,
+		w.currentDateTime.Now(),
+	) {
+		return true
+	}
+	glog.V(2).Infof(
+		"coalesced pr=%s/%s#%d sha=%s", pr.Owner, pr.Repo, pr.Number, details.HeadSHA,
+	)
+	w.metrics.IncPRPublished("coalesced")
+	return false
 }
 
 // mechanicalOverrideOutcome runs the mechanical-override attempt and owns the

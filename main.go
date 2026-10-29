@@ -18,6 +18,7 @@ import (
 	"github.com/bborbe/cqrs/base"
 	"github.com/bborbe/errors"
 	"github.com/bborbe/github-pr-watcher/pkg"
+	"github.com/bborbe/github-pr-watcher/pkg/coalesce"
 	"github.com/bborbe/github-pr-watcher/pkg/factory"
 	"github.com/bborbe/github-pr-watcher/pkg/filter"
 	"github.com/bborbe/github-pr-watcher/pkg/trust"
@@ -125,6 +126,7 @@ type application struct {
 	KafkaBrokers              libkafka.Brokers `required:"true"  arg:"kafka-brokers"               env:"KAFKA_BROKERS"               usage:"Comma-separated Kafka broker list"`
 	Stage                     string           `required:"true"  arg:"stage"                       env:"STAGE"                       usage:"Deployment stage (dev|prod)"`
 	PollInterval              string           `required:"false" arg:"poll-interval"               env:"POLL_INTERVAL"               usage:"Poll interval (Go duration)"                                                                                                                                                                                                                                                                                           default:"5m"`
+	CoalesceHold              string           `required:"false" arg:"coalesce-hold"               env:"COALESCE_HOLD"               usage:"Trailing-coalesce hold window: how long one PR must stay quiet before its trailing review is dispatched (Go duration)"                                                                                                                                                                                                 default:"3m"`
 	RepoScope                 string           `required:"false" arg:"repo-scope"                  env:"REPO_SCOPE"                  usage:"GitHub user/org scope"                                                                                                                                                                                                                                                                                                 default:"bborbe"`
 	BotAllowlist              string           `required:"false" arg:"bot-allowlist"               env:"BOT_ALLOWLIST"               usage:"Comma-separated bot author allowlist"                                                                                                                                                                                                                                                                                  default:"dependabot[bot],renovate[bot]"`
 	TrustedAuthors            string           `required:"false" arg:"trusted-authors"             env:"TRUSTED_AUTHORS"             usage:"Comma-separated trusted GitHub author logins (required; empty list refuses startup)"`
@@ -217,6 +219,14 @@ func (a *application) Run(ctx context.Context, _ libsentry.Client) error {
 	pollInterval, err := time.ParseDuration(a.PollInterval)
 	if err != nil {
 		return errors.Wrapf(ctx, err, "parse poll interval %q", a.PollInterval)
+	}
+
+	coalesceHold, err := time.ParseDuration(a.CoalesceHold)
+	if err != nil {
+		return errors.Wrapf(ctx, err, "parse coalesce hold %q", a.CoalesceHold)
+	}
+	if err := coalesce.ValidateHold(ctx, coalesceHold); err != nil {
+		return errors.Wrap(ctx, err, "validate coalesce hold")
 	}
 
 	botAllowlist := pkg.ParseBotAllowlist(a.BotAllowlist)
@@ -335,6 +345,27 @@ func (a *application) Run(ctx context.Context, _ libsentry.Client) error {
 	// and every TaskPublisher publish (poll loop and unreviewed scanner).
 	retryGuard := pkg.NewRetryGuard(ghClient, metrics, unreviewedConfig.Logins, currentDateTime)
 
+	// HTTP-side sender backs the /trigger handler.
+	triggerPRReviewSender := factory.CreateTriggerPRReviewCommandSender(
+		ctx,
+		syncProducer,
+		a.TopicPrefix,
+	)
+	triggerHandler := factory.CreateSinglePRTriggerHandler(triggerPRReviewSender)
+	a.TriggerHandler = libhttp.NewJSONErrorHandler(triggerHandler)
+
+	// Coalescer: one instance shared by the poll loop and the webhook receiver,
+	// so a burst of pushes to one PR produces at most two review records — a
+	// leading one dispatched at once and a single trailing one. A gate on
+	// either path alone still lets the other emit a third.
+	coalescer := coalesce.NewCoalescer(
+		coalesceHold,
+		coalesce.NewTimerScheduler(),
+		factory.CreateWebhookDispatcher(triggerPRReviewSender, metrics),
+		currentDateTime,
+	)
+	defer coalescer.Close()
+
 	w := factory.CreateWatcher(
 		ghClient,
 		createSender,
@@ -359,22 +390,15 @@ func (a *application) Run(ctx context.Context, _ libsentry.Client) error {
 		unreviewedConfig,
 		pkg.NewPublishRecorder(db, retryGuard),
 		currentDateTime,
+		coalescer,
 	)
-
-	// HTTP-side sender backs the /trigger handler.
-	triggerPRReviewSender := factory.CreateTriggerPRReviewCommandSender(
-		ctx,
-		syncProducer,
-		a.TopicPrefix,
-	)
-	triggerHandler := factory.CreateSinglePRTriggerHandler(triggerPRReviewSender)
-	a.TriggerHandler = libhttp.NewJSONErrorHandler(triggerHandler)
 
 	// Webhook receiver reuses the same sender: every signature-verified
 	// pull_request delivery publishes a TriggerPRReviewCommand, so the in-pod
 	// consumer (fetch → filter → trust → CreateTaskCommand) applies unchanged.
 	webhookHandler := factory.CreateWebhookHandler(
 		triggerPRReviewSender,
+		coalescer,
 		a.WebhookSecret,
 		metrics,
 		currentDateTime,
