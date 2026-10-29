@@ -107,6 +107,7 @@ var _ = Describe("NewTriggerPRReviewCommandExecutor", func() {
 				"dev", 80, 200, "", "", 0, 0,
 				pkg.NewMetrics(),
 				new(mocks.RetryGuard),
+				nil,
 				libtime.NewCurrentDateTime(),
 			)
 
@@ -225,7 +226,7 @@ var _ = Describe("NewTriggerPRReviewCommandExecutor", func() {
 					ghClient, createSender, taskCreationFilter, trustDecision,
 					nil,
 					"dev", 80, 200, "", "", 0, 0,
-					metrics, g, currentDateTime,
+					metrics, g, nil, currentDateTime,
 				)
 				return err
 			})
@@ -384,7 +385,7 @@ var _ = Describe("NewTriggerPRReviewCommandExecutor", func() {
 			executor := command.NewTriggerPRReviewCommandExecutor(
 				ghClient, createSender, taskCreationFilter, trustDecision,
 				nil, "dev", 80, 200, "", "", 0, 0,
-				metrics, guardFake, currentDateTime,
+				metrics, guardFake, nil, currentDateTime,
 			)
 			err := db.Update(ctx, func(ctx context.Context, tx libkv.Tx) error {
 				_, _, err := executor.HandleCommand(
@@ -431,6 +432,7 @@ var _ = Describe("mechanical-override authors defer to the poll path", func() {
 			"dev", 80, 200, "", "", 0, 0,
 			pkg.NewMetrics(),
 			new(mocks.RetryGuard),
+			nil,
 			libtime.NewCurrentDateTime(),
 		)
 		return err
@@ -583,6 +585,7 @@ var _ = Describe(
 				"dev", 80, 200, "", "", 0, 0,
 				pkg.NewMetrics(),
 				new(mocks.RetryGuard),
+				nil,
 				libtime.NewCurrentDateTime(),
 			)
 			Expect(err).NotTo(HaveOccurred())
@@ -623,6 +626,7 @@ var _ = Describe(
 				"dev", 80, 200, "", "", 0, 0,
 				pkg.NewMetrics(),
 				new(mocks.RetryGuard),
+				nil,
 				libtime.NewCurrentDateTime(),
 			)
 			Expect(errors.Is(err, cdb.ErrCommandObjectSkipped)).To(BeTrue())
@@ -691,6 +695,7 @@ var _ = Describe("executor crash recovery (spec 066 AC 16)", func() {
 			"dev", 80, 200, "", "", 0, 0,
 			pkg.NewMetrics(),
 			new(mocks.RetryGuard),
+			nil,
 			libtime.NewCurrentDateTime(),
 		)
 		Expect(err).To(HaveOccurred(),
@@ -723,6 +728,7 @@ var _ = Describe("executor crash recovery (spec 066 AC 16)", func() {
 			"dev", 80, 200, "", "", 0, 0,
 			pkg.NewMetrics(),
 			new(mocks.RetryGuard),
+			nil,
 			libtime.NewCurrentDateTime(),
 		)
 		Expect(err).NotTo(HaveOccurred(), "retry must succeed: %v", err)
@@ -796,6 +802,7 @@ var _ = Describe("force-true branch (spec 067)", func() {
 			"dev", 80, 200, "", "", 0, 0,
 			pkg.NewMetrics(),
 			new(mocks.RetryGuard),
+			nil,
 			currentDateTime,
 		)
 		Expect(err).NotTo(HaveOccurred())
@@ -909,6 +916,7 @@ var _ = Describe("force-true branch (spec 067)", func() {
 			"dev", 80, 200, "", "", 0, 0,
 			metrics,
 			new(mocks.RetryGuard),
+			nil,
 			currentDateTime,
 		)
 		Expect(err).NotTo(HaveOccurred())
@@ -929,5 +937,103 @@ var _ = Describe("force-true branch (spec 067)", func() {
 		}
 		Expect(labels).To(Equal(map[string]bool{"create": true}),
 			"Force=true must NOT introduce a new label value (got %v)", labels)
+	})
+})
+
+// fakeOverrideLedger is a hand-written double for pkg.OverrideLedger. The gate it
+// exercises lives only on this path, and a fake keeps the three outcomes
+// (suppressed, not suppressed, unreadable) readable in one place.
+type fakeOverrideLedger struct {
+	suppressed bool
+	readErr    error
+	readCalls  int
+}
+
+func (f *fakeOverrideLedger) Record(context.Context, pkg.RetryGuardPR, string) {}
+
+func (f *fakeOverrideLedger) Suppressed(context.Context, pkg.RetryGuardPR) bool {
+	return f.suppressed
+}
+
+func (f *fakeOverrideLedger) SuppressedTx(
+	context.Context, libkv.Tx, pkg.RetryGuardPR,
+) (bool, error) {
+	f.readCalls++
+	return f.suppressed, f.readErr
+}
+
+var _ = Describe("override ledger gate", func() {
+	var (
+		ctx                context.Context
+		ghClient           *mocks.GitHubClient
+		createSender       *taskmocks.TaskCreateCommandSender
+		taskCreationFilter *mocks.TaskCreationFilter
+		trustDecision      *mocks.Trust
+		ledger             *fakeOverrideLedger
+	)
+
+	run := func() error {
+		_, _, err := command.RunTriggerPRReview(
+			ctx,
+			nil,
+			newCommandObject(command.TriggerPRReviewCommand{URL: validPRURL}),
+			ghClient, createSender, taskCreationFilter, trustDecision,
+			nil,
+			"dev", 80, 200, "", "", 0, 0,
+			pkg.NewMetrics(),
+			new(mocks.RetryGuard),
+			ledger,
+			libtime.NewCurrentDateTime(),
+		)
+		return err
+	}
+
+	BeforeEach(func() {
+		ctx = context.Background()
+		ghClient = new(mocks.GitHubClient)
+		createSender = new(taskmocks.TaskCreateCommandSender)
+		taskCreationFilter = new(mocks.TaskCreationFilter)
+		trustDecision = new(mocks.Trust)
+		ledger = &fakeOverrideLedger{}
+
+		taskCreationFilter.SkipReturns(false)
+		trustDecision.IsTrustedReturns(trust.NewResult(true, "trusted"), nil)
+		ghClient.GetPRDetailsReturns(pkg.PRDetails{
+			HeadSHA:     "abc123",
+			CloneURL:    "https://github.com/bborbe/repo.git",
+			BaseRef:     "main",
+			HeadRef:     "fix/update-go-abc1234",
+			AuthorLogin: "ben-s-go-updater[bot]",
+			Title:       "update go module dependencies",
+		}, nil)
+	})
+
+	It("publishes the review when no override owns the sha", func() {
+		Expect(run()).NotTo(HaveOccurred())
+		Expect(ledger.readCalls).To(Equal(1),
+			"the gate must actually consult the ledger — a gate that never reads is the bug being fixed")
+		Expect(createSender.SendCommandCallCount()).To(Equal(1))
+	})
+
+	It("refuses to publish a review for a sha an override owns", func() {
+		// The exact failure this gate exists to stop: the trigger executor
+		// published a review 44 s after the override on bborbe/kafka-topic-reader#26.
+		ledger.suppressed = true
+
+		err := run()
+		Expect(errors.Is(err, cdb.ErrCommandObjectSkipped)).To(BeTrue(),
+			"a suppression must be a skip, never a retryable error, got %v", err)
+		Expect(createSender.SendCommandCallCount()).To(Equal(0),
+			"no review may be published for an override-owned sha")
+	})
+
+	It("fails open when the ledger cannot be read", func() {
+		// A lost review is worse than a duplicate, so an unreadable ledger
+		// must not block the review path.
+		ledger.readErr = errors.Errorf(ctx, "ledger unavailable")
+
+		Expect(run()).NotTo(HaveOccurred())
+		Expect(createSender.SendCommandCallCount()).To(Equal(1),
+			"an unreadable ledger must not suppress the review")
 	})
 })

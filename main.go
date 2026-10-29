@@ -208,7 +208,7 @@ func (a *application) validateConfig(ctx context.Context) error {
 	return nil
 }
 
-//nolint:funlen // wires Run from validated config — extracting any chunk hurts readability without reducing complexity. 170 lines, 90 over the 80-line cap; the body is linear composition, not branching logic.
+//nolint:funlen // wires Run from validated config — extracting any chunk hurts readability without reducing complexity. 180 lines, 100 over the 80-line cap; the body is linear composition, not branching logic.
 func (a *application) Run(ctx context.Context, _ libsentry.Client) error {
 	if err := a.validateConfig(ctx); err != nil {
 		return errors.Wrap(ctx, err, "validate config")

@@ -48,6 +48,7 @@ var _ = func(
 	maxChangedFiles int,
 	metrics pkg.Metrics,
 	retryGuard pkg.RetryGuard,
+	overrideLedger pkg.OverrideLedger,
 	currentDateTime libtime.CurrentDateTimeGetter,
 ) (*base.EventID, base.Event, error) {
 	return runTriggerPRReview(
@@ -56,6 +57,6 @@ var _ = func(
 		mechanicalOverrideAuthors,
 		stage, maxSlugLen, maxTitleLen, taskSuffix, targetVault,
 		maxAdditions, maxChangedFiles, metrics,
-		retryGuard, currentDateTime,
+		retryGuard, overrideLedger, currentDateTime,
 	)
 }
