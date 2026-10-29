@@ -51,6 +51,12 @@ type Coalescer struct {
 	pushReturnsOnCall map[int]struct {
 		result1 bool
 	}
+	ReleaseStub        func(coalesce.Key, string)
+	releaseMutex       sync.RWMutex
+	releaseArgsForCall []struct {
+		arg1 coalesce.Key
+		arg2 string
+	}
 	invocations      map[string][][]interface{}
 	invocationsMutex sync.RWMutex
 }
@@ -239,6 +245,39 @@ func (fake *Coalescer) PushReturnsOnCall(i int, result1 bool) {
 	fake.pushReturnsOnCall[i] = struct {
 		result1 bool
 	}{result1}
+}
+
+func (fake *Coalescer) Release(arg1 coalesce.Key, arg2 string) {
+	fake.releaseMutex.Lock()
+	fake.releaseArgsForCall = append(fake.releaseArgsForCall, struct {
+		arg1 coalesce.Key
+		arg2 string
+	}{arg1, arg2})
+	stub := fake.ReleaseStub
+	fake.recordInvocation("Release", []interface{}{arg1, arg2})
+	fake.releaseMutex.Unlock()
+	if stub != nil {
+		fake.ReleaseStub(arg1, arg2)
+	}
+}
+
+func (fake *Coalescer) ReleaseCallCount() int {
+	fake.releaseMutex.RLock()
+	defer fake.releaseMutex.RUnlock()
+	return len(fake.releaseArgsForCall)
+}
+
+func (fake *Coalescer) ReleaseCalls(stub func(coalesce.Key, string)) {
+	fake.releaseMutex.Lock()
+	defer fake.releaseMutex.Unlock()
+	fake.ReleaseStub = stub
+}
+
+func (fake *Coalescer) ReleaseArgsForCall(i int) (coalesce.Key, string) {
+	fake.releaseMutex.RLock()
+	defer fake.releaseMutex.RUnlock()
+	argsForCall := fake.releaseArgsForCall[i]
+	return argsForCall.arg1, argsForCall.arg2
 }
 
 func (fake *Coalescer) Invocations() map[string][][]interface{} {

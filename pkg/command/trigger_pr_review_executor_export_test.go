@@ -11,6 +11,7 @@ import (
 	"github.com/bborbe/cqrs/base"
 	cdb "github.com/bborbe/cqrs/cdb"
 	"github.com/bborbe/github-pr-watcher/pkg"
+	"github.com/bborbe/github-pr-watcher/pkg/coalesce"
 	"github.com/bborbe/github-pr-watcher/pkg/filter"
 	"github.com/bborbe/github-pr-watcher/pkg/trust"
 	libkv "github.com/bborbe/kv"
@@ -49,6 +50,7 @@ var _ = func(
 	metrics pkg.Metrics,
 	retryGuard pkg.RetryGuard,
 	overrideLedger pkg.OverrideLedger,
+	coalescer coalesce.Coalescer,
 	currentDateTime libtime.CurrentDateTimeGetter,
 ) (*base.EventID, base.Event, error) {
 	return runTriggerPRReview(
@@ -57,6 +59,6 @@ var _ = func(
 		mechanicalOverrideAuthors,
 		stage, maxSlugLen, maxTitleLen, taskSuffix, targetVault,
 		maxAdditions, maxChangedFiles, metrics,
-		retryGuard, overrideLedger, currentDateTime,
+		retryGuard, overrideLedger, coalescer, currentDateTime,
 	)
 }

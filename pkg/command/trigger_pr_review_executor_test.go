@@ -108,8 +108,8 @@ var _ = Describe("NewTriggerPRReviewCommandExecutor", func() {
 				pkg.NewMetrics(),
 				new(mocks.RetryGuard),
 				nil,
-				libtime.NewCurrentDateTime(),
-			)
+				nil,
+				libtime.NewCurrentDateTime())
 
 			switch expectOutcome {
 			case outcomeSkipped:
@@ -226,8 +226,8 @@ var _ = Describe("NewTriggerPRReviewCommandExecutor", func() {
 					ghClient, createSender, taskCreationFilter, trustDecision,
 					nil,
 					"dev", 80, 200, "", "", 0, 0,
-					metrics, g, nil, currentDateTime,
-				)
+					metrics, g, nil,
+					nil, currentDateTime)
 				return err
 			})
 		}
@@ -385,8 +385,8 @@ var _ = Describe("NewTriggerPRReviewCommandExecutor", func() {
 			executor := command.NewTriggerPRReviewCommandExecutor(
 				ghClient, createSender, taskCreationFilter, trustDecision,
 				nil, "dev", 80, 200, "", "", 0, 0,
-				metrics, guardFake, nil, currentDateTime,
-			)
+				metrics, guardFake, nil,
+				nil, currentDateTime)
 			err := db.Update(ctx, func(ctx context.Context, tx libkv.Tx) error {
 				_, _, err := executor.HandleCommand(
 					ctx, tx,
@@ -420,9 +420,12 @@ var _ = Describe("mechanical-override authors defer to the poll path", func() {
 		createSender       *taskmocks.TaskCreateCommandSender
 		taskCreationFilter *mocks.TaskCreationFilter
 		trustDecision      *mocks.Trust
+		coalescer          *mocks.Coalescer
 	)
 
 	run := func(cmd command.TriggerPRReviewCommand, authors []string) error {
+		// Fresh per call so each It asserts only its own release.
+		coalescer = new(mocks.Coalescer)
 		_, _, err := command.RunTriggerPRReview(
 			ctx,
 			nil,
@@ -433,8 +436,8 @@ var _ = Describe("mechanical-override authors defer to the poll path", func() {
 			pkg.NewMetrics(),
 			new(mocks.RetryGuard),
 			nil,
-			libtime.NewCurrentDateTime(),
-		)
+			coalescer,
+			libtime.NewCurrentDateTime())
 		return err
 	}
 
@@ -467,6 +470,13 @@ var _ = Describe("mechanical-override authors defer to the poll path", func() {
 			"expected ErrCommandObjectSkipped, got %v", err)
 		Expect(createSender.SendCommandCallCount()).To(Equal(0),
 			"no review may be published here — the poll path decides override vs review")
+		// The webhook handler claimed this head when its command reached Kafka.
+		// Nothing was published here, so the claim must be withdrawn or the poll
+		// path reads Settled from Admit and publishes nothing either.
+		Expect(coalescer.ReleaseCallCount()).To(Equal(1),
+			"the deferral must release the webhook's claim on this head")
+		_, releasedHead := coalescer.ReleaseArgsForCall(0)
+		Expect(releasedHead).To(Equal("abc123"))
 	})
 
 	It("still reviews a plain operator trigger for a mechanical-override author", func() {
@@ -480,6 +490,8 @@ var _ = Describe("mechanical-override authors defer to the poll path", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(createSender.SendCommandCallCount()).To(Equal(1),
 			"an operator command always gets a full review")
+		Expect(coalescer.ReleaseCallCount()).To(Equal(0),
+			"a command that publishes must keep its claim")
 	})
 
 	It("still reviews a forced webhook command", func() {
@@ -586,8 +598,8 @@ var _ = Describe(
 				pkg.NewMetrics(),
 				new(mocks.RetryGuard),
 				nil,
-				libtime.NewCurrentDateTime(),
-			)
+				nil,
+				libtime.NewCurrentDateTime())
 			Expect(err).NotTo(HaveOccurred())
 			Expect(executorCmd).NotTo(BeZero(),
 				"trusted author: executor must produce a non-zero CreateCommand")
@@ -627,8 +639,8 @@ var _ = Describe(
 				pkg.NewMetrics(),
 				new(mocks.RetryGuard),
 				nil,
-				libtime.NewCurrentDateTime(),
-			)
+				nil,
+				libtime.NewCurrentDateTime())
 			Expect(errors.Is(err, cdb.ErrCommandObjectSkipped)).To(BeTrue())
 			Expect(executorSender.SendCommandCallCount()).To(Equal(0),
 				"untrusted author: executor must NOT publish downstream")
@@ -696,8 +708,8 @@ var _ = Describe("executor crash recovery (spec 066 AC 16)", func() {
 			pkg.NewMetrics(),
 			new(mocks.RetryGuard),
 			nil,
-			libtime.NewCurrentDateTime(),
-		)
+			nil,
+			libtime.NewCurrentDateTime())
 		Expect(err).To(HaveOccurred(),
 			"killed invocation must return a transient error so Kafka redelivers")
 		Expect(errors.Is(err, cdb.ErrCommandObjectSkipped)).To(BeFalse(),
@@ -729,8 +741,8 @@ var _ = Describe("executor crash recovery (spec 066 AC 16)", func() {
 			pkg.NewMetrics(),
 			new(mocks.RetryGuard),
 			nil,
-			libtime.NewCurrentDateTime(),
-		)
+			nil,
+			libtime.NewCurrentDateTime())
 		Expect(err).NotTo(HaveOccurred(), "retry must succeed: %v", err)
 		Expect(freshSender.SendCommandCallCount()).To(Equal(1),
 			"retry must publish downstream exactly once")
@@ -803,8 +815,8 @@ var _ = Describe("force-true branch (spec 067)", func() {
 			pkg.NewMetrics(),
 			new(mocks.RetryGuard),
 			nil,
-			currentDateTime,
-		)
+			nil,
+			currentDateTime)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(createSender.SendCommandCallCount()).To(Equal(1),
 			"executor must publish downstream exactly once for cmd=%+v", cmd)
@@ -917,8 +929,8 @@ var _ = Describe("force-true branch (spec 067)", func() {
 			metrics,
 			new(mocks.RetryGuard),
 			nil,
-			currentDateTime,
-		)
+			nil,
+			currentDateTime)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(createSender.SendCommandCallCount()).To(Equal(1))
 
@@ -983,8 +995,8 @@ var _ = Describe("override ledger gate", func() {
 			pkg.NewMetrics(),
 			new(mocks.RetryGuard),
 			ledger,
-			libtime.NewCurrentDateTime(),
-		)
+			nil,
+			libtime.NewCurrentDateTime())
 		return err
 	}
 

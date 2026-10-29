@@ -439,6 +439,7 @@ func (a *application) Run(ctx context.Context, _ libsentry.Client) error {
 		metrics, // shared with the watcher
 		retryGuard,
 		overrideLedger,
+		coalescer,
 		a.TopicPrefix,
 		currentDateTime, // spec 067: time-injected clock for Force=true nonce
 	)

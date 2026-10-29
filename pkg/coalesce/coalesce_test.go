@@ -280,4 +280,35 @@ var _ = Describe("Coalescer", func() {
 			Expect(scheduler.live()).To(Equal(0))
 		})
 	})
+
+	Describe("Release", func() {
+		It("makes a claimed head claimable again", func() {
+			gate.MarkEmitted(key, "head-a", libtime.DateTime(now))
+			Expect(admit("head-a", now)).To(Equal(coalesce.Settled))
+
+			gate.Release(key, "head-a")
+
+			// The claim described a publish that never happened — the webhook
+			// handler claims a head as soon as its command reaches Kafka, but
+			// the consumer may decline that command. The poll path must then be
+			// free to publish the fallback review instead of reading Settled.
+			Expect(admit("head-a", now)).To(Equal(coalesce.Emit))
+		})
+
+		It("ignores a release naming a head the entry no longer holds", func() {
+			gate.MarkEmitted(key, "head-b", libtime.DateTime(now))
+
+			gate.Release(key, "head-a")
+
+			// A late release must never unclaim a head that was published after
+			// the one it names, or the next poll would duplicate that record.
+			Expect(admit("head-b", now)).To(Equal(coalesce.Settled))
+		})
+
+		It("is a no-op for a PR that was never claimed", func() {
+			gate.Release(key, "head-a")
+
+			Expect(admit("head-a", now)).To(Equal(coalesce.Emit))
+		})
+	})
 })

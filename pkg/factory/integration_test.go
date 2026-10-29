@@ -113,6 +113,7 @@ var _ = Describe("end-to-end command flow through wired consumer (spec 066 AC 11
 			metrics,
 			new(mocks.RetryGuard),
 			nil,
+			nil,
 			libtime.NewCurrentDateTime(),
 		)
 	})
@@ -148,6 +149,7 @@ var _ = Describe("end-to-end command flow through wired consumer (spec 066 AC 11
 				"dev", 80, 200, "", "", 0, 0,
 				metrics,
 				new(mocks.RetryGuard),
+				nil,
 				nil,
 				base.TopicPrefix("develop"),
 				libtime.NewCurrentDateTime(),

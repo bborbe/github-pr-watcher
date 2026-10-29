@@ -185,6 +185,7 @@ func CreateCommandConsumer(
 	metrics pkg.Metrics,
 	retryGuard pkg.RetryGuard,
 	overrideLedger pkg.OverrideLedger,
+	coalescer coalesce.Coalescer,
 	topicPrefix base.TopicPrefix,
 	currentDateTime libtime.CurrentDateTimeGetter,
 ) run.Func {
@@ -205,6 +206,7 @@ func CreateCommandConsumer(
 			metrics,
 			retryGuard,
 			overrideLedger,
+			coalescer,
 			currentDateTime,
 		),
 	}

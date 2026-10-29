@@ -90,6 +90,7 @@ var _ = Describe("github_pr_published metric (spec 066 AC 12)", func() {
 			metrics,
 			new(mocks.RetryGuard),
 			nil,
+			nil,
 			libtime.NewCurrentDateTime(),
 		)
 	})
