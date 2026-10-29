@@ -168,15 +168,10 @@ func runTriggerPRReview(
 	// URL, a filter skip, an untrusted author or a webhook deferral never
 	// touches the ledger. It is consulted only for a forced trigger.
 	guardPR := newRetryGuardPR(prInfo, details)
-	// A review is never published for a SHA a fresh override owns — whoever
-	// asked. The deferral above covers ONE origin (a webhook command from a
-	// mechanical-override author), and gating on cmd.Webhook left every other
-	// origin uncovered: bborbe/kafka-topic-reader#26 published a review 44 s
-	// after its override, on a command whose Webhook flag was false, so the
-	// deferral never applied. Asking the ledger covers this producer, the poll
-	// loop, the scanner and any producer added later, without naming any of
-	// them — and the #26 producer could not be named at all: it arrived on the
-	// command topic with no inbound HTTP request logged anywhere.
+	// A review is never published for a SHA a fresh override owns, whoever asked.
+	// The deferral above covers only webhook commands; the ledger covers every
+	// producer — bborbe/kafka-topic-reader#26 published a review 44 s after its
+	// override because its command arrived with Webhook=false.
 	if err := suppressForOverride(ctx, tx, overrideLedger, guardPR, metrics); err != nil {
 		return nil, nil, err
 	}
