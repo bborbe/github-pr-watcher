@@ -778,7 +778,11 @@ func (w *watcher) processLabeledPRs(
 			)
 			continue
 		}
-		w.trySupersedeDepBump(ctx, pr, details)
+		if w.trySupersedeDepBump(ctx, pr, details) {
+			// Closed: the branch-freshness and arming steps below both target a
+			// PR that no longer exists to act on.
+			continue
+		}
 		w.tryUpdateBranch(ctx, pr, details)
 		w.tryAutoMerge(ctx, pr, details)
 	}
@@ -879,7 +883,17 @@ func (w *watcher) processPR(
 	// refreshed — see trySupersedeDepBump for why merging master in cannot
 	// resolve it. Runs before the branch-freshness step so the abort path owns
 	// the dirty-dep-bump case outright; tryUpdateBranch skips that same case.
-	w.trySupersedeDepBump(ctx, pr, details)
+	//
+	// A successful close ends this PR's processing. Continuing would arm
+	// auto-merge against a closed PR and then publish a mechanical override for
+	// it — an APPROVE on something that can never merge, which is what
+	// bborbe/agent-pi#36 measured two seconds after the close.
+	if w.trySupersedeDepBump(ctx, pr, details) {
+		taskIDStr := DeriveTaskID(pr.Owner, pr.Repo, pr.Number, details.HeadSHA).String()
+		cursorState.HeadSHAs[taskIDStr] = details.HeadSHA
+		newHeadSHAs[taskIDStr] = details.HeadSHA
+		return prOutcome{updatedAt: pr.UpdatedAt, handled: true}
+	}
 
 	// Branch freshness: a labeled, trusted PR whose head branch has gone stale
 	// against its base cannot be merged by GitHub-native auto-merge however
@@ -1337,13 +1351,20 @@ func isSupersededDepBump(pr PullRequest, details PRDetails) bool {
 // untrusted author's PR is left alone, never closed.
 //
 // Failures never block the review path: the caller continues regardless.
+// It reports whether it closed the PR. A closed PR has nothing left to review,
+// to arm or to override, so the caller must stop rather than continue into the
+// override path — an override published for a PR the watcher itself just closed
+// posts an APPROVE against something that can never merge (bborbe/agent-pi#36).
+// Only a SUCCESSFUL close stops the caller: a failed close leaves the PR open,
+// so the review path still runs and the documented "failures never block the
+// review path" contract holds.
 func (w *watcher) trySupersedeDepBump(
 	ctx context.Context,
 	pr PullRequest,
 	details PRDetails,
-) {
+) bool {
 	if !isSupersededDepBump(pr, details) {
-		return
+		return false
 	}
 	trustResult, err := w.trustDecision.IsTrusted(ctx, trust.PR{
 		AuthorLogin:      pr.AuthorLogin,
@@ -1353,12 +1374,12 @@ func (w *watcher) trySupersedeDepBump(
 	if err != nil {
 		glog.Errorf("abort-and-reemit trust check failed pr=%s err=%v", pr.HTMLURL, err)
 		w.metrics.IncPRPublished("error")
-		return
+		return false
 	}
 	if !trustResult.Success() {
 		glog.V(2).Infof("abort-and-reemit skipped, untrusted author pr=%s", pr.HTMLURL)
 		w.metrics.IncPRPublished("dep_bump_skipped")
-		return
+		return false
 	}
 	if err := w.ghClient.ClosePR(
 		ctx, pr.Owner, pr.Repo, pr.Number, depBumpSupersededComment,
@@ -1366,10 +1387,11 @@ func (w *watcher) trySupersedeDepBump(
 		glog.Errorf("close superseded dep-bump pr failed pr=%s/%s#%d err=%v",
 			pr.Owner, pr.Repo, pr.Number, err)
 		w.metrics.IncPRPublished("error")
-		return
+		return false
 	}
 	glog.V(2).Infof("closed superseded dep-bump pr=%s/%s#%d", pr.Owner, pr.Repo, pr.Number)
 	w.metrics.IncPRPublished("dep_bump_superseded")
+	return true
 }
 
 // tryAutoMerge arms GitHub-native auto-merge for a labeled PR from a trusted
