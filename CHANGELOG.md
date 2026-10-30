@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## Unreleased
+## v0.18.4
 
 - fix: a dep-bump PR retired as superseded is no longer then overridden. `trySupersedeDepBump` closes a dirty dep-bump PR so the update-go pipeline can replace it off current master, and its documented contract — "failures never block the review path: the caller continues regardless" — was written for a *failed* close. A **successful** close also fell through, so the same poll armed auto-merge against a closed PR and then published a mechanical override for it: an APPROVE on a PR that can never merge. Observed on `bborbe/agent-pi#36`, which logged `closed superseded dep-bump` at `17:29:48`, `enable auto-merge failed … Pull request is closed` at `17:29:49`, and `mechanical override … rule=trivial-bot-bump` at `17:29:50`. The function now reports whether it closed, and both callers stop: the labeled side-effect pass skips the branch-freshness and arming steps, and the poll path records the head in the cursor and returns handled. A failed close still returns false, so the review path is untouched and the old contract holds for the case it was written for
 
