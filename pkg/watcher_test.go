@@ -2114,6 +2114,13 @@ var _ = Describe("pkg.Watcher", func() {
 			Expect(number).To(Equal(7))
 			Expect(comment).To(ContainSubstring("superseded"))
 			Expect(metricLabels()).To(ContainElement("dep_bump_superseded"))
+			// A closed PR has nothing left to review or override. Continuing
+			// past the close published a mechanical override for a PR the
+			// watcher had just retired — bborbe/agent-pi#36 logged the close at
+			// 17:29:48 and the override at 17:29:50, an APPROVE against a PR
+			// that could never merge.
+			Expect(createSender.SendCommandCallCount()).To(Equal(0),
+				"no task may be published for a PR this poll just closed")
 		})
 
 		It("never closes a human-authored PR, however its branch is named", func() {
