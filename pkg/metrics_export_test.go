@@ -35,3 +35,15 @@ func UnreviewedScanLastSuccessForTest() prometheus.Gauge {
 func UnreviewedRetriesTotalForTest() *prometheus.CounterVec {
 	return unreviewedRetriesTotal
 }
+
+// GitHubAPICallsTotalForTest returns the per-caller GitHub API call
+// CounterVec so external test packages can read it.
+func GitHubAPICallsTotalForTest() *prometheus.CounterVec {
+	return githubAPICallsTotal
+}
+
+// GitHubAPIRateLimitedTotalForTest returns the per-caller GitHub API
+// rate-limited CounterVec so external test packages can read it.
+func GitHubAPIRateLimitedTotalForTest() *prometheus.CounterVec {
+	return githubAPIRateLimitedTotal
+}

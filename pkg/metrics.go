@@ -103,6 +103,19 @@ var (
 		Name: "github_pr_watcher_unreviewed_scan_last_success_timestamp_seconds",
 		Help: "Unix timestamp of the last complete unreviewed-PR scan. Zero until the first successful scan; alerts on it must guard > 0.",
 	})
+
+	// The github_api_* counters are shared cross-service metric names: the
+	// service label carries the origin, so they intentionally have no
+	// github_pr_watcher_ prefix.
+	githubAPICallsTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "github_api_calls_total",
+		Help: "Total GitHub API HTTP round trips, counted once per call at the transport including transport errors, by service, credential, rate-limit bucket, outcome and cluster. The bucket is derived from the request path (search, graphql or core), never from a response header; outcome is success for a status below 400 and error otherwise.",
+	}, []string{"service", "credential", "bucket", "outcome", "cluster"})
+
+	githubAPIRateLimitedTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "github_api_rate_limited_total",
+		Help: "Total GitHub API responses rejected by rate limiting, by service, credential, request-path bucket, class and cluster. Counted when the status is 429, or 403 with X-RateLimit-Remaining: 0 or a Retry-After header; class is always unclassified until a classification rule exists.",
+	}, []string{"service", "credential", "bucket", "class", "cluster"})
 )
 
 func init() {
@@ -116,6 +129,8 @@ func init() {
 		unreviewedPRs,
 		unreviewedScanLastSuccess,
 		unreviewedRetriesTotal,
+		githubAPICallsTotal,
+		githubAPIRateLimitedTotal,
 	)
 	for _, result := range []string{"success", "rate_limited", "github_error"} {
 		pollCyclesTotal.WithLabelValues(result).Add(0)
