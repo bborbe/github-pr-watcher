@@ -271,17 +271,20 @@ type PRFile struct {
 // The httpClient must already carry authentication (App auth via
 // lib/githubapp.NewClient). The client's transport is wrapped to observe
 // X-RateLimit-Remaining on every response, so RateLimitRemaining() reflects
-// the shared App token's live quota.
-func NewGitHubClient(httpClient *http.Client) GitHubClient {
+// the shared App token's live quota. The wrapped transport also counts every
+// call into the per-caller github_api_* counters via apiMetrics; a nil
+// apiMetrics disables that counting.
+func NewGitHubClient(httpClient *http.Client, apiMetrics GitHubAPIMetrics) GitHubClient {
 	c := &githubClient{}
 	inner := httpClient.Transport
 	if inner == nil {
 		inner = http.DefaultTransport
 	}
 	httpClient.Transport = &rateCapturingTransport{
-		inner: inner,
-		set:   c.setRateRemaining,
-		log:   logNon2xxV2,
+		inner:   inner,
+		set:     c.setRateRemaining,
+		log:     logNon2xxV2,
+		metrics: apiMetrics,
 	}
 	c.client = gogithub.NewClient(httpClient)
 	return c
@@ -337,14 +340,21 @@ func (c *githubClient) GetRateLimitCoreRemaining(ctx context.Context) (int, erro
 // whether a 429/403 is primary-quota exhaustion or secondary rate limiting.
 // go-github does not log at its HTTP boundary, so without this line that
 // evidence is lost. A nil log disables it.
+//
+// The same capture point also counts every round trip into
+// github_api_calls_total / github_api_rate_limited_total, attributing the call
+// to a rate-limit bucket derived from the request path. A nil metrics disables
+// the counters.
 type rateCapturingTransport struct {
-	inner http.RoundTripper
-	set   func(int)
-	log   func(string)
+	inner   http.RoundTripper
+	set     func(int)
+	log     func(string)
+	metrics GitHubAPIMetrics
 }
 
 func (t *rateCapturingTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	resp, err := t.inner.RoundTrip(req)
+	t.recordCall(req, resp, err)
 	if err != nil || resp == nil {
 		return resp, err
 	}
@@ -353,6 +363,45 @@ func (t *rateCapturingTransport) RoundTrip(req *http.Request) (*http.Response, e
 		logNon2xxResponse(req, resp, t.log)
 	}
 	return resp, err
+}
+
+// recordCall counts the round trip into the per-caller github_api_* counters.
+// It runs before the early return so transport errors are counted too.
+func (t *rateCapturingTransport) recordCall(
+	req *http.Request,
+	resp *http.Response,
+	err error,
+) {
+	if t.metrics == nil {
+		return
+	}
+	bucket := GitHubAPIBucket(req)
+	if err != nil || resp == nil {
+		t.metrics.IncGitHubAPICall(bucket, githubAPIOutcomeError)
+		return
+	}
+	outcome := githubAPIOutcomeSuccess
+	if resp.StatusCode >= 400 {
+		outcome = githubAPIOutcomeError
+	}
+	t.metrics.IncGitHubAPICall(bucket, outcome)
+	if isRateLimitedResponse(resp) {
+		t.metrics.IncGitHubAPIRateLimited(bucket, githubAPIRateLimitClassUnclassified)
+	}
+}
+
+// isRateLimitedResponse reports whether a response was rejected by GitHub rate
+// limiting: 429, or 403 with the quota-exhausted or retry-after signal. It
+// reads headers only; the response body belongs to the non-2xx logger.
+func isRateLimitedResponse(resp *http.Response) bool {
+	if resp.StatusCode == http.StatusTooManyRequests {
+		return true
+	}
+	if resp.StatusCode != http.StatusForbidden {
+		return false
+	}
+	return resp.Header.Get("X-RateLimit-Remaining") == "0" ||
+		resp.Header.Get("Retry-After") != ""
 }
 
 // captureRemaining records the response's remaining quota into the gauge.

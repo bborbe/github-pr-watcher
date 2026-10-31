@@ -34,6 +34,7 @@ Two independent decision chains run per PR — see [`docs/watcher-decision-chain
 | `GH_TOKEN` | yes | — | GitHub personal access token (read scope sufficient for search/review; **Pull requests: Write required for auto-merge arming** — the deployed App must be bumped, see `AUTO_MERGE_LABEL`) |
 | `KAFKA_BROKERS` | yes | — | Comma-separated Kafka broker list |
 | `STAGE` | yes | — | Deployment stage (`dev` or `prod`) |
+| `CLUSTER` | no | `nuke` | Cluster name stamped on the `cluster` label of the `github_api_*` counters |
 | `TRUSTED_AUTHORS` | yes | — | Comma-separated trusted GitHub logins; empty list refuses startup |
 | `LISTEN` | no | `:9090` | HTTP listen address (`/healthz`, `/readiness`, `/metrics`, `/check`, `/trigger`) |
 | `POLL_INTERVAL` | no | `5m` | Poll interval (Go duration string) |
@@ -130,13 +131,17 @@ reviewable would be withheld from the reviewer.
 
 ## Metrics
 
-All metrics use the `github_pr_watcher_` prefix and are exposed on `/metrics`.
+Most metrics use the `github_pr_watcher_` prefix. The two `github_api_*`
+counters are shared cross-service metric names, distinguished by their
+`service` label. All are exposed on `/metrics`.
 
 | Metric | Type | Labels | Meaning |
 |---|---|---|---|
 | `github_pr_watcher_unreviewed_prs` | gauge | `repo` (`owner/repo`), `pr` (number), `retries_exhausted` (`true`/`false`) | `1` for every open, publishable, trusted-author PR whose current head SHA has no review from a configured reviewer bot after waiting longer than `UNREVIEWED_THRESHOLD`. The PR leaves the gauge as soon as a matching review lands on its head SHA, or when it stops qualifying (closed, drafted, untrusted, oversized-parked, …). `retries_exhausted="true"` means the retry budget is used up AND the last retry has had a full threshold without a review — the alert fires on that |
 | `github_pr_watcher_unreviewed_scan_last_success_timestamp_seconds` | gauge | — | Unix seconds of the last complete unreviewed-PR scan. `0` until the first one — alert rules on it must guard `> 0`, which is how a scan that keeps failing becomes visible |
 | `github_pr_watcher_unreviewed_retries_total` | counter | `repo` (`owner/repo`) | Review tasks re-published by the retry pass. Bounded by `UNREVIEWED_RETRY_MAX` per (PR, head SHA) per process lifetime. A retry is a re-send, not proof the review arrived — pair it with the gauge |
+| `github_api_calls_total` | counter | `service` (`github-pr-watcher`), `credential` (App id), `bucket` (`search`/`graphql`/`core`), `outcome` (`success`/`error`), `cluster` | GitHub API HTTP round trips, counted once per call at the transport including transport errors. The bucket is derived from the request path, so interleaved search and core calls are attributed correctly |
+| `github_api_rate_limited_total` | counter | `service` (`github-pr-watcher`), `credential` (App id), `bucket` (`search`/`graphql`/`core`), `class` (`unclassified`), `cluster` | GitHub API responses rejected by rate limiting: status 429, or 403 with `X-RateLimit-Remaining: 0` or a `Retry-After` header. `class` is always `unclassified` until a classification rule distinguishes primary from secondary limiting |
 
 The scan runs once per poll cycle, after the cursor is saved and before the cycle
 is counted successful, so a slow or failing scan never changes the poll result.
