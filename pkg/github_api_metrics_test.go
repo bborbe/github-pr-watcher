@@ -135,6 +135,37 @@ var _ = Describe("GitHub API metrics", func() {
 		}
 	})
 
+	It("ignores an X-RateLimit-Resource header that contradicts the request path", func() {
+		const credential = "test-contradict"
+		apiMetrics := pkg.NewGitHubAPIMetrics(credential, githubAPITestCluster)
+
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch r.URL.Path {
+			case "/search/issues":
+				w.Header().Set("X-RateLimit-Resource", "core")
+			case "/repos/o/r/pulls":
+				w.Header().Set("X-RateLimit-Resource", "search")
+			}
+			w.WriteHeader(http.StatusOK)
+		}))
+		DeferCleanup(srv.Close)
+
+		client := srv.Client()
+		pkg.NewGitHubClient(client, apiMetrics)
+
+		get := func(path string) {
+			resp, err := client.Get(srv.URL + path)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(resp.Body.Close()).To(Succeed())
+		}
+		get("/search/issues")
+		get("/repos/o/r/pulls")
+		get("/search/issues")
+
+		Expect(githubAPICallsValue(credential, "search", "success")).To(Equal(float64(2)))
+		Expect(githubAPICallsValue(credential, "core", "success")).To(Equal(float64(1)))
+	})
+
 	DescribeTable(
 		"counts status and rate-limit outcomes",
 		func(status int, path string, headers map[string]string, credential, bucket string, wantRateLimited bool) {
