@@ -281,6 +281,7 @@ func NewGitHubClient(httpClient *http.Client) GitHubClient {
 	httpClient.Transport = &rateCapturingTransport{
 		inner: inner,
 		set:   c.setRateRemaining,
+		log:   logNon2xxV2,
 	}
 	c.client = gogithub.NewClient(httpClient)
 	return c
@@ -330,9 +331,16 @@ func (c *githubClient) GetRateLimitCoreRemaining(ctx context.Context) (int, erro
 // pinned at 29 = search quota while release-watcher, same token, read 6.6k-12k).
 // So only the "core" bucket is captured; responses without the header (non-GitHub
 // or legacy) are captured defensively.
+//
+// The same capture point logs one line per non-2xx response (status, rate-limit
+// bucket, remaining, Retry-After, body snippet) via log — the only record of
+// whether a 429/403 is primary-quota exhaustion or secondary rate limiting.
+// go-github does not log at its HTTP boundary, so without this line that
+// evidence is lost. A nil log disables it.
 type rateCapturingTransport struct {
 	inner http.RoundTripper
 	set   func(int)
+	log   func(string)
 }
 
 func (t *rateCapturingTransport) RoundTrip(req *http.Request) (*http.Response, error) {
@@ -341,12 +349,13 @@ func (t *rateCapturingTransport) RoundTrip(req *http.Request) (*http.Response, e
 		return resp, err
 	}
 	t.captureRemaining(resp)
+	if t.log != nil {
+		logNon2xxResponse(req, resp, t.log)
+	}
 	return resp, err
 }
 
-// captureRemaining records the response's remaining quota. Per-call logging is
-// deliberately absent: the gauge (and the alert on it) is the low-quota signal,
-// and the go-github client logs at its own HTTP boundary.
+// captureRemaining records the response's remaining quota into the gauge.
 func (t *rateCapturingTransport) captureRemaining(resp *http.Response) {
 	if resource := resp.Header.Get("X-RateLimit-Resource"); resource != "" && resource != "core" {
 		return

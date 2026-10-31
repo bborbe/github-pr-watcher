@@ -5,6 +5,10 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+- feat: log one `github non-2xx` line per non-2xx GitHub API response at the HTTP boundary (`rateCapturingTransport`), carrying `method`, `host`, `path`, `status`, `resource` (X-RateLimit-Resource), `remaining` (X-RateLimit-Remaining), `retry_after` and a body snippet truncated to 200 runes with `…`; a missing header or empty body is logged as the literal `absent`. Emitted at `glog.V(2)`, which the deployed `-v=2` shows. Without it a 429/403 cannot be split into primary-quota exhaustion and secondary rate limiting — go-github does not log at its HTTP boundary, contrary to the comment this replaces. The full URL and request headers are never logged; the response body is restored for the caller
+
 ## v0.18.5
 
 - fix: a dep-bump PR retired as superseded is no longer then overridden. `trySupersedeDepBump` closes a dirty dep-bump PR so the update-go pipeline can replace it off current master, and its documented contract — "failures never block the review path: the caller continues regardless" — was written for a *failed* close. A **successful** close also fell through, so the same poll armed auto-merge against a closed PR and then published a mechanical override for it: an APPROVE on a PR that can never merge. Observed on `bborbe/agent-pi#36`, which logged `closed superseded dep-bump` at `17:29:48`, `enable auto-merge failed … Pull request is closed` at `17:29:49`, and `mechanical override … rule=trivial-bot-bump` at `17:29:50`. The function now reports whether it closed, and both callers stop: the labeled side-effect pass skips the branch-freshness and arming steps, and the poll path records the head in the cursor and returns handled. A failed close still returns false, so the review path is untouched and the old contract holds for the case it was written for
