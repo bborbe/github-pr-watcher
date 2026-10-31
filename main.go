@@ -125,6 +125,7 @@ type application struct {
 	PEMKey                    string           `required:"false" arg:"pem-key"                     env:"PEM_KEY"                     usage:"GitHub App private key (PEM content from k8s Secret envFrom)"                                                                                                                                                                                                                                                                                                  display:"length"`
 	KafkaBrokers              libkafka.Brokers `required:"true"  arg:"kafka-brokers"               env:"KAFKA_BROKERS"               usage:"Comma-separated Kafka broker list"`
 	Stage                     string           `required:"true"  arg:"stage"                       env:"STAGE"                       usage:"Deployment stage (dev|prod)"`
+	Cluster                   string           `required:"false" arg:"cluster"                     env:"CLUSTER"                     usage:"Cluster name stamped on the github_api_* counters' cluster label"                                                                                                                                                                                                                                                      default:"nuke"`
 	PollInterval              string           `required:"false" arg:"poll-interval"               env:"POLL_INTERVAL"               usage:"Poll interval (Go duration)"                                                                                                                                                                                                                                                                                           default:"5m"`
 	CoalesceHold              string           `required:"false" arg:"coalesce-hold"               env:"COALESCE_HOLD"               usage:"Trailing-coalesce hold window: how long one PR must stay quiet before its trailing review is dispatched (Go duration)"                                                                                                                                                                                                 default:"3m"`
 	RepoScope                 string           `required:"false" arg:"repo-scope"                  env:"REPO_SCOPE"                  usage:"GitHub user/org scope"                                                                                                                                                                                                                                                                                                 default:"bborbe"`
@@ -322,7 +323,9 @@ func (a *application) Run(ctx context.Context, _ libsentry.Client) error {
 	}
 
 	// Shared instances — both the poll-loop watcher and the command consumer use them.
-	ghClient := pkg.NewGitHubClient(httpClient)
+	// The credential label is the numeric App id only — never a token or PEM key.
+	githubAPIMetrics := pkg.NewGitHubAPIMetrics(strconv.FormatInt(a.AppID, 10), a.Cluster)
+	ghClient := pkg.NewGitHubClient(httpClient, githubAPIMetrics)
 	metrics := pkg.NewMetrics()
 
 	// The retry guard's verdict check reads reviews authored by the configured
