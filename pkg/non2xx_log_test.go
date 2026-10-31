@@ -5,6 +5,7 @@
 package pkg
 
 import (
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -151,6 +152,72 @@ var _ = Describe("non-2xx response logging", func() {
 		Expect(lines[0]).NotTo(ContainSubstring("access_token"))
 	})
 
+	It("restores a body larger than the peek window in full", func() {
+		big := strings.Repeat("x", non2xxPeekBytes*3+7)
+		resp := roundTrip(http.StatusInternalServerError, nil, big)
+		read, err := io.ReadAll(resp.Body)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(string(read)).To(Equal(big))
+		Expect(lines).To(HaveLen(1))
+		Expect(lines[0]).To(HaveSuffix(" body=" + strings.Repeat("x", 200) + "…"))
+	})
+
+	It("re-surfaces a body read error to the caller instead of swallowing it", func() {
+		readErr := errors.New("connection reset mid-body")
+		resp := &http.Response{
+			StatusCode: http.StatusBadGateway,
+			Header:     http.Header{},
+			Body: io.NopCloser(
+				io.MultiReader(strings.NewReader("partial"), errReader{err: readErr}),
+			),
+		}
+		logNon2xxResponse(newNon2xxRequest(), resp, sink)
+		Expect(lines).To(HaveLen(1))
+		Expect(lines[0]).To(HaveSuffix(" body=partial"))
+		read, err := io.ReadAll(resp.Body)
+		Expect(string(read)).To(Equal("partial"))
+		Expect(err).To(MatchError(readErr))
+	})
+
+	It("closes the original body when the caller closes the restored one", func() {
+		closed := false
+		resp := &http.Response{
+			StatusCode: http.StatusNotFound,
+			Header:     http.Header{},
+			Body:       closeSpy{Reader: strings.NewReader("nf"), closed: &closed},
+		}
+		logNon2xxResponse(newNon2xxRequest(), resp, sink)
+		Expect(resp.Body.Close()).To(Succeed())
+		Expect(closed).To(BeTrue())
+	})
+
+	It("logs body=absent when the response has no body", func() {
+		logNon2xxResponse(
+			newNon2xxRequest(),
+			&http.Response{StatusCode: http.StatusNotModified, Header: http.Header{}},
+			sink,
+		)
+		Expect(lines).To(HaveLen(1))
+		Expect(
+			lines[0],
+		).To(HaveSuffix(" status=304 resource=absent remaining=absent retry_after=absent body=absent"))
+	})
+
+	It("logs absent for a nil request and for a request without a URL", func() {
+		resp := &http.Response{StatusCode: http.StatusForbidden, Header: http.Header{}}
+		Expect(
+			non2xxLine(nil, resp, nil),
+		).To(HavePrefix("github non-2xx method=absent host=absent path=absent status=403 "))
+		Expect(
+			non2xxLine(&http.Request{Method: "GET"}, resp, nil),
+		).To(HavePrefix("github non-2xx method=GET host=absent path=absent status=403 "))
+	})
+
+	It("replaces invalid UTF-8 in the body snippet", func() {
+		resp := &http.Response{StatusCode: http.StatusInternalServerError, Header: http.Header{}}
+		Expect(non2xxLine(nil, resp, []byte{'o', 'k', 0xff, 0xfe})).To(HaveSuffix(" body=ok?"))
+	})
+
 	It("emits nothing when log is nil", func() {
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			w.WriteHeader(http.StatusTooManyRequests)
@@ -164,3 +231,20 @@ var _ = Describe("non-2xx response logging", func() {
 		Expect(lines).To(BeEmpty())
 	})
 })
+
+func newNon2xxRequest() *http.Request {
+	req, err := http.NewRequest("GET", "https://api.github.com/repos/o/r", nil)
+	Expect(err).NotTo(HaveOccurred())
+	return req
+}
+
+// closeSpy records whether Close was called.
+type closeSpy struct {
+	io.Reader
+	closed *bool
+}
+
+func (c closeSpy) Close() error {
+	*c.closed = true
+	return nil
+}

@@ -29,24 +29,53 @@ func logNon2xxV2(line string) {
 	glog.V(2).Info(line)
 }
 
+// non2xxPeekBytes bounds how much of a non-2xx body is buffered for the
+// snippet: enough for non2xxBodyLimit runes of 4-byte UTF-8 plus whitespace.
+const non2xxPeekBytes = 4096
+
 // logNon2xxResponse emits one line for a response whose status is outside
-// 200-299, carrying the signals needed to tell primary-quota exhaustion from
-// secondary rate limiting. It reads the body to take a snippet and restores it,
-// so the caller still sees the full body. Nothing is emitted for a 2xx.
+// 200-299 — 3xx included, so a redirect hop or a 304 is logged too — carrying
+// the signals needed to tell primary-quota exhaustion from secondary rate
+// limiting. Nothing is emitted for a 2xx.
+//
+// Only the first non2xxPeekBytes of the body are read. The body handed back to
+// the caller is that prefix followed by the unread remainder of the original
+// body, so the caller sees the full body; a read error is not swallowed but
+// re-surfaces on the caller's own read, after the prefix.
 func logNon2xxResponse(req *http.Request, resp *http.Response, log func(string)) {
 	if resp.StatusCode >= 200 && resp.StatusCode <= 299 {
 		return
 	}
-	var body []byte
+	var prefix []byte
 	if resp.Body != nil {
-		read, err := io.ReadAll(resp.Body)
-		_ = resp.Body.Close()
-		resp.Body = io.NopCloser(bytes.NewReader(read))
-		if err == nil {
-			body = read
+		var readErr error
+		prefix, readErr = io.ReadAll(io.LimitReader(resp.Body, non2xxPeekBytes))
+		rest := io.Reader(resp.Body)
+		if readErr != nil {
+			rest = errReader{err: readErr}
+		}
+		resp.Body = peekedBody{
+			Reader: io.MultiReader(bytes.NewReader(prefix), rest),
+			Closer: resp.Body,
 		}
 	}
-	log(non2xxLine(req, resp, body))
+	log(non2xxLine(req, resp, prefix))
+}
+
+// peekedBody replays a buffered prefix before the rest of the original body
+// and closes the original body.
+type peekedBody struct {
+	io.Reader
+	io.Closer
+}
+
+// errReader returns err on every read.
+type errReader struct {
+	err error
+}
+
+func (r errReader) Read([]byte) (int, error) {
+	return 0, r.err
 }
 
 // non2xxLine formats the non-2xx line. Only method, host and path of the
