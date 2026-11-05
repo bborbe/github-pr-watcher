@@ -19,12 +19,13 @@ import (
 // command consumer (shared with /trigger).
 func CreateWebhookHandler(
 	sender command.TriggerPRReviewCommandSender,
+	statusSender command.SetDoNotMergeStatusCommandSender,
 	coalescer coalesce.Coalescer,
 	secret string,
 	metrics handler.WebhookMetrics,
 	clock libtime.CurrentDateTimeGetter,
 ) handler.WebhookHandler {
-	return handler.NewWebhookHandler(sender, coalescer, secret, metrics, clock)
+	return handler.NewWebhookHandler(sender, statusSender, coalescer, secret, metrics, clock)
 }
 
 // CreateWebhookDispatcher returns the coalescer's trailing-edge dispatcher. It
