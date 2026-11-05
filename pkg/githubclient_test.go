@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/bborbe/errors"
 	"github.com/bborbe/github-pr-watcher/pkg"
 	libtime "github.com/bborbe/time"
 	gogithub "github.com/google/go-github/v62/github"
@@ -469,6 +470,95 @@ var _ = Describe("pkg.GitHubClient", func() {
 			client := buildClient(server)
 			_, err := client.ListReviews(ctx, "owner", "repo", 42)
 			Expect(err).To(HaveOccurred())
+		})
+	})
+
+	Describe("PostCommitStatus", func() {
+		statusServer := func(code int) *httptest.Server {
+			return httptest.NewServer(
+				http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					Expect(r.Method).To(Equal(http.MethodPost))
+					Expect(r.URL.Path).To(Equal("/repos/owner/repo/statuses/sha123"))
+					w.Header().Set("Content-Type", "application/json")
+					w.WriteHeader(code)
+					if code >= 400 {
+						fmt.Fprintf(w, `{"message":"nope"}`)
+						return
+					}
+					fmt.Fprintf(w, `{"state":"success","context":"do-not-merge"}`)
+				}),
+			)
+		}
+
+		It("sends the state and context and returns nil on success", func() {
+			server := statusServer(http.StatusCreated)
+			defer server.Close()
+
+			client := buildClient(server)
+			Expect(client.PostCommitStatus(
+				ctx, "owner", "repo", "sha123",
+				pkg.CommitStateFailure, "do-not-merge",
+			)).To(Succeed())
+		})
+
+		It("marks a permission 403 permanent", func() {
+			server := statusServer(http.StatusForbidden)
+			defer server.Close()
+
+			client := buildClient(server)
+			err := client.PostCommitStatus(
+				ctx, "owner", "repo", "sha123", pkg.CommitStateSuccess, "do-not-merge",
+			)
+			Expect(err).To(HaveOccurred())
+			Expect(errors.Is(err, pkg.ErrPermanent)).To(BeTrue())
+		})
+
+		It("marks a 404 permanent", func() {
+			server := statusServer(http.StatusNotFound)
+			defer server.Close()
+
+			client := buildClient(server)
+			err := client.PostCommitStatus(
+				ctx, "owner", "repo", "sha123", pkg.CommitStateSuccess, "do-not-merge",
+			)
+			Expect(errors.Is(err, pkg.ErrPermanent)).To(BeTrue())
+		})
+
+		// 422 is what CreateStatus returns for an unknown or malformed ref. It
+		// must be permanent, or the consumer retries it forever.
+		It("marks a 422 permanent", func() {
+			server := statusServer(http.StatusUnprocessableEntity)
+			defer server.Close()
+
+			client := buildClient(server)
+			err := client.PostCommitStatus(
+				ctx, "owner", "repo", "sha123", pkg.CommitStateSuccess, "do-not-merge",
+			)
+			Expect(errors.Is(err, pkg.ErrPermanent)).To(BeTrue())
+		})
+
+		It("leaves a 500 retryable", func() {
+			server := statusServer(http.StatusInternalServerError)
+			defer server.Close()
+
+			client := buildClient(server)
+			err := client.PostCommitStatus(
+				ctx, "owner", "repo", "sha123", pkg.CommitStateSuccess, "do-not-merge",
+			)
+			Expect(err).To(HaveOccurred())
+			Expect(errors.Is(err, pkg.ErrPermanent)).To(BeFalse())
+		})
+
+		It("leaves a 429 rate limit retryable", func() {
+			server := statusServer(http.StatusTooManyRequests)
+			defer server.Close()
+
+			client := buildClient(server)
+			err := client.PostCommitStatus(
+				ctx, "owner", "repo", "sha123", pkg.CommitStateSuccess, "do-not-merge",
+			)
+			Expect(err).To(HaveOccurred())
+			Expect(errors.Is(err, pkg.ErrPermanent)).To(BeFalse())
 		})
 	})
 })

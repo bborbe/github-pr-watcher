@@ -269,16 +269,25 @@ var ErrPermanent = stderrors.New("permanent github error")
 
 // isPermanentGitHubError reports whether err is a GitHub API response whose
 // status code makes a retry pointless.
+//
+// Every 4xx is a client error a redelivery cannot fix, except the two that are
+// explicitly retryable: 408 (request timeout) and 429 (rate limited). 422 is
+// the one this endpoint returns for an unknown or malformed ref, and treating
+// it as transient would retry it forever — the endless-redelivery loop
+// ErrPermanent exists to prevent.
+//
+// A rate-limit 403 does NOT reach here: go-github surfaces those as
+// *RateLimitError / *AbuseRateLimitError, which do not match *ErrorResponse,
+// so only a plain permission 403 is classified permanent.
 func isPermanentGitHubError(err error) bool {
 	var ghErr *gogithub.ErrorResponse
 	if !stderrors.As(err, &ghErr) || ghErr.Response == nil {
 		return false
 	}
-	switch ghErr.Response.StatusCode {
-	case http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound:
-		return true
-	}
-	return false
+	code := ghErr.Response.StatusCode
+	return code >= 400 && code < 500 &&
+		code != http.StatusRequestTimeout &&
+		code != http.StatusTooManyRequests
 }
 
 // CommitState is a GitHub commit-status state. Only the two values the

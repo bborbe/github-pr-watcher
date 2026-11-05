@@ -99,6 +99,16 @@ func runSetDoNotMergeStatus(
 		// redelivery, so it skips instead of retrying forever. Everything else
 		// (5xx, network) stays a wrapped error and is retried.
 		if errors.Is(err, pkg.ErrPermanent) {
+			// Loud on purpose: a permanent post failure (most often the App
+			// missing Commit statuses: Write) removes the required
+			// `do-not-merge` context, which blocks every merge in the nine
+			// repos that require it. A silent skip would look healthy.
+			glog.Errorf(
+				"do-not-merge status permanently failed, not retrying url=%s sha=%s: %v",
+				cmd.URL,
+				cmd.HeadSHA,
+				err,
+			)
 			return nil, nil, errors.Wrapf(
 				ctx,
 				cdb.ErrCommandObjectSkipped,
