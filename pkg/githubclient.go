@@ -6,6 +6,7 @@ package pkg
 
 import (
 	"context"
+	stderrors "errors"
 	"fmt"
 	"net/http"
 	"path"
@@ -257,6 +258,27 @@ type GitHubClient interface {
 	// cycles with no open PRs would otherwise leave the gauge at 0 — the
 	// "unpopulated" sentinel — which falsely reads as quota exhaustion).
 	GetRateLimitCoreRemaining(ctx context.Context) (int, error)
+}
+
+// ErrPermanent marks a GitHub error that a redelivery cannot fix — a 401/403
+// (credential or permission) or a 404 (repo or ref gone). The command consumer
+// maps it to a skip rather than a retry: without the distinction one missing
+// App permission (Commit statuses: Write) turns every webhook delivery into an
+// endless redelivery loop, and the failure looks like a Kafka problem.
+var ErrPermanent = stderrors.New("permanent github error")
+
+// isPermanentGitHubError reports whether err is a GitHub API response whose
+// status code makes a retry pointless.
+func isPermanentGitHubError(err error) bool {
+	var ghErr *gogithub.ErrorResponse
+	if !stderrors.As(err, &ghErr) || ghErr.Response == nil {
+		return false
+	}
+	switch ghErr.Response.StatusCode {
+	case http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound:
+		return true
+	}
+	return false
 }
 
 // CommitState is a GitHub commit-status state. Only the two values the
@@ -917,6 +939,19 @@ func (c *githubClient) PostCommitStatus(
 		},
 	)
 	if err != nil {
+		if isPermanentGitHubError(err) {
+			return errors.Wrapf(
+				ctx,
+				ErrPermanent,
+				"post commit status %q %s on %s/%s@%s: %v",
+				statusContext,
+				state,
+				owner,
+				repo,
+				sha,
+				err,
+			)
+		}
 		return errors.Wrapf(
 			ctx,
 			err,

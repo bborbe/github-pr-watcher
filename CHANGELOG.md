@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
-- feat: post the `do-not-merge` commit status from the webhook receiver on `opened`, `reopened`, `synchronize`, `ready_for_review`, `labeled` and `unlabeled`, so the nine per-repo `check-do-not-merge` bridge workflows can be deleted at zero Actions minutes. `success` when the label is absent, `failure` when present, derived from the delivery's own label set. The status is published before the coalescer, so a collapsed push still leaves a reporter on its head SHA — a required context with no reporter blocks every merge. Rides the existing `githubprreview` schema as a second operation, so no new topic and no `bborbe/maintainer` change. Adds `GitHubClient.PostCommitStatus`; requires the App to hold Commit statuses: Write
+- feat: post the `do-not-merge` commit status from the webhook receiver on `opened`, `reopened`, `synchronize`, `ready_for_review`, `labeled` and `unlabeled`, so the nine per-repo `check-do-not-merge` bridge workflows can be deleted at zero Actions minutes. `success` when the label is absent, `failure` when present, derived from the delivery's own label set. The status is published before the coalescer, so a collapsed push still leaves a reporter on its head SHA — a required context with no reporter blocks every merge. Rides the existing `githubprreview` schema as a second operation, so no new topic and no `bborbe/maintainer` change. Adds `GitHubClient.PostCommitStatus`; requires the App to hold Commit statuses: Write. A 401/403/404 from the statuses API is classified permanent and skipped rather than retried, so a missing permission surfaces as a skipped command instead of an endless redelivery loop
 
 ## v0.21.0
 

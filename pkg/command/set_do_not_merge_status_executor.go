@@ -95,6 +95,17 @@ func runSetDoNotMergeStatus(
 		state,
 		DoNotMergeStatusContext,
 	); err != nil {
+		// A missing App permission or a gone repo will not succeed on a
+		// redelivery, so it skips instead of retrying forever. Everything else
+		// (5xx, network) stays a wrapped error and is retried.
+		if errors.Is(err, pkg.ErrPermanent) {
+			return nil, nil, errors.Wrapf(
+				ctx,
+				cdb.ErrCommandObjectSkipped,
+				"permanent, not retrying: %v",
+				err,
+			)
+		}
 		return nil, nil, errors.Wrapf(
 			ctx,
 			err,
