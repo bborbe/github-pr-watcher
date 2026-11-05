@@ -150,6 +150,22 @@ func CreateTriggerPRReviewCommandSender(
 	)
 }
 
+// CreateSetDoNotMergeStatusCommandSender constructs a typed
+// set-do-not-merge-status command sender backed by the same Kafka sync
+// producer and topic trio as the trigger sender. The webhook receiver
+// publishes through it on every delivery that can change the label state.
+func CreateSetDoNotMergeStatusCommandSender(
+	ctx context.Context,
+	syncProducer libkafka.SyncProducer,
+	topicPrefix base.TopicPrefix,
+) command.SetDoNotMergeStatusCommandSender {
+	return command.NewSetDoNotMergeStatusCommandSender(
+		base.NewCommandCreator(base.RequestIDChannel(ctx)),
+		cqrsiam.Initiator("watcher-github-pr"),
+		cdb.NewCommandObjectSender(syncProducer, topicPrefix, log.DefaultSamplerFactory),
+	)
+}
+
 // CreateCommandConsumer wires a run.Func that consumes TriggerPRReviewCommand
 // messages from the github-pr watcher's request topic and runs them through
 // the single-PR review pipeline (GitHub fetch → filter → trust → publish).
@@ -209,6 +225,11 @@ func CreateCommandConsumer(
 			coalescer,
 			currentDateTime,
 		),
+		// Posts the do-not-merge commit status the master-protection ruleset
+		// requires, replacing the per-repo check-do-not-merge bridge
+		// workflows. Rides the same topic trio as the trigger command; the
+		// consumer dispatches by operation.
+		command.NewSetDoNotMergeStatusCommandExecutor(ghClient),
 	}
 	return cdb.RunCommandConsumerTxDefault(
 		saramaClientProvider,

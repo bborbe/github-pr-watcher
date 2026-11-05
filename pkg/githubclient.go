@@ -6,6 +6,7 @@ package pkg
 
 import (
 	"context"
+	stderrors "errors"
 	"fmt"
 	"net/http"
 	"path"
@@ -229,6 +230,19 @@ type GitHubClient interface {
 	// the authenticating identity to hold Pull requests: Write on the repo.
 	AddLabel(ctx context.Context, owner, repo string, number int, label string) error
 
+	// PostCommitStatus posts a commit status on sha under the given context.
+	// This is the reporter that replaces the per-repo `check-do-not-merge`
+	// bridge workflows: the `do-not-merge` context is a required status check
+	// in the master-protection ruleset of nine repos, so a missing reporter
+	// blocks every merge there. Requires the authenticating identity to hold
+	// Commit statuses: Write on the repo.
+	PostCommitStatus(
+		ctx context.Context,
+		owner, repo, sha string,
+		state CommitState,
+		statusContext string,
+	) error
+
 	// RateLimitRemaining returns the requests remaining in the current primary
 	// rate-limit window, as reported by the last API response's
 	// X-RateLimit-Remaining header. Zero until the first request populates it.
@@ -245,6 +259,48 @@ type GitHubClient interface {
 	// "unpopulated" sentinel — which falsely reads as quota exhaustion).
 	GetRateLimitCoreRemaining(ctx context.Context) (int, error)
 }
+
+// ErrPermanent marks a GitHub error that a redelivery cannot fix — a 401/403
+// (credential or permission) or a 404 (repo or ref gone). The command consumer
+// maps it to a skip rather than a retry: without the distinction one missing
+// App permission (Commit statuses: Write) turns every webhook delivery into an
+// endless redelivery loop, and the failure looks like a Kafka problem.
+var ErrPermanent = stderrors.New("permanent github error")
+
+// isPermanentGitHubError reports whether err is a GitHub API response whose
+// status code makes a retry pointless.
+//
+// Every 4xx is a client error a redelivery cannot fix, except the two that are
+// explicitly retryable: 408 (request timeout) and 429 (rate limited). 422 is
+// the one this endpoint returns for an unknown or malformed ref, and treating
+// it as transient would retry it forever — the endless-redelivery loop
+// ErrPermanent exists to prevent.
+//
+// A rate-limit 403 does NOT reach here: go-github surfaces those as
+// *RateLimitError / *AbuseRateLimitError, which do not match *ErrorResponse,
+// so only a plain permission 403 is classified permanent.
+func isPermanentGitHubError(err error) bool {
+	var ghErr *gogithub.ErrorResponse
+	if !stderrors.As(err, &ghErr) || ghErr.Response == nil {
+		return false
+	}
+	code := ghErr.Response.StatusCode
+	return code >= 400 && code < 500 &&
+		code != http.StatusRequestTimeout &&
+		code != http.StatusTooManyRequests
+}
+
+// CommitState is a GitHub commit-status state. Only the two values the
+// do-not-merge gate uses are modelled; the API also accepts pending and
+// error, which this watcher never posts.
+type CommitState string
+
+const (
+	// CommitStateSuccess reports that the PR carries no blocking label.
+	CommitStateSuccess CommitState = "success"
+	// CommitStateFailure reports that the PR carries the blocking label.
+	CommitStateFailure CommitState = "failure"
+)
 
 // Review is a single PR review, reduced to the fields the unreviewed-PR scan
 // needs: who reviewed, and which commit they reviewed.
@@ -869,6 +925,51 @@ func (c *githubClient) AddLabel(
 			owner,
 			repo,
 			number,
+		)
+	}
+	return nil
+}
+
+// PostCommitStatus posts a commit status on sha under statusContext.
+func (c *githubClient) PostCommitStatus(
+	ctx context.Context,
+	owner, repo, sha string,
+	state CommitState,
+	statusContext string,
+) error {
+	_, _, err := c.client.Repositories.CreateStatus(
+		ctx,
+		owner,
+		repo,
+		sha,
+		&gogithub.RepoStatus{
+			State:   gogithub.String(string(state)),
+			Context: gogithub.String(statusContext),
+		},
+	)
+	if err != nil {
+		if isPermanentGitHubError(err) {
+			return errors.Wrapf(
+				ctx,
+				ErrPermanent,
+				"post commit status %q %s on %s/%s@%s: %v",
+				statusContext,
+				state,
+				owner,
+				repo,
+				sha,
+				err,
+			)
+		}
+		return errors.Wrapf(
+			ctx,
+			err,
+			"post commit status %q %s on %s/%s@%s",
+			statusContext,
+			state,
+			owner,
+			repo,
+			sha,
 		)
 	}
 	return nil

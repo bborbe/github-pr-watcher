@@ -5,6 +5,10 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+- feat: post the `do-not-merge` commit status from the webhook receiver on `opened`, `reopened`, `synchronize`, `ready_for_review`, `labeled` and `unlabeled`, so the nine per-repo `check-do-not-merge` bridge workflows can be deleted at zero Actions minutes. `success` when the label is absent, `failure` when present, derived from the delivery's own label set. The status is published before the coalescer, so a collapsed push still leaves a reporter on its head SHA — a required context with no reporter blocks every merge. Rides the existing `githubprreview` schema as a second operation, so no new topic and no `bborbe/maintainer` change. Adds `GitHubClient.PostCommitStatus`; requires the App to hold Commit statuses: Write. Every 4xx except 408 and 429 is classified permanent and skipped rather than retried — including 422, which is what the statuses API returns for an unknown ref — so a missing permission or a bad SHA surfaces as a loudly logged skip instead of an endless redelivery loop
+
 ## v0.21.0
 
 - feat: build the image inside a cluster via `make build BUILD_TARGET=<cluster>`

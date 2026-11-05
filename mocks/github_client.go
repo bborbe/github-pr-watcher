@@ -150,6 +150,22 @@ type GitHubClient struct {
 		result1 []pkg.Review
 		result2 error
 	}
+	PostCommitStatusStub        func(context.Context, string, string, string, pkg.CommitState, string) error
+	postCommitStatusMutex       sync.RWMutex
+	postCommitStatusArgsForCall []struct {
+		arg1 context.Context
+		arg2 string
+		arg3 string
+		arg4 string
+		arg5 pkg.CommitState
+		arg6 string
+	}
+	postCommitStatusReturns struct {
+		result1 error
+	}
+	postCommitStatusReturnsOnCall map[int]struct {
+		result1 error
+	}
 	RateLimitRemainingStub        func() int
 	rateLimitRemainingMutex       sync.RWMutex
 	rateLimitRemainingArgsForCall []struct {
@@ -814,6 +830,72 @@ func (fake *GitHubClient) ListReviewsReturnsOnCall(i int, result1 []pkg.Review, 
 		result1 []pkg.Review
 		result2 error
 	}{result1, result2}
+}
+
+func (fake *GitHubClient) PostCommitStatus(arg1 context.Context, arg2 string, arg3 string, arg4 string, arg5 pkg.CommitState, arg6 string) error {
+	fake.postCommitStatusMutex.Lock()
+	ret, specificReturn := fake.postCommitStatusReturnsOnCall[len(fake.postCommitStatusArgsForCall)]
+	fake.postCommitStatusArgsForCall = append(fake.postCommitStatusArgsForCall, struct {
+		arg1 context.Context
+		arg2 string
+		arg3 string
+		arg4 string
+		arg5 pkg.CommitState
+		arg6 string
+	}{arg1, arg2, arg3, arg4, arg5, arg6})
+	stub := fake.PostCommitStatusStub
+	fakeReturns := fake.postCommitStatusReturns
+	fake.recordInvocation("PostCommitStatus", []interface{}{arg1, arg2, arg3, arg4, arg5, arg6})
+	fake.postCommitStatusMutex.Unlock()
+	if stub != nil {
+		return stub(arg1, arg2, arg3, arg4, arg5, arg6)
+	}
+	if specificReturn {
+		return ret.result1
+	}
+	return fakeReturns.result1
+}
+
+func (fake *GitHubClient) PostCommitStatusCallCount() int {
+	fake.postCommitStatusMutex.RLock()
+	defer fake.postCommitStatusMutex.RUnlock()
+	return len(fake.postCommitStatusArgsForCall)
+}
+
+func (fake *GitHubClient) PostCommitStatusCalls(stub func(context.Context, string, string, string, pkg.CommitState, string) error) {
+	fake.postCommitStatusMutex.Lock()
+	defer fake.postCommitStatusMutex.Unlock()
+	fake.PostCommitStatusStub = stub
+}
+
+func (fake *GitHubClient) PostCommitStatusArgsForCall(i int) (context.Context, string, string, string, pkg.CommitState, string) {
+	fake.postCommitStatusMutex.RLock()
+	defer fake.postCommitStatusMutex.RUnlock()
+	argsForCall := fake.postCommitStatusArgsForCall[i]
+	return argsForCall.arg1, argsForCall.arg2, argsForCall.arg3, argsForCall.arg4, argsForCall.arg5, argsForCall.arg6
+}
+
+func (fake *GitHubClient) PostCommitStatusReturns(result1 error) {
+	fake.postCommitStatusMutex.Lock()
+	defer fake.postCommitStatusMutex.Unlock()
+	fake.PostCommitStatusStub = nil
+	fake.postCommitStatusReturns = struct {
+		result1 error
+	}{result1}
+}
+
+func (fake *GitHubClient) PostCommitStatusReturnsOnCall(i int, result1 error) {
+	fake.postCommitStatusMutex.Lock()
+	defer fake.postCommitStatusMutex.Unlock()
+	fake.PostCommitStatusStub = nil
+	if fake.postCommitStatusReturnsOnCall == nil {
+		fake.postCommitStatusReturnsOnCall = make(map[int]struct {
+			result1 error
+		})
+	}
+	fake.postCommitStatusReturnsOnCall[i] = struct {
+		result1 error
+	}{result1}
 }
 
 func (fake *GitHubClient) RateLimitRemaining() int {

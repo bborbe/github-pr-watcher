@@ -47,19 +47,22 @@ func noOpCoalescer() coalesce.Coalescer {
 
 var _ = Describe("WebhookHandler", func() {
 	var (
-		ctx     context.Context
-		sender  *mocks.TriggerPRReviewCommandSender
-		metrics *mocks.Metrics
-		h       http.Handler
+		ctx          context.Context
+		sender       *mocks.TriggerPRReviewCommandSender
+		statusSender *mocks.SetDoNotMergeStatusCommandSender
+		metrics      *mocks.Metrics
+		h            http.Handler
 	)
 
 	BeforeEach(func() {
 		ctx = context.Background()
 		sender = new(mocks.TriggerPRReviewCommandSender)
+		statusSender = new(mocks.SetDoNotMergeStatusCommandSender)
 		metrics = new(mocks.Metrics)
 		h = libhttp.NewErrorHandler(
 			handler.NewWebhookHandler(
 				sender,
+				statusSender,
 				noOpCoalescer(),
 				webhookTestSecret,
 				metrics,
@@ -77,8 +80,26 @@ var _ = Describe("WebhookHandler", func() {
 		return req
 	}
 
+	// testHeadSHA is the commit every fixture delivery reports. A real GitHub
+	// pull_request payload always carries pull_request.head.sha, so the
+	// fixtures do too — otherwise the do-not-merge status path would only ever
+	// be exercised against a shape GitHub never sends.
+	const testHeadSHA = "0123456789abcdef0123456789abcdef01234567"
+
 	pullRequestPayload := func(action string) string {
-		return `{"action":"` + action + `","pull_request":{"html_url":"https://github.com/bborbe/repo/pull/42"}}`
+		return `{"action":"` + action + `","pull_request":{"html_url":"https://github.com/bborbe/repo/pull/42","head":{"sha":"` + testHeadSHA + `"}}}`
+	}
+
+	// labeledPayload builds a delivery whose PR carries exactly the given labels.
+	labeledPayload := func(action string, labels ...string) string {
+		quoted := make([]string, 0, len(labels))
+		for _, label := range labels {
+			quoted = append(quoted, `{"name":"`+label+`"}`)
+		}
+		return `{"action":"` + action + `","pull_request":{"html_url":"https://github.com/bborbe/repo/pull/42","head":{"sha":"` + testHeadSHA + `"},"labels":[` + strings.Join(
+			quoted,
+			",",
+		) + `]}}`
 	}
 
 	Context("signature verification", func() {
@@ -123,6 +144,7 @@ var _ = Describe("WebhookHandler", func() {
 			closed := libhttp.NewErrorHandler(
 				handler.NewWebhookHandler(
 					sender,
+					new(mocks.SetDoNotMergeStatusCommandSender),
 					noOpCoalescer(),
 					"",
 					metrics,
@@ -236,6 +258,69 @@ var _ = Describe("WebhookHandler", func() {
 		})
 	})
 
+	Context("do-not-merge commit status", func() {
+		It("posts the status on opened and still publishes the review", func() {
+			req := webhookRequest("pull_request", pullRequestPayload("opened"))
+			resp := httptest.NewRecorder()
+			h.ServeHTTP(resp, req)
+
+			Expect(resp.Code).To(Equal(http.StatusAccepted))
+			Expect(statusSender.SendCommandCallCount()).To(Equal(1))
+			_, statusCmd := statusSender.SendCommandArgsForCall(0)
+			Expect(statusCmd.URL).To(Equal("https://github.com/bborbe/repo/pull/42"))
+			Expect(statusCmd.HeadSHA).To(Equal(testHeadSHA))
+			Expect(statusCmd.Blocked()).To(BeFalse())
+			Expect(sender.SendCommandCallCount()).To(Equal(1))
+		})
+
+		It("posts failure and publishes no review on labeled", func() {
+			req := webhookRequest("pull_request", labeledPayload("labeled", "do-not-merge"))
+			resp := httptest.NewRecorder()
+			h.ServeHTTP(resp, req)
+
+			// Acknowledged, not dispatched: a label event carries no new head
+			// to review, so the receiver answers 200 while the status command
+			// still goes out.
+			Expect(resp.Code).To(Equal(http.StatusOK))
+			Expect(statusSender.SendCommandCallCount()).To(Equal(1))
+			_, statusCmd := statusSender.SendCommandArgsForCall(0)
+			Expect(statusCmd.Blocked()).To(BeTrue())
+			Expect(sender.SendCommandCallCount()).To(Equal(0))
+		})
+
+		It("posts success and publishes no review on unlabeled", func() {
+			req := webhookRequest("pull_request", labeledPayload("unlabeled"))
+			resp := httptest.NewRecorder()
+			h.ServeHTTP(resp, req)
+
+			Expect(resp.Code).To(Equal(http.StatusOK))
+			Expect(statusSender.SendCommandCallCount()).To(Equal(1))
+			_, statusCmd := statusSender.SendCommandArgsForCall(0)
+			Expect(statusCmd.Blocked()).To(BeFalse())
+			Expect(sender.SendCommandCallCount()).To(Equal(0))
+		})
+
+		It("returns 502 when the status send fails, and publishes no review", func() {
+			statusSender.SendCommandReturns(errors.Errorf(ctx, "kafka down"))
+			req := webhookRequest("pull_request", pullRequestPayload("opened"))
+			resp := httptest.NewRecorder()
+			h.ServeHTTP(resp, req)
+
+			Expect(resp.Code).To(Equal(http.StatusBadGateway))
+			Expect(sender.SendCommandCallCount()).To(Equal(0))
+		})
+
+		It("does not post the status on a delivery that cannot change it", func() {
+			req := webhookRequest("pull_request", pullRequestPayload("closed"))
+			resp := httptest.NewRecorder()
+			h.ServeHTTP(resp, req)
+
+			Expect(resp.Code).To(Equal(http.StatusOK))
+			Expect(statusSender.SendCommandCallCount()).To(Equal(0))
+			Expect(sender.SendCommandCallCount()).To(Equal(0))
+		})
+	})
+
 	Context("trailing coalesce", func() {
 		var (
 			now       stdtime.Time
@@ -259,6 +344,7 @@ var _ = Describe("WebhookHandler", func() {
 			hc = libhttp.NewErrorHandler(
 				handler.NewWebhookHandler(
 					sender,
+					new(mocks.SetDoNotMergeStatusCommandSender),
 					gate,
 					webhookTestSecret,
 					metrics,
