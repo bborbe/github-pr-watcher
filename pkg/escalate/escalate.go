@@ -108,6 +108,8 @@ func (e Escalation) message() string {
 // logic is testable without a Kafka broker.
 type PublishFunc func(ctx context.Context, message string) error
 
+//counterfeiter:generate -o ../../mocks/escalator.go --fake-name Escalator . Escalator
+
 // Escalator publishes auto-merge refusals exactly once per episode.
 type Escalator interface {
 	// Escalate publishes the escalation unless this episode was already
@@ -119,15 +121,20 @@ type Escalator interface {
 	// escalates once ChecksNotGreenThreshold consecutive observations are
 	// reached. It is idempotent past the threshold because Escalate dedupes.
 	ObserveNotGreen(ctx context.Context, escalation Escalation) (bool, error)
-	// Reset drops the non-green observation counters for a PR. The watcher
-	// calls it when a PR arms successfully or its head SHA moves on.
+	// Reset drops every non-green observation counter for a PR, across all head
+	// SHAs. The watcher calls it once the PR's checks go green, so a PR that
+	// goes green and red again must accumulate the threshold afresh.
 	Reset(ctx context.Context, repo string, number int)
 }
 
 type escalator struct {
-	publish   PublishFunc
-	mu        sync.Mutex
-	notified  map[string]struct{}
+	publish PublishFunc
+	mu      sync.Mutex
+	// notified holds episodes already published.
+	notified map[string]struct{}
+	// inflight holds episodes being published right now. It is what makes the
+	// publish itself deduped without holding the lock across the network call.
+	inflight  map[string]struct{}
 	notGreen  map[string]int
 	threshold int
 }
@@ -137,6 +144,7 @@ func NewEscalator(publish PublishFunc) Escalator {
 	return &escalator{
 		publish:   publish,
 		notified:  map[string]struct{}{},
+		inflight:  map[string]struct{}{},
 		notGreen:  map[string]int{},
 		threshold: ChecksNotGreenThreshold,
 	}
@@ -158,24 +166,36 @@ func NewNotificationPublishFunc(
 func (e *escalator) Escalate(ctx context.Context, escalation Escalation) (bool, error) {
 	key := escalation.episodeKey()
 
-	// The lock is held across the publish so two concurrent callers (the poll
-	// loop and the webhook handler) cannot both pass the duplicate check and
-	// publish twice. Escalations are low-frequency and the send is short.
+	// Two-phase reservation: mark the episode inflight under the lock, publish
+	// outside it, then move it to notified. Holding the lock across the network
+	// call would serialise every escalation behind the slowest send; skipping
+	// the inflight set would let two concurrent callers (the poll loop and the
+	// webhook handler) publish the same episode twice.
 	e.mu.Lock()
-	defer e.mu.Unlock()
-
 	if _, ok := e.notified[key]; ok {
+		e.mu.Unlock()
 		return false, nil
 	}
+	if _, ok := e.inflight[key]; ok {
+		e.mu.Unlock()
+		return false, nil
+	}
+	e.inflight[key] = struct{}{}
+	e.mu.Unlock()
 
-	if err := e.publish(ctx, escalation.message()); err != nil {
+	err := e.publish(ctx, escalation.message())
+
+	e.mu.Lock()
+	delete(e.inflight, key)
+	if err != nil {
+		e.mu.Unlock()
 		return false, errors.Wrapf(ctx, err, "publish escalation %s", key)
 	}
-
 	if len(e.notified) >= maxEpisodes {
 		e.notified = map[string]struct{}{}
 	}
 	e.notified[key] = struct{}{}
+	e.mu.Unlock()
 
 	glog.Infof(
 		"escalated pr=%s class=%s repo=%s#%d head=%s",
@@ -195,6 +215,12 @@ func (e *escalator) ObserveNotGreen(
 	key := escalation.checksKey()
 
 	e.mu.Lock()
+	if len(e.notGreen) >= maxEpisodes {
+		// Same bounded-growth trade as the notified map: clearing can restart a
+		// threshold, but an unbounded counter map is a real leak in a watcher
+		// that runs for months.
+		e.notGreen = map[string]int{}
+	}
 	e.notGreen[key]++
 	observed := e.notGreen[key]
 	e.mu.Unlock()

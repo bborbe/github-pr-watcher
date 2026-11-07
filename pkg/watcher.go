@@ -1556,14 +1556,16 @@ func (w *watcher) observeHeldPR(ctx context.Context, pr PullRequest, details PRD
 	if w.escalateReviewRequestChanges(ctx, pr, details) {
 		return
 	}
-	state, err := w.ghClient.GetCombinedStatusState(
+	state, err := w.ghClient.GetCommitState(
 		ctx,
 		pr.Owner,
 		pr.Repo,
 		details.HeadSHA,
 	)
 	if err != nil {
-		glog.V(2).Infof("combined status read failed pr=%s err=%v", pr.HTMLURL, err)
+		// Warning, not V(2): a failed read means the checks-not-green class
+		// cannot fire this cycle, and silence would read as "all green".
+		glog.Warningf("commit state read failed pr=%s err=%v", pr.HTMLURL, err)
 		return
 	}
 	if state == string(CommitStateSuccess) {
@@ -1600,18 +1602,27 @@ func (w *watcher) escalateReviewRequestChanges(
 ) bool {
 	reviews, err := w.ghClient.ListReviews(ctx, pr.Owner, pr.Repo, pr.Number)
 	if err != nil {
-		glog.V(2).Infof("list reviews failed pr=%s err=%v", pr.HTMLURL, err)
+		glog.Warningf("list reviews failed pr=%s err=%v", pr.HTMLURL, err)
 		return false
 	}
-	// reviewDecision is latest-review-per-reviewer, and only a review on the
+	// reviewDecision is latest-verdict-per-reviewer, and only a review on the
 	// current head SHA counts: a CHANGES_REQUESTED left on an older commit is
 	// superseded by the push that followed it.
-	latest := map[string]string{}
+	//
+	// COMMENTED and PENDING are not verdicts. Letting them overwrite would mask
+	// a CHANGES_REQUESTED whenever the reviewer leaves a follow-up comment —
+	// GitHub keeps the review blocking in exactly that case.
+	latest := map[string]ReviewState{}
 	for _, review := range reviews {
 		if review.CommitID != details.HeadSHA {
 			continue
 		}
-		latest[review.AuthorLogin] = review.State
+		switch review.State {
+		case ReviewStateApproved, ReviewStateChangesRequested, ReviewStateDismissed:
+			latest[review.AuthorLogin] = review.State
+		default:
+			// COMMENTED / PENDING do not change the verdict.
+		}
 	}
 	authors := make([]string, 0, len(latest))
 	for author := range latest {

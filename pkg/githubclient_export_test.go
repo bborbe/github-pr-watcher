@@ -11,3 +11,10 @@ import gogithub "github.com/google/go-github/v62/github"
 func NewForTest(c *gogithub.Client) GitHubClient {
 	return &githubClient{client: c}
 }
+
+// MergeCommitStateForTest exposes mergeCommitState for unit testing. The
+// combined-status read alone excludes GitHub Actions check runs, so the fold is
+// the part worth pinning.
+func MergeCommitStateForTest(combined string, runs []*gogithub.CheckRun) string {
+	return mergeCommitState(combined, runs)
+}

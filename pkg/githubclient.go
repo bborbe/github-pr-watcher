@@ -173,12 +173,16 @@ type GitHubClient interface {
 	// reviewed the PR's current head SHA. A review in any state counts.
 	ListReviews(ctx context.Context, owner, repo string, number int) ([]Review, error)
 
-	// GetCombinedStatusState returns the combined commit-status state for ref:
-	// "success", "pending", "failure", or "error". It is the read the
-	// checks-not-green escalation is built on — the watcher arms auto-merge and
-	// GitHub holds the PR, so this is the only place the watcher can observe
-	// that the hold is not clearing.
-	GetCombinedStatusState(ctx context.Context, owner, repo, ref string) (string, error)
+	// GetCommitState returns the merge-blocking state of ref as one of
+	// "success", "pending" or "failure". It merges BOTH signals GitHub uses:
+	// the legacy combined commit-status state AND the check runs. The combined
+	// status alone excludes GitHub Actions check runs, so a repo whose CI is an
+	// Actions workflow would read success while its test run failed.
+	//
+	// It is the read the checks-not-green escalation is built on — the watcher
+	// arms auto-merge and GitHub holds the PR, so this is the only place the
+	// watcher can observe that the hold is not clearing.
+	GetCommitState(ctx context.Context, owner, repo, ref string) (string, error)
 
 	// EnableAutoMerge arms GitHub-native auto-merge on a PR: when all merge
 	// requirements (required status checks + required reviews per the repo
@@ -316,14 +320,22 @@ type Review struct {
 	AuthorLogin string
 	// CommitID is the head SHA the review was posted against.
 	CommitID string
-	// State is the review's verdict: APPROVED, CHANGES_REQUESTED, COMMENTED,
-	// DISMISSED, or PENDING. Only a CHANGES_REQUESTED review on the current
-	// head SHA blocks the merge and escalates.
-	State string
+	// State is the review's verdict. Only a CHANGES_REQUESTED review on the
+	// current head SHA blocks the merge and escalates.
+	State ReviewState
 }
 
-// ReviewStateChangesRequested is the review state that blocks a merge.
-const ReviewStateChangesRequested = "CHANGES_REQUESTED"
+// ReviewState is a GitHub review verdict, typed so a state-name typo is caught
+// by the compiler rather than silently never matching.
+type ReviewState string
+
+const (
+	ReviewStateApproved         ReviewState = "APPROVED"
+	ReviewStateChangesRequested ReviewState = "CHANGES_REQUESTED"
+	ReviewStateCommented        ReviewState = "COMMENTED"
+	ReviewStateDismissed        ReviewState = "DISMISSED"
+	ReviewStatePending          ReviewState = "PENDING"
+)
 
 // PRFile is a single changed file in a PR with its patch, as returned by the
 // pull-request files endpoint. Patch may be empty for large/binary files.
@@ -911,7 +923,7 @@ func (c *githubClient) ListReviews(
 			reviews = append(reviews, Review{
 				AuthorLogin: r.GetUser().GetLogin(),
 				CommitID:    r.GetCommitID(),
-				State:       r.GetState(),
+				State:       ReviewState(r.GetState()),
 			})
 		}
 		if resp.NextPage == 0 {
@@ -945,13 +957,15 @@ func (c *githubClient) AddLabel(
 	return nil
 }
 
-// GetCombinedStatusState returns the combined commit-status state for ref.
+// GetCommitState returns the merge-blocking state of ref, merging the legacy
+// combined commit-status state with the check runs.
 //
-// A ref with no statuses reports "pending", which is exactly the state a
-// labelled PR sits in while its required checks have not reported: the watcher
-// arms auto-merge, GitHub holds the PR, and nothing else in the watcher can
-// see that the hold is not clearing.
-func (c *githubClient) GetCombinedStatusState(
+// Both reads are required. The combined status covers commit statuses (the
+// watcher's own `do-not-merge` status among them) but NOT GitHub Actions check
+// runs, so reading it alone reports success for a repo whose `test` workflow is
+// red. The check runs cover the workflow side. Failure wins over pending wins
+// over success, so a red run is never masked by a green status.
+func (c *githubClient) GetCommitState(
 	ctx context.Context,
 	owner, repo, ref string,
 ) (string, error) {
@@ -972,7 +986,48 @@ func (c *githubClient) GetCombinedStatusState(
 			ref,
 		)
 	}
-	return status.GetState(), nil
+	runs, _, err := c.client.Checks.ListCheckRunsForRef(
+		ctx,
+		owner,
+		repo,
+		ref,
+		&gogithub.ListCheckRunsOptions{},
+	)
+	if err != nil {
+		return "", errors.Wrapf(
+			ctx,
+			err,
+			"list check runs %s/%s@%s",
+			owner,
+			repo,
+			ref,
+		)
+	}
+	return mergeCommitState(status.GetState(), runs.CheckRuns), nil
+}
+
+// mergeCommitState folds the combined status state and the check runs into one
+// verdict. Failure wins over pending wins over success.
+func mergeCommitState(combined string, runs []*gogithub.CheckRun) string {
+	state := combined
+	if state == "" {
+		state = "pending"
+	}
+	for _, run := range runs {
+		if run.GetStatus() != "completed" {
+			if state == "success" {
+				state = "pending"
+			}
+			continue
+		}
+		switch run.GetConclusion() {
+		case "success", "neutral", "skipped":
+			// Not blocking.
+		default:
+			return "failure"
+		}
+	}
+	return state
 }
 
 // PostCommitStatus posts a commit status on sha under statusContext.

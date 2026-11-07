@@ -59,19 +59,19 @@ type GitHubClient struct {
 	enableAutoMergeReturnsOnCall map[int]struct {
 		result1 error
 	}
-	GetCombinedStatusStateStub        func(context.Context, string, string, string) (string, error)
-	getCombinedStatusStateMutex       sync.RWMutex
-	getCombinedStatusStateArgsForCall []struct {
+	GetCommitStateStub        func(context.Context, string, string, string) (string, error)
+	getCommitStateMutex       sync.RWMutex
+	getCommitStateArgsForCall []struct {
 		arg1 context.Context
 		arg2 string
 		arg3 string
 		arg4 string
 	}
-	getCombinedStatusStateReturns struct {
+	getCommitStateReturns struct {
 		result1 string
 		result2 error
 	}
-	getCombinedStatusStateReturnsOnCall map[int]struct {
+	getCommitStateReturnsOnCall map[int]struct {
 		result1 string
 		result2 error
 	}
@@ -451,19 +451,19 @@ func (fake *GitHubClient) EnableAutoMergeReturnsOnCall(i int, result1 error) {
 	}{result1}
 }
 
-func (fake *GitHubClient) GetCombinedStatusState(arg1 context.Context, arg2 string, arg3 string, arg4 string) (string, error) {
-	fake.getCombinedStatusStateMutex.Lock()
-	ret, specificReturn := fake.getCombinedStatusStateReturnsOnCall[len(fake.getCombinedStatusStateArgsForCall)]
-	fake.getCombinedStatusStateArgsForCall = append(fake.getCombinedStatusStateArgsForCall, struct {
+func (fake *GitHubClient) GetCommitState(arg1 context.Context, arg2 string, arg3 string, arg4 string) (string, error) {
+	fake.getCommitStateMutex.Lock()
+	ret, specificReturn := fake.getCommitStateReturnsOnCall[len(fake.getCommitStateArgsForCall)]
+	fake.getCommitStateArgsForCall = append(fake.getCommitStateArgsForCall, struct {
 		arg1 context.Context
 		arg2 string
 		arg3 string
 		arg4 string
 	}{arg1, arg2, arg3, arg4})
-	stub := fake.GetCombinedStatusStateStub
-	fakeReturns := fake.getCombinedStatusStateReturns
-	fake.recordInvocation("GetCombinedStatusState", []interface{}{arg1, arg2, arg3, arg4})
-	fake.getCombinedStatusStateMutex.Unlock()
+	stub := fake.GetCommitStateStub
+	fakeReturns := fake.getCommitStateReturns
+	fake.recordInvocation("GetCommitState", []interface{}{arg1, arg2, arg3, arg4})
+	fake.getCommitStateMutex.Unlock()
 	if stub != nil {
 		return stub(arg1, arg2, arg3, arg4)
 	}
@@ -473,46 +473,46 @@ func (fake *GitHubClient) GetCombinedStatusState(arg1 context.Context, arg2 stri
 	return fakeReturns.result1, fakeReturns.result2
 }
 
-func (fake *GitHubClient) GetCombinedStatusStateCallCount() int {
-	fake.getCombinedStatusStateMutex.RLock()
-	defer fake.getCombinedStatusStateMutex.RUnlock()
-	return len(fake.getCombinedStatusStateArgsForCall)
+func (fake *GitHubClient) GetCommitStateCallCount() int {
+	fake.getCommitStateMutex.RLock()
+	defer fake.getCommitStateMutex.RUnlock()
+	return len(fake.getCommitStateArgsForCall)
 }
 
-func (fake *GitHubClient) GetCombinedStatusStateCalls(stub func(context.Context, string, string, string) (string, error)) {
-	fake.getCombinedStatusStateMutex.Lock()
-	defer fake.getCombinedStatusStateMutex.Unlock()
-	fake.GetCombinedStatusStateStub = stub
+func (fake *GitHubClient) GetCommitStateCalls(stub func(context.Context, string, string, string) (string, error)) {
+	fake.getCommitStateMutex.Lock()
+	defer fake.getCommitStateMutex.Unlock()
+	fake.GetCommitStateStub = stub
 }
 
-func (fake *GitHubClient) GetCombinedStatusStateArgsForCall(i int) (context.Context, string, string, string) {
-	fake.getCombinedStatusStateMutex.RLock()
-	defer fake.getCombinedStatusStateMutex.RUnlock()
-	argsForCall := fake.getCombinedStatusStateArgsForCall[i]
+func (fake *GitHubClient) GetCommitStateArgsForCall(i int) (context.Context, string, string, string) {
+	fake.getCommitStateMutex.RLock()
+	defer fake.getCommitStateMutex.RUnlock()
+	argsForCall := fake.getCommitStateArgsForCall[i]
 	return argsForCall.arg1, argsForCall.arg2, argsForCall.arg3, argsForCall.arg4
 }
 
-func (fake *GitHubClient) GetCombinedStatusStateReturns(result1 string, result2 error) {
-	fake.getCombinedStatusStateMutex.Lock()
-	defer fake.getCombinedStatusStateMutex.Unlock()
-	fake.GetCombinedStatusStateStub = nil
-	fake.getCombinedStatusStateReturns = struct {
+func (fake *GitHubClient) GetCommitStateReturns(result1 string, result2 error) {
+	fake.getCommitStateMutex.Lock()
+	defer fake.getCommitStateMutex.Unlock()
+	fake.GetCommitStateStub = nil
+	fake.getCommitStateReturns = struct {
 		result1 string
 		result2 error
 	}{result1, result2}
 }
 
-func (fake *GitHubClient) GetCombinedStatusStateReturnsOnCall(i int, result1 string, result2 error) {
-	fake.getCombinedStatusStateMutex.Lock()
-	defer fake.getCombinedStatusStateMutex.Unlock()
-	fake.GetCombinedStatusStateStub = nil
-	if fake.getCombinedStatusStateReturnsOnCall == nil {
-		fake.getCombinedStatusStateReturnsOnCall = make(map[int]struct {
+func (fake *GitHubClient) GetCommitStateReturnsOnCall(i int, result1 string, result2 error) {
+	fake.getCommitStateMutex.Lock()
+	defer fake.getCommitStateMutex.Unlock()
+	fake.GetCommitStateStub = nil
+	if fake.getCommitStateReturnsOnCall == nil {
+		fake.getCommitStateReturnsOnCall = make(map[int]struct {
 			result1 string
 			result2 error
 		})
 	}
-	fake.getCombinedStatusStateReturnsOnCall[i] = struct {
+	fake.getCommitStateReturnsOnCall[i] = struct {
 		result1 string
 		result2 error
 	}{result1, result2}
