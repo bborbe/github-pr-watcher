@@ -986,31 +986,57 @@ func (c *githubClient) GetCommitState(
 			ref,
 		)
 	}
-	runs, _, err := c.client.Checks.ListCheckRunsForRef(
-		ctx,
-		owner,
-		repo,
-		ref,
-		&gogithub.ListCheckRunsOptions{},
-	)
-	if err != nil {
-		return "", errors.Wrapf(
+	// Paginate to exhaustion: the default page is 30 runs, and a failing run
+	// beyond the first page would otherwise be invisible.
+	var runs []*gogithub.CheckRun
+	opts := &gogithub.ListCheckRunsOptions{
+		ListOptions: gogithub.ListOptions{PerPage: 100},
+	}
+	for {
+		select {
+		case <-ctx.Done():
+			return "", errors.Wrapf(ctx, ctx.Err(), "list check runs %s/%s@%s", owner, repo, ref)
+		default:
+		}
+		page, resp, err := c.client.Checks.ListCheckRunsForRef(
 			ctx,
-			err,
-			"list check runs %s/%s@%s",
 			owner,
 			repo,
 			ref,
+			opts,
 		)
+		if err != nil {
+			return "", errors.Wrapf(
+				ctx,
+				err,
+				"list check runs %s/%s@%s",
+				owner,
+				repo,
+				ref,
+			)
+		}
+		runs = append(runs, page.CheckRuns...)
+		if resp.NextPage == 0 {
+			break
+		}
+		opts.Page = resp.NextPage
 	}
-	return mergeCommitState(status.GetState(), runs.CheckRuns), nil
+	return mergeCommitState(status.GetState(), status.GetTotalCount(), runs), nil
 }
 
 // mergeCommitState folds the combined status state and the check runs into one
 // verdict. Failure wins over pending wins over success.
-func mergeCommitState(combined string, runs []*gogithub.CheckRun) string {
+//
+// totalCount is the combined status's own count of statuses. GitHub reports a
+// ref with NO commit statuses as `state: pending, total_count: 0`, so a repo
+// whose gate is purely check runs would otherwise read pending forever and
+// escalate every labelled PR. With zero statuses the commit-status half is
+// neutral and the check runs decide.
+func mergeCommitState(combined string, totalCount int, runs []*gogithub.CheckRun) string {
 	state := combined
-	if state == "" {
+	if totalCount == 0 {
+		state = "success"
+	} else if state == "" {
 		state = "pending"
 	}
 	for _, run := range runs {

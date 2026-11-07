@@ -19,26 +19,39 @@ func checkRun(status, conclusion string) *gogithub.CheckRun {
 }
 
 var _ = Describe("MergeCommitStateForTest", func() {
-	DescribeTable("folds combined status and check runs",
-		func(combined string, runs []*gogithub.CheckRun, expected string) {
-			Expect(pkg.MergeCommitStateForTest(combined, runs)).To(Equal(expected))
+	DescribeTable(
+		"folds combined status and check runs",
+		func(combined string, totalCount int, runs []*gogithub.CheckRun, expected string) {
+			Expect(pkg.MergeCommitStateForTest(combined, totalCount, runs)).To(Equal(expected))
 		},
-		Entry("no statuses and no runs -> pending", "", nil, "pending"),
-		Entry("combined success, no runs -> success", "success", nil, "success"),
-		Entry("combined success, green run -> success", "success",
+		Entry(
+			"no statuses, no runs -> success (no check signal to block on)",
+			"",
+			0,
+			nil,
+			"success",
+		),
+		Entry("combined success, no runs -> success", "success", 1, nil, "success"),
+		Entry("combined success, green run -> success", "success", 1,
 			[]*gogithub.CheckRun{checkRun("completed", "success")}, "success"),
-		Entry("combined success, skipped run -> success", "success",
+		Entry("combined success, skipped run -> success", "success", 1,
 			[]*gogithub.CheckRun{checkRun("completed", "skipped")}, "success"),
 		Entry("combined success, failing run -> failure (the check-run case)",
-			"success", []*gogithub.CheckRun{checkRun("completed", "failure")}, "failure"),
-		Entry("combined success, in-progress run -> pending", "success",
+			"success", 1, []*gogithub.CheckRun{checkRun("completed", "failure")}, "failure"),
+		Entry("combined success, in-progress run -> pending", "success", 1,
 			[]*gogithub.CheckRun{checkRun("in_progress", "")}, "pending"),
-		Entry("combined failure, green run -> failure", "failure",
+		Entry("combined failure, green run -> failure", "failure", 1,
 			[]*gogithub.CheckRun{checkRun("completed", "success")}, "failure"),
-		Entry("one failing run wins over a green sibling", "success",
+		Entry("one failing run wins over a green sibling", "success", 1,
 			[]*gogithub.CheckRun{
 				checkRun("completed", "success"),
 				checkRun("completed", "timed_out"),
 			}, "failure"),
+		Entry("no commit statuses + green runs -> success (check-run-only repo)",
+			"pending", 0, []*gogithub.CheckRun{checkRun("completed", "success")}, "success"),
+		Entry("no commit statuses + failing run -> failure", "pending", 0,
+			[]*gogithub.CheckRun{checkRun("completed", "failure")}, "failure"),
+		Entry("a real pending status is not promoted by green runs", "pending", 2,
+			[]*gogithub.CheckRun{checkRun("completed", "success")}, "pending"),
 	)
 })

@@ -128,6 +128,19 @@ var _ = Describe("Escalator", func() {
 			Expect(published).To(HaveLen(1))
 		})
 
+		It("does not clear the notified episode on Reset", func() {
+			ok, err := escalator.Escalate(ctx, escalation(escalate.ClassChecksNotGreen))
+			Expect(err).To(BeNil())
+			Expect(ok).To(BeTrue())
+
+			escalator.Reset(ctx, "bborbe/example", 7)
+
+			ok, err = escalator.Escalate(ctx, escalation(escalate.ClassChecksNotGreen))
+			Expect(err).To(BeNil())
+			Expect(ok).To(BeFalse())
+			Expect(published).To(HaveLen(1))
+		})
+
 		It("restarts the counter after Reset", func() {
 			ok, err := escalator.ObserveNotGreen(ctx, escalation(escalate.ClassChecksNotGreen))
 			Expect(err).To(BeNil())

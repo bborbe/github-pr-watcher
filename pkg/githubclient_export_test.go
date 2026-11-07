@@ -15,6 +15,6 @@ func NewForTest(c *gogithub.Client) GitHubClient {
 // MergeCommitStateForTest exposes mergeCommitState for unit testing. The
 // combined-status read alone excludes GitHub Actions check runs, so the fold is
 // the part worth pinning.
-func MergeCommitStateForTest(combined string, runs []*gogithub.CheckRun) string {
-	return mergeCommitState(combined, runs)
+func MergeCommitStateForTest(combined string, totalCount int, runs []*gogithub.CheckRun) string {
+	return mergeCommitState(combined, totalCount, runs)
 }
