@@ -12,6 +12,12 @@ import (
 )
 
 type Metrics struct {
+	IncEscalationStub        func(string, string)
+	incEscalationMutex       sync.RWMutex
+	incEscalationArgsForCall []struct {
+		arg1 string
+		arg2 string
+	}
 	IncPRPublishedStub        func(string)
 	incPRPublishedMutex       sync.RWMutex
 	incPRPublishedArgsForCall []struct {
@@ -54,6 +60,39 @@ type Metrics struct {
 	}
 	invocations      map[string][][]interface{}
 	invocationsMutex sync.RWMutex
+}
+
+func (fake *Metrics) IncEscalation(arg1 string, arg2 string) {
+	fake.incEscalationMutex.Lock()
+	fake.incEscalationArgsForCall = append(fake.incEscalationArgsForCall, struct {
+		arg1 string
+		arg2 string
+	}{arg1, arg2})
+	stub := fake.IncEscalationStub
+	fake.recordInvocation("IncEscalation", []interface{}{arg1, arg2})
+	fake.incEscalationMutex.Unlock()
+	if stub != nil {
+		fake.IncEscalationStub(arg1, arg2)
+	}
+}
+
+func (fake *Metrics) IncEscalationCallCount() int {
+	fake.incEscalationMutex.RLock()
+	defer fake.incEscalationMutex.RUnlock()
+	return len(fake.incEscalationArgsForCall)
+}
+
+func (fake *Metrics) IncEscalationCalls(stub func(string, string)) {
+	fake.incEscalationMutex.Lock()
+	defer fake.incEscalationMutex.Unlock()
+	fake.IncEscalationStub = stub
+}
+
+func (fake *Metrics) IncEscalationArgsForCall(i int) (string, string) {
+	fake.incEscalationMutex.RLock()
+	defer fake.incEscalationMutex.RUnlock()
+	argsForCall := fake.incEscalationArgsForCall[i]
+	return argsForCall.arg1, argsForCall.arg2
 }
 
 func (fake *Metrics) IncPRPublished(arg1 string) {

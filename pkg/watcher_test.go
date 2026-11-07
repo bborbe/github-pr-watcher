@@ -17,6 +17,7 @@ import (
 	"github.com/bborbe/github-pr-watcher/mocks"
 	"github.com/bborbe/github-pr-watcher/pkg"
 	"github.com/bborbe/github-pr-watcher/pkg/coalesce"
+	"github.com/bborbe/github-pr-watcher/pkg/escalate"
 	"github.com/bborbe/github-pr-watcher/pkg/filter"
 	"github.com/bborbe/github-pr-watcher/pkg/reviewignore"
 	"github.com/bborbe/github-pr-watcher/pkg/trust"
@@ -139,6 +140,7 @@ func newTestWatcherWithAutoMerge(
 	fakeMetrics *mocks.Metrics,
 	trustDecision trust.Trust,
 	autoMergeLabel string,
+	opts ...pkg.WatcherOption,
 ) pkg.Watcher {
 	publisher := pkg.NewTaskPublisher(
 		createSender,
@@ -174,6 +176,7 @@ func newTestWatcherWithAutoMerge(
 		newDisabledUnreviewedScanner(),
 		noOpCoalescer(),
 		libtime.NewCurrentDateTime(),
+		opts...,
 	)
 }
 
@@ -233,6 +236,7 @@ func newTestWatcherWithMechanicalOverride(
 	autoMergeLabel string,
 	mechanicalOverrideAuthors []string,
 	overrideLabel string,
+	opts ...pkg.WatcherOption,
 ) pkg.Watcher {
 	publisher := pkg.NewTaskPublisher(
 		createSender,
@@ -1745,6 +1749,130 @@ var _ = Describe("pkg.Watcher", func() {
 			)
 			Expect(w.Poll(ctx)).NotTo(HaveOccurred())
 			Expect(ghClient.EnableAutoMergeCallCount()).To(Equal(1))
+		})
+	})
+
+	Describe("auto-merge escalation", func() {
+		prEscalate := func(labels []string, author string) pkg.PullRequest {
+			return pkg.PullRequest{
+				Number:      9,
+				Owner:       "bborbe",
+				Repo:        "repo",
+				Title:       "bump deps",
+				HTMLURL:     "https://github.com/bborbe/repo/pull/9",
+				AuthorLogin: author,
+				IsDraft:     false,
+				UpdatedAt:   libtime.DateTime(time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC)),
+				Labels:      labels,
+			}
+		}
+		trustAlice := trust.NewAuthorAllowlist([]string{"alice"})
+
+		var (
+			published []string
+			escalator escalate.Escalator
+		)
+
+		BeforeEach(func() {
+			published = nil
+			escalator = escalate.NewEscalator(
+				func(ctx context.Context, message string) error {
+					published = append(published, message)
+					return nil
+				},
+			)
+			ghClient.GetPRDetailsReturns(pkg.PRDetails{
+				HeadSHA:  "deadbeef",
+				CloneURL: "https://github.com/bborbe/repo.git",
+				BaseRef:  "master",
+			}, nil)
+			ghClient.EnableAutoMergeReturns(nil)
+			ghClient.GetCombinedStatusStateReturns(string(pkg.CommitStateSuccess), nil)
+			ghClient.ListReviewsReturns(nil, nil)
+			createSender.SendCommandReturns(nil)
+		})
+
+		poll := func(pr pkg.PullRequest) {
+			ghClient.SearchPRsReturns(pkg.SearchResult{
+				PullRequests:  []pkg.PullRequest{pr},
+				RateRemaining: 100,
+			}, nil)
+			w := newTestWatcherWithAutoMerge(
+				ghClient,
+				createSender,
+				cursorPath,
+				startTime,
+				fakeMetrics,
+				trustAlice,
+				"auto-merge",
+				pkg.WithEscalator(escalator),
+			)
+			Expect(w.Poll(ctx)).NotTo(HaveOccurred())
+		}
+
+		It("escalates an untrusted author exactly once", func() {
+			poll(prEscalate([]string{"auto-merge"}, "mallory"))
+			Expect(published).To(HaveLen(1))
+			Expect(published[0]).To(ContainSubstring("class=untrusted-author"))
+			Expect(published[0]).To(
+				ContainSubstring("https://github.com/bborbe/repo/pull/9"),
+			)
+		})
+
+		It("escalates an arming error", func() {
+			ghClient.EnableAutoMergeReturns(errors.New("boom"))
+			poll(prEscalate([]string{"auto-merge"}, "alice"))
+			Expect(published).To(HaveLen(1))
+			Expect(published[0]).To(ContainSubstring("class=enable-auto-merge-error"))
+		})
+
+		It("does not escalate a PR that is already clean", func() {
+			ghClient.EnableAutoMergeReturns(
+				errors.New("UNPROCESSABLE Pull request is in clean status"),
+			)
+			poll(prEscalate([]string{"auto-merge"}, "alice"))
+			Expect(published).To(BeEmpty())
+		})
+
+		It("emits zero escalations for a healthy PR (negative control)", func() {
+			poll(prEscalate([]string{"auto-merge"}, "alice"))
+			Expect(published).To(BeEmpty())
+		})
+
+		It("escalates a PR whose checks stay non-green for the pinned cycles", func() {
+			ghClient.GetCombinedStatusStateReturns("pending", nil)
+
+			poll(prEscalate([]string{"auto-merge"}, "alice"))
+			Expect(published).To(BeEmpty())
+
+			poll(prEscalate([]string{"auto-merge"}, "alice"))
+			Expect(published).To(HaveLen(1))
+			Expect(published[0]).To(ContainSubstring("class=checks-not-green"))
+		})
+
+		It("escalates a CHANGES_REQUESTED review on the current head SHA", func() {
+			ghClient.ListReviewsReturns([]pkg.Review{
+				{
+					AuthorLogin: "reviewer",
+					CommitID:    "deadbeef",
+					State:       pkg.ReviewStateChangesRequested,
+				},
+			}, nil)
+			poll(prEscalate([]string{"auto-merge"}, "alice"))
+			Expect(published).To(HaveLen(1))
+			Expect(published[0]).To(ContainSubstring("class=review-request-changes"))
+		})
+
+		It("ignores a CHANGES_REQUESTED review on an older commit", func() {
+			ghClient.ListReviewsReturns([]pkg.Review{
+				{
+					AuthorLogin: "reviewer",
+					CommitID:    "oldsha",
+					State:       pkg.ReviewStateChangesRequested,
+				},
+			}, nil)
+			poll(prEscalate([]string{"auto-merge"}, "alice"))
+			Expect(published).To(BeEmpty())
 		})
 	})
 

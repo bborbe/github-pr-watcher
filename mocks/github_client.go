@@ -59,6 +59,22 @@ type GitHubClient struct {
 	enableAutoMergeReturnsOnCall map[int]struct {
 		result1 error
 	}
+	GetCombinedStatusStateStub        func(context.Context, string, string, string) (string, error)
+	getCombinedStatusStateMutex       sync.RWMutex
+	getCombinedStatusStateArgsForCall []struct {
+		arg1 context.Context
+		arg2 string
+		arg3 string
+		arg4 string
+	}
+	getCombinedStatusStateReturns struct {
+		result1 string
+		result2 error
+	}
+	getCombinedStatusStateReturnsOnCall map[int]struct {
+		result1 string
+		result2 error
+	}
 	GetMaintainerConfigStub        func(context.Context, string, string) (maintainerconfig.MaintainerConfig, error)
 	getMaintainerConfigMutex       sync.RWMutex
 	getMaintainerConfigArgsForCall []struct {
@@ -433,6 +449,73 @@ func (fake *GitHubClient) EnableAutoMergeReturnsOnCall(i int, result1 error) {
 	fake.enableAutoMergeReturnsOnCall[i] = struct {
 		result1 error
 	}{result1}
+}
+
+func (fake *GitHubClient) GetCombinedStatusState(arg1 context.Context, arg2 string, arg3 string, arg4 string) (string, error) {
+	fake.getCombinedStatusStateMutex.Lock()
+	ret, specificReturn := fake.getCombinedStatusStateReturnsOnCall[len(fake.getCombinedStatusStateArgsForCall)]
+	fake.getCombinedStatusStateArgsForCall = append(fake.getCombinedStatusStateArgsForCall, struct {
+		arg1 context.Context
+		arg2 string
+		arg3 string
+		arg4 string
+	}{arg1, arg2, arg3, arg4})
+	stub := fake.GetCombinedStatusStateStub
+	fakeReturns := fake.getCombinedStatusStateReturns
+	fake.recordInvocation("GetCombinedStatusState", []interface{}{arg1, arg2, arg3, arg4})
+	fake.getCombinedStatusStateMutex.Unlock()
+	if stub != nil {
+		return stub(arg1, arg2, arg3, arg4)
+	}
+	if specificReturn {
+		return ret.result1, ret.result2
+	}
+	return fakeReturns.result1, fakeReturns.result2
+}
+
+func (fake *GitHubClient) GetCombinedStatusStateCallCount() int {
+	fake.getCombinedStatusStateMutex.RLock()
+	defer fake.getCombinedStatusStateMutex.RUnlock()
+	return len(fake.getCombinedStatusStateArgsForCall)
+}
+
+func (fake *GitHubClient) GetCombinedStatusStateCalls(stub func(context.Context, string, string, string) (string, error)) {
+	fake.getCombinedStatusStateMutex.Lock()
+	defer fake.getCombinedStatusStateMutex.Unlock()
+	fake.GetCombinedStatusStateStub = stub
+}
+
+func (fake *GitHubClient) GetCombinedStatusStateArgsForCall(i int) (context.Context, string, string, string) {
+	fake.getCombinedStatusStateMutex.RLock()
+	defer fake.getCombinedStatusStateMutex.RUnlock()
+	argsForCall := fake.getCombinedStatusStateArgsForCall[i]
+	return argsForCall.arg1, argsForCall.arg2, argsForCall.arg3, argsForCall.arg4
+}
+
+func (fake *GitHubClient) GetCombinedStatusStateReturns(result1 string, result2 error) {
+	fake.getCombinedStatusStateMutex.Lock()
+	defer fake.getCombinedStatusStateMutex.Unlock()
+	fake.GetCombinedStatusStateStub = nil
+	fake.getCombinedStatusStateReturns = struct {
+		result1 string
+		result2 error
+	}{result1, result2}
+}
+
+func (fake *GitHubClient) GetCombinedStatusStateReturnsOnCall(i int, result1 string, result2 error) {
+	fake.getCombinedStatusStateMutex.Lock()
+	defer fake.getCombinedStatusStateMutex.Unlock()
+	fake.GetCombinedStatusStateStub = nil
+	if fake.getCombinedStatusStateReturnsOnCall == nil {
+		fake.getCombinedStatusStateReturnsOnCall = make(map[int]struct {
+			result1 string
+			result2 error
+		})
+	}
+	fake.getCombinedStatusStateReturnsOnCall[i] = struct {
+		result1 string
+		result2 error
+	}{result1, result2}
 }
 
 func (fake *GitHubClient) GetMaintainerConfig(arg1 context.Context, arg2 string, arg3 string) (maintainerconfig.MaintainerConfig, error) {

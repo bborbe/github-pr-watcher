@@ -404,6 +404,7 @@ func (a *application) Run(ctx context.Context, _ libsentry.Client) error {
 		overrideLedger,
 		currentDateTime,
 		coalescer,
+		factory.CreateEscalator(ctx, syncProducer, a.TopicPrefix),
 	)
 
 	// Webhook receiver reuses the same sender: every signature-verified

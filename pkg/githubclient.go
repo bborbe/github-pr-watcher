@@ -173,6 +173,13 @@ type GitHubClient interface {
 	// reviewed the PR's current head SHA. A review in any state counts.
 	ListReviews(ctx context.Context, owner, repo string, number int) ([]Review, error)
 
+	// GetCombinedStatusState returns the combined commit-status state for ref:
+	// "success", "pending", "failure", or "error". It is the read the
+	// checks-not-green escalation is built on — the watcher arms auto-merge and
+	// GitHub holds the PR, so this is the only place the watcher can observe
+	// that the hold is not clearing.
+	GetCombinedStatusState(ctx context.Context, owner, repo, ref string) (string, error)
+
 	// EnableAutoMerge arms GitHub-native auto-merge on a PR: when all merge
 	// requirements (required status checks + required reviews per the repo
 	// ruleset) are met, GitHub merges the PR automatically. Re-arming an
@@ -309,7 +316,14 @@ type Review struct {
 	AuthorLogin string
 	// CommitID is the head SHA the review was posted against.
 	CommitID string
+	// State is the review's verdict: APPROVED, CHANGES_REQUESTED, COMMENTED,
+	// DISMISSED, or PENDING. Only a CHANGES_REQUESTED review on the current
+	// head SHA blocks the merge and escalates.
+	State string
 }
+
+// ReviewStateChangesRequested is the review state that blocks a merge.
+const ReviewStateChangesRequested = "CHANGES_REQUESTED"
 
 // PRFile is a single changed file in a PR with its patch, as returned by the
 // pull-request files endpoint. Patch may be empty for large/binary files.
@@ -897,6 +911,7 @@ func (c *githubClient) ListReviews(
 			reviews = append(reviews, Review{
 				AuthorLogin: r.GetUser().GetLogin(),
 				CommitID:    r.GetCommitID(),
+				State:       r.GetState(),
 			})
 		}
 		if resp.NextPage == 0 {
@@ -928,6 +943,36 @@ func (c *githubClient) AddLabel(
 		)
 	}
 	return nil
+}
+
+// GetCombinedStatusState returns the combined commit-status state for ref.
+//
+// A ref with no statuses reports "pending", which is exactly the state a
+// labelled PR sits in while its required checks have not reported: the watcher
+// arms auto-merge, GitHub holds the PR, and nothing else in the watcher can
+// see that the hold is not clearing.
+func (c *githubClient) GetCombinedStatusState(
+	ctx context.Context,
+	owner, repo, ref string,
+) (string, error) {
+	status, _, err := c.client.Repositories.GetCombinedStatus(
+		ctx,
+		owner,
+		repo,
+		ref,
+		nil,
+	)
+	if err != nil {
+		return "", errors.Wrapf(
+			ctx,
+			err,
+			"get combined status %s/%s@%s",
+			owner,
+			repo,
+			ref,
+		)
+	}
+	return status.GetState(), nil
 }
 
 // PostCommitStatus posts a commit status on sha under statusContext.
