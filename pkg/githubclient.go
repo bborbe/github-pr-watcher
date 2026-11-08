@@ -330,11 +330,18 @@ type Review struct {
 type ReviewState string
 
 const (
-	ReviewStateApproved         ReviewState = "APPROVED"
+	// ReviewStateApproved clears a previous CHANGES_REQUESTED for that reviewer.
+	ReviewStateApproved ReviewState = "APPROVED"
+	// ReviewStateChangesRequested blocks the merge until the same reviewer
+	// approves or the review is dismissed — a later push does not clear it.
 	ReviewStateChangesRequested ReviewState = "CHANGES_REQUESTED"
-	ReviewStateCommented        ReviewState = "COMMENTED"
-	ReviewStateDismissed        ReviewState = "DISMISSED"
-	ReviewStatePending          ReviewState = "PENDING"
+	// ReviewStateCommented is a comment-only review; it does not change the
+	// reviewer's standing verdict.
+	ReviewStateCommented ReviewState = "COMMENTED"
+	// ReviewStateDismissed removes the reviewer's standing verdict.
+	ReviewStateDismissed ReviewState = "DISMISSED"
+	// ReviewStatePending is a review not yet submitted.
+	ReviewStatePending ReviewState = "PENDING"
 )
 
 // PRFile is a single changed file in a PR with its patch, as returned by the

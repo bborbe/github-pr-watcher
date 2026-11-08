@@ -192,7 +192,12 @@ func (e *escalator) Escalate(ctx context.Context, escalation Escalation) (bool, 
 		return false, errors.Wrapf(ctx, err, "publish escalation %s", key)
 	}
 	if len(e.notified) >= maxEpisodes {
-		e.notified = map[string]struct{}{}
+		// Evict ONE entry, not the whole map: clearing it would drop dedupe
+		// for every currently-refused PR and re-notify all of them at once.
+		for victim := range e.notified {
+			delete(e.notified, victim)
+			break
+		}
 	}
 	e.notified[key] = struct{}{}
 	e.mu.Unlock()
@@ -216,10 +221,14 @@ func (e *escalator) ObserveNotGreen(
 
 	e.mu.Lock()
 	if len(e.notGreen) >= maxEpisodes {
-		// Same bounded-growth trade as the notified map: clearing can restart a
-		// threshold, but an unbounded counter map is a real leak in a watcher
-		// that runs for months.
-		e.notGreen = map[string]int{}
+		// Same bounded-growth trade as the notified map, and the same
+		// one-at-a-time eviction: an unbounded counter map is a real leak in a
+		// watcher that runs for months, but clearing it would restart every
+		// threshold at once.
+		for victim := range e.notGreen {
+			delete(e.notGreen, victim)
+			break
+		}
 	}
 	e.notGreen[key]++
 	observed := e.notGreen[key]

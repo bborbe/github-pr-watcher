@@ -7,6 +7,7 @@ package escalate_test
 import (
 	"context"
 	"errors"
+	"sync"
 
 	"github.com/bborbe/github-pr-watcher/pkg/escalate"
 	. "github.com/onsi/ginkgo/v2"
@@ -95,6 +96,29 @@ var _ = Describe("Escalator", func() {
 			Expect(published).To(HaveLen(1))
 		})
 
+		It("publishes exactly once under concurrent callers", func() {
+			var wg sync.WaitGroup
+			results := make([]bool, 2)
+			for i := 0; i < 2; i++ {
+				wg.Add(1)
+				go func(index int) {
+					defer wg.Done()
+					ok, err := escalator.Escalate(
+						ctx,
+						escalation(escalate.ClassUntrustedAuthor),
+					)
+					if err != nil {
+						return
+					}
+					results[index] = ok
+				}(i)
+			}
+			wg.Wait()
+			Expect(results).To(ContainElement(true))
+			Expect(results).To(ContainElement(false))
+			Expect(published).To(HaveLen(1))
+		})
+
 		It("carries the PR URL and the class in the message", func() {
 			_, err := escalator.Escalate(ctx, escalation(escalate.ClassReviewRequestChanges))
 			Expect(err).To(BeNil())
@@ -139,6 +163,27 @@ var _ = Describe("Escalator", func() {
 			Expect(err).To(BeNil())
 			Expect(ok).To(BeFalse())
 			Expect(published).To(HaveLen(1))
+		})
+
+		It("clears the counter for every head SHA of the PR", func() {
+			first := escalation(escalate.ClassChecksNotGreen)
+			second := escalation(escalate.ClassChecksNotGreen)
+			second.HeadSHA = "def456"
+
+			_, err := escalator.ObserveNotGreen(ctx, first)
+			Expect(err).To(BeNil())
+			_, err = escalator.ObserveNotGreen(ctx, second)
+			Expect(err).To(BeNil())
+
+			escalator.Reset(ctx, "bborbe/example", 7)
+
+			okFirst, err := escalator.ObserveNotGreen(ctx, first)
+			Expect(err).To(BeNil())
+			Expect(okFirst).To(BeFalse())
+			okSecond, err := escalator.ObserveNotGreen(ctx, second)
+			Expect(err).To(BeNil())
+			Expect(okSecond).To(BeFalse())
+			Expect(published).To(BeEmpty())
 		})
 
 		It("restarts the counter after Reset", func() {

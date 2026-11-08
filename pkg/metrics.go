@@ -106,7 +106,7 @@ var (
 
 	escalationsTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "github_pr_watcher_escalations_total",
-		Help: "Total auto-merge refusals escalated to the operator, by refusal class and result (published, duplicate, error). A duplicate is a refusal already escalated for this (PR, head SHA, class); error means the publish failed and will be retried on the next poll.",
+		Help: "Total auto-merge refusals escalated to the operator, by refusal class and result (published, duplicate, observed, error). A duplicate is a refusal already escalated for this (PR, head SHA, class); observed is a checks-not-green poll-cycle observation that did not publish (below threshold or already escalated); error means the publish failed and will be retried on the next poll.",
 	}, []string{"class", "result"})
 
 	unreviewedScanLastSuccess = prometheus.NewGauge(prometheus.GaugeOpts{
@@ -161,7 +161,7 @@ func init() {
 		"checks-not-green",
 		"review-request-changes",
 	} {
-		for _, result := range []string{"published", "duplicate", "error"} {
+		for _, result := range []string{"published", "duplicate", "observed", "error"} {
 			escalationsTotal.WithLabelValues(class, result).Add(0)
 		}
 	}

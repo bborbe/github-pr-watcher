@@ -1588,7 +1588,12 @@ func (w *watcher) observeHeldPR(ctx context.Context, pr PullRequest, details PRD
 	}
 	if published {
 		w.metrics.IncEscalation(string(escalate.ClassChecksNotGreen), "published")
+		return
 	}
+	// A below-threshold observation and an episode duplicate both land here, so
+	// this class reports "observed" rather than "duplicate": every call is one
+	// poll-cycle observation of a still-non-green PR.
+	w.metrics.IncEscalation(string(escalate.ClassChecksNotGreen), "observed")
 }
 
 // escalateReviewRequestChanges escalates when a reviewer's latest review on the
@@ -1605,18 +1610,22 @@ func (w *watcher) escalateReviewRequestChanges(
 		glog.Warningf("list reviews failed pr=%s err=%v", pr.HTMLURL, err)
 		return false
 	}
-	// reviewDecision is latest-verdict-per-reviewer, and only a review on the
-	// current head SHA counts: a CHANGES_REQUESTED left on an older commit is
-	// superseded by the push that followed it.
+	// reviewDecision is latest-verdict-per-reviewer, across ALL commits — NOT
+	// per head SHA. GitHub keeps a CHANGES_REQUESTED blocking until the same
+	// reviewer approves or the review is dismissed; a push does not clear it.
+	// Filtering on CommitID == head would therefore skip exactly the case this
+	// class exists for: reviewer asks for changes on SHA A, the author pushes
+	// SHA B, the reviewer has not re-reviewed — GitHub still blocks the merge
+	// and the PR would be escalated never.
+	//
+	// ListReviews returns reviews oldest-first, so the last write per reviewer
+	// is their current verdict.
 	//
 	// COMMENTED and PENDING are not verdicts. Letting them overwrite would mask
 	// a CHANGES_REQUESTED whenever the reviewer leaves a follow-up comment —
 	// GitHub keeps the review blocking in exactly that case.
 	latest := map[string]ReviewState{}
 	for _, review := range reviews {
-		if review.CommitID != details.HeadSHA {
-			continue
-		}
 		switch review.State {
 		case ReviewStateApproved, ReviewStateChangesRequested, ReviewStateDismissed:
 			latest[review.AuthorLogin] = review.State

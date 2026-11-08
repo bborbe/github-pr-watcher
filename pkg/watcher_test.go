@@ -272,6 +272,7 @@ func newTestWatcherWithMechanicalOverride(
 		newDisabledUnreviewedScanner(),
 		noOpCoalescer(),
 		libtime.NewCurrentDateTime(),
+		opts...,
 	)
 }
 
@@ -1912,7 +1913,9 @@ var _ = Describe("pkg.Watcher", func() {
 			Expect(published[0]).To(ContainSubstring("class=review-request-changes"))
 		})
 
-		It("ignores a CHANGES_REQUESTED review on an older commit", func() {
+		It("escalates a CHANGES_REQUESTED review left on an older commit", func() {
+			// GitHub keeps that verdict blocking until the same reviewer
+			// approves or the review is dismissed, so the PR is genuinely held.
 			ghClient.ListReviewsReturns([]pkg.Review{
 				{
 					AuthorLogin: "reviewer",
@@ -1921,7 +1924,8 @@ var _ = Describe("pkg.Watcher", func() {
 				},
 			}, nil)
 			poll(prEscalate([]string{"auto-merge"}, "alice"))
-			Expect(published).To(BeEmpty())
+			Expect(published).To(HaveLen(1))
+			Expect(published[0]).To(ContainSubstring("class=review-request-changes"))
 		})
 	})
 
