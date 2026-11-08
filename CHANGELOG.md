@@ -5,6 +5,10 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+- chore: restate the do-not-merge contract in the gate workflow
+
 ## v0.23.0
 
 - feat: escalate auto-merge refusals to the operator through the shared generic notification system instead of holding them silently. A refused labelled PR now publishes one `agent-escalation` notification per (PR, head SHA, class) to the CQRS notification topic, and writes a single `escalated pr=… class=…` Info line. Five classes: `untrusted-author`, `trust-check-error`, `enable-auto-merge-error`, `checks-not-green` (after `ChecksNotGreenThreshold` = 2 consecutive poll cycles, pinned in code) and `review-request-changes` (latest verdict on the current head SHA — a later COMMENTED review does not clear a CHANGES_REQUESTED). An arming error that only means the PR is already mergeable (`clean status`) is not a refusal and does not escalate, so a healthy PR emits zero escalations. Episode state is in-memory and keyed by repo#number@headSHA:class; a failed publish is not marked notified and retries next poll. Adds `github_pr_watcher_escalations_total{class,result}`, `GitHubClient.GetCommitState` (combined commit status AND check runs — the combined status alone excludes GitHub Actions check runs, so it would read success while a workflow was red), and `Review.State`
