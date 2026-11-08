@@ -43,6 +43,11 @@ type Metrics interface {
 	// IncUnreviewedRetry increments the retry counter with the given repo label.
 	// repo: `owner/repo`
 	IncUnreviewedRetry(repo string)
+	// IncEscalation increments the auto-merge refusal escalation counter.
+	// class: "untrusted-author", "trust-check-error", "enable-auto-merge-error",
+	// "checks-not-green", "review-request-changes".
+	// result: "published", "duplicate", "error".
+	IncEscalation(class, result string)
 }
 
 // UnreviewedPR identifies one open pull request reported as unreviewed.
@@ -99,6 +104,11 @@ var (
 		Help: "Total number of review tasks re-published by the unreviewed-PR retry pass, by repo. Bounded by UNREVIEWED_RETRY_MAX per (PR, head SHA) per process lifetime.",
 	}, []string{"repo"})
 
+	escalationsTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "github_pr_watcher_escalations_total",
+		Help: "Total auto-merge refusals escalated to the operator, by refusal class and result (published, duplicate, observed, error). A duplicate is a refusal already escalated for this (PR, head SHA, class); observed is a checks-not-green poll-cycle observation that did not publish (below threshold or already escalated); error means the publish failed and will be retried on the next poll.",
+	}, []string{"class", "result"})
+
 	unreviewedScanLastSuccess = prometheus.NewGauge(prometheus.GaugeOpts{
 		Name: "github_pr_watcher_unreviewed_scan_last_success_timestamp_seconds",
 		Help: "Unix timestamp of the last complete unreviewed-PR scan. Zero until the first successful scan; alerts on it must guard > 0.",
@@ -129,6 +139,7 @@ func init() {
 		unreviewedPRs,
 		unreviewedScanLastSuccess,
 		unreviewedRetriesTotal,
+		escalationsTotal,
 		githubAPICallsTotal,
 		githubAPIRateLimitedTotal,
 	)
@@ -140,6 +151,19 @@ func init() {
 	}
 	for _, result := range []string{"success", "skip", "coalesced", "trailing", "error"} {
 		webhookDeliveriesTotal.WithLabelValues(result).Add(0)
+	}
+	// Pre-initialise every label pair so rate() has data from the first scrape
+	// instead of returning nothing until the first escalation of that class.
+	for _, class := range []string{
+		"untrusted-author",
+		"trust-check-error",
+		"enable-auto-merge-error",
+		"checks-not-green",
+		"review-request-changes",
+	} {
+		for _, result := range []string{"published", "duplicate", "observed", "error"} {
+			escalationsTotal.WithLabelValues(class, result).Add(0)
+		}
 	}
 }
 
@@ -198,4 +222,8 @@ func (m *prometheusMetrics) SetUnreviewedPRs(prs []UnreviewedPR, scannedAt libti
 
 func (m *prometheusMetrics) IncUnreviewedRetry(repo string) {
 	unreviewedRetriesTotal.WithLabelValues(repo).Inc()
+}
+
+func (m *prometheusMetrics) IncEscalation(class, result string) {
+	escalationsTotal.WithLabelValues(class, result).Inc()
 }

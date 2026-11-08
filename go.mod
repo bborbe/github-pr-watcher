@@ -11,6 +11,7 @@ require (
 	github.com/bborbe/kv v1.21.18
 	github.com/bborbe/log v1.7.4
 	github.com/bborbe/maintainer v0.50.12
+	github.com/bborbe/notification v0.6.1
 	github.com/bborbe/parse v1.12.3
 	github.com/bborbe/run v1.11.2
 	github.com/bborbe/sentry v1.10.5
