@@ -7,6 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+- chore: restate the do-not-merge contract in the gate workflow
 - fix: evaluate `checks-not-green` independently of `review-request-changes`. `observeHeldPR` returned after the review path, so a held PR with both a failing check and a change request never reached the checks read and `checks-not-green` never fired — measured live on dev, where a labelled PR with a deliberately failing test escalated `review-request-changes` only (`checks-not-green` stayed at 0 published, 0 observed). Both classes are now evaluated; episode keys stay per class, so each still fires at most once per (PR, head SHA)
 
 ## v0.23.0
