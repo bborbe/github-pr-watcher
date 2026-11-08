@@ -14,6 +14,7 @@ import (
 	task "github.com/bborbe/agent/command/task"
 	"github.com/bborbe/errors"
 	"github.com/bborbe/github-pr-watcher/pkg/coalesce"
+	"github.com/bborbe/github-pr-watcher/pkg/escalate"
 	"github.com/bborbe/github-pr-watcher/pkg/filter"
 	"github.com/bborbe/github-pr-watcher/pkg/reviewignore"
 	"github.com/bborbe/github-pr-watcher/pkg/trust"
@@ -449,8 +450,9 @@ func NewWatcher(
 	unreviewedScanner UnreviewedScanner,
 	coalescer coalesce.Coalescer,
 	currentDateTime libtime.CurrentDateTimeGetter,
+	opts ...WatcherOption,
 ) Watcher {
-	return &watcher{
+	w := &watcher{
 		ghClient:                  ghClient,
 		publisher:                 publisher,
 		metrics:                   metrics,
@@ -468,6 +470,10 @@ func NewWatcher(
 		coalescer:                 coalescer,
 		currentDateTime:           currentDateTime,
 	}
+	for _, opt := range opts {
+		opt(w)
+	}
+	return w
 }
 
 type watcher struct {
@@ -526,6 +532,23 @@ type watcher struct {
 	// currentDateTime is the injected clock the coalescer's hold window is
 	// measured against.
 	currentDateTime libtime.CurrentDateTimeGetter
+	// escalator publishes auto-merge refusals to the operator. Nil means
+	// refusals stay log-and-counter only, which is the pre-escalation
+	// behaviour and what the watcher's own tests exercise by default.
+	escalator escalate.Escalator
+}
+
+// WatcherOption configures optional watcher dependencies without widening the
+// positional constructor every caller (and every test) has to restate.
+type WatcherOption func(*watcher)
+
+// WithEscalator wires the auto-merge refusal escalator. Without it, a refusal
+// is logged and counted but never reaches the operator — the silent hold this
+// change exists to remove.
+func WithEscalator(escalator escalate.Escalator) WatcherOption {
+	return func(w *watcher) {
+		w.escalator = escalator
+	}
 }
 
 // rateLimitRemainingForGauge returns the value to publish to the gauge at the
@@ -1422,21 +1445,220 @@ func (w *watcher) tryAutoMerge(
 	if err != nil {
 		glog.Errorf("auto-merge trust check failed pr=%s err=%v", pr.HTMLURL, err)
 		w.metrics.IncPRPublished("error")
+		w.escalateRefusal(ctx, pr, details, escalate.ClassTrustCheckError, err.Error())
 		return
 	}
 	if !trustResult.Success() {
 		glog.V(2).Infof("auto-merge skipped, untrusted author pr=%s", pr.HTMLURL)
 		w.metrics.IncPRPublished("auto_merge_skipped")
+		w.escalateRefusal(
+			ctx,
+			pr,
+			details,
+			escalate.ClassUntrustedAuthor,
+			"author is outside the trust gate",
+		)
 		return
 	}
 	if err := w.ghClient.EnableAutoMerge(ctx, pr.Owner, pr.Repo, pr.Number); err != nil {
 		glog.Errorf("enable auto-merge failed pr=%s/%s#%d err=%v",
 			pr.Owner, pr.Repo, pr.Number, err)
 		w.metrics.IncPRPublished("error")
+		// Arming an already-mergeable PR is refused by GitHub, not a
+		// refusal to report: nothing is blocking it. Escalating it would
+		// break the negative control (a green, approved PR must emit zero
+		// escalations).
+		if !isAlreadyCleanAutoMergeError(err) {
+			w.escalateRefusal(
+				ctx,
+				pr,
+				details,
+				escalate.ClassEnableAutoMergeError,
+				err.Error(),
+			)
+		}
 		return
 	}
 	glog.V(2).Infof("armed auto-merge pr=%s/%s#%d", pr.Owner, pr.Repo, pr.Number)
 	w.metrics.IncPRPublished("auto_merge")
+	// Armed successfully: GitHub holds the PR from here, so this is the only
+	// place the watcher can see that the hold is not clearing. The counter is
+	// NOT reset here — this path runs on every poll, and resetting it would
+	// make the threshold unreachable. It is cleared only when the checks go
+	// green (see observeHeldPR).
+	w.observeHeldPR(ctx, pr, details)
+}
+
+// escalationFor builds the escalation payload for one PR and refusal class.
+func escalationFor(
+	pr PullRequest,
+	details PRDetails,
+	class escalate.Class,
+	detail string,
+) escalate.Escalation {
+	return escalate.Escalation{
+		PRURL:   pr.HTMLURL,
+		Repo:    pr.Owner + "/" + pr.Repo,
+		Number:  pr.Number,
+		HeadSHA: details.HeadSHA,
+		Class:   class,
+		Detail:  detail,
+	}
+}
+
+// escalateRefusal publishes one refusal, deduped per (PR, head SHA, class), and
+// records the outcome. A nil escalator keeps the pre-escalation behaviour.
+func (w *watcher) escalateRefusal(
+	ctx context.Context,
+	pr PullRequest,
+	details PRDetails,
+	class escalate.Class,
+	detail string,
+) {
+	if w.escalator == nil {
+		return
+	}
+	published, err := w.escalator.Escalate(
+		ctx,
+		escalationFor(pr, details, class, detail),
+	)
+	if err != nil {
+		glog.Errorf(
+			"escalate auto-merge refusal failed pr=%s class=%s err=%v",
+			pr.HTMLURL,
+			class,
+			err,
+		)
+		w.metrics.IncEscalation(string(class), "error")
+		return
+	}
+	if published {
+		w.metrics.IncEscalation(string(class), "published")
+		return
+	}
+	w.metrics.IncEscalation(string(class), "duplicate")
+}
+
+func (w *watcher) resetNotGreen(ctx context.Context, pr PullRequest) {
+	if w.escalator == nil {
+		return
+	}
+	w.escalator.Reset(ctx, pr.Owner+"/"+pr.Repo, pr.Number)
+}
+
+// observeHeldPR reports a labelled PR that GitHub is holding after the watcher
+// armed it. Two refusal classes live here, and neither has a branch in the
+// arming path — GitHub holds the PR, so the watcher has to go and look.
+func (w *watcher) observeHeldPR(ctx context.Context, pr PullRequest, details PRDetails) {
+	if w.escalator == nil {
+		return
+	}
+	if w.escalateReviewRequestChanges(ctx, pr, details) {
+		return
+	}
+	state, err := w.ghClient.GetCommitState(
+		ctx,
+		pr.Owner,
+		pr.Repo,
+		details.HeadSHA,
+	)
+	if err != nil {
+		// Warning, not V(2): a failed read means the checks-not-green class
+		// cannot fire this cycle, and silence would read as "all green".
+		glog.Warningf("commit state read failed pr=%s err=%v", pr.HTMLURL, err)
+		return
+	}
+	if state == string(CommitStateSuccess) {
+		w.resetNotGreen(ctx, pr)
+		return
+	}
+	published, err := w.escalator.ObserveNotGreen(
+		ctx,
+		escalationFor(
+			pr,
+			details,
+			escalate.ClassChecksNotGreen,
+			"combined status "+state,
+		),
+	)
+	if err != nil {
+		glog.Errorf("escalate checks-not-green failed pr=%s err=%v", pr.HTMLURL, err)
+		w.metrics.IncEscalation(string(escalate.ClassChecksNotGreen), "error")
+		return
+	}
+	if published {
+		w.metrics.IncEscalation(string(escalate.ClassChecksNotGreen), "published")
+		return
+	}
+	// A below-threshold observation and an episode duplicate both land here, so
+	// this class reports "observed" rather than "duplicate": every call is one
+	// poll-cycle observation of a still-non-green PR.
+	w.metrics.IncEscalation(string(escalate.ClassChecksNotGreen), "observed")
+}
+
+// escalateReviewRequestChanges escalates when a reviewer's latest review on the
+// current head SHA asks for changes. GitHub never merges such a PR, and without
+// this the hold is invisible. It returns true when it handled the PR, so the
+// caller does not also report the PR as non-green — the review is the cause.
+func (w *watcher) escalateReviewRequestChanges(
+	ctx context.Context,
+	pr PullRequest,
+	details PRDetails,
+) bool {
+	reviews, err := w.ghClient.ListReviews(ctx, pr.Owner, pr.Repo, pr.Number)
+	if err != nil {
+		glog.Warningf("list reviews failed pr=%s err=%v", pr.HTMLURL, err)
+		return false
+	}
+	// reviewDecision is latest-verdict-per-reviewer, across ALL commits — NOT
+	// per head SHA. GitHub keeps a CHANGES_REQUESTED blocking until the same
+	// reviewer approves or the review is dismissed; a push does not clear it.
+	// Filtering on CommitID == head would therefore skip exactly the case this
+	// class exists for: reviewer asks for changes on SHA A, the author pushes
+	// SHA B, the reviewer has not re-reviewed — GitHub still blocks the merge
+	// and the PR would be escalated never.
+	//
+	// ListReviews returns reviews oldest-first, so the last write per reviewer
+	// is their current verdict.
+	//
+	// COMMENTED and PENDING are not verdicts. Letting them overwrite would mask
+	// a CHANGES_REQUESTED whenever the reviewer leaves a follow-up comment —
+	// GitHub keeps the review blocking in exactly that case.
+	latest := map[string]ReviewState{}
+	for _, review := range reviews {
+		switch review.State {
+		case ReviewStateApproved, ReviewStateChangesRequested, ReviewStateDismissed:
+			latest[review.AuthorLogin] = review.State
+		default:
+			// COMMENTED / PENDING do not change the verdict.
+		}
+	}
+	authors := make([]string, 0, len(latest))
+	for author := range latest {
+		authors = append(authors, author)
+	}
+	slices.Sort(authors)
+	for _, author := range authors {
+		if latest[author] != ReviewStateChangesRequested {
+			continue
+		}
+		w.escalateRefusal(
+			ctx,
+			pr,
+			details,
+			escalate.ClassReviewRequestChanges,
+			"review by "+author+" requests changes",
+		)
+		return true
+	}
+	return false
+}
+
+// isAlreadyCleanAutoMergeError reports the one arming error that is not a
+// refusal: GitHub refuses to arm a PR that is already mergeable ("Pull request
+// is in clean status"), which means nothing is blocking it.
+func isAlreadyCleanAutoMergeError(err error) bool {
+	return strings.Contains(strings.ToLower(err.Error()), "clean status")
 }
 
 // maybeLabelTrivial applies the auto-merge label to a mechanically trivial PR

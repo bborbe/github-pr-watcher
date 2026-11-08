@@ -16,11 +16,13 @@ import (
 	"github.com/bborbe/github-pr-watcher/pkg"
 	"github.com/bborbe/github-pr-watcher/pkg/coalesce"
 	"github.com/bborbe/github-pr-watcher/pkg/command"
+	"github.com/bborbe/github-pr-watcher/pkg/escalate"
 	"github.com/bborbe/github-pr-watcher/pkg/filter"
 	"github.com/bborbe/github-pr-watcher/pkg/trust"
 	libkafka "github.com/bborbe/kafka"
 	libkv "github.com/bborbe/kv"
 	"github.com/bborbe/log"
+	"github.com/bborbe/notification/command/notification"
 	"github.com/bborbe/run"
 	libtime "github.com/bborbe/time"
 
@@ -52,6 +54,23 @@ func CreateKafkaSender(
 	return task.NewCreateCommandSender(sender, "")
 }
 
+// CreateEscalator builds the auto-merge refusal escalator. It publishes
+// `agent-escalation` notifications through the shared notification core on the
+// same CQRS command topic the other producers use, so a refused PR reaches the
+// operator's Telegram/Discord channels instead of sitting in a log line.
+func CreateEscalator(
+	ctx context.Context,
+	syncProducer libkafka.SyncProducer,
+	topicPrefix base.TopicPrefix,
+) escalate.Escalator {
+	sender := notification.NewNotificationPublishCommandSender(
+		base.NewCommandCreator(base.RequestIDChannel(ctx)),
+		cdb.NewCommandObjectSender(syncProducer, topicPrefix, log.DefaultSamplerFactory),
+		cqrsiam.Initiator("watcher-github-pr"),
+	)
+	return escalate.NewEscalator(escalate.NewNotificationPublishFunc(sender))
+}
+
 // CreateWatcher wires all dependencies and returns a ready-to-use Watcher.
 func CreateWatcher(
 	ghClient pkg.GitHubClient,
@@ -79,6 +98,7 @@ func CreateWatcher(
 	overrideLedger pkg.OverrideLedger,
 	currentDateTime libtime.CurrentDateTimeGetter,
 	coalescer coalesce.Coalescer,
+	escalator escalate.Escalator,
 ) pkg.Watcher {
 	publisher := pkg.NewTaskPublisher(
 		createSender,
@@ -127,6 +147,7 @@ func CreateWatcher(
 		unreviewedScanner,
 		coalescer,
 		currentDateTime,
+		pkg.WithEscalator(escalator),
 	)
 }
 
