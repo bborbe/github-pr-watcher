@@ -1553,9 +1553,11 @@ func (w *watcher) observeHeldPR(ctx context.Context, pr PullRequest, details PRD
 	if w.escalator == nil {
 		return
 	}
-	if w.escalateReviewRequestChanges(ctx, pr, details) {
-		return
-	}
+	// Evaluate both refusal classes independently. A held PR frequently has BOTH
+	// a failing check and a change request; returning after the review would
+	// suppress checks-not-green for exactly the PRs it exists for. The episode
+	// keys are per class, so each fires at most once.
+	w.escalateReviewRequestChanges(ctx, pr, details)
 	state, err := w.ghClient.GetCommitState(
 		ctx,
 		pr.Owner,
