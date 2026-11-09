@@ -423,7 +423,8 @@ func (a *application) Run(ctx context.Context, _ libsentry.Client) error {
 	)
 	a.WebhookHandler = libhttp.NewJSONErrorHandler(webhookHandler)
 
-	// In-pod command consumer: third run.Func alongside poll + HTTP.
+	// In-pod command consumer: one of four run.Funcs alongside poll, HTTP and
+	// the retry-guard outcome consumer.
 	// session-scoped offset store — replays the request topic from OffsetOldest
 	// on pod restart; safe because the downstream CreateTaskCommand is idempotent
 	// via the derived task_id.
@@ -452,16 +453,29 @@ func (a *application) Run(ctx context.Context, _ libsentry.Client) error {
 		currentDateTime, // spec 067: time-injected clock for Force=true nonce
 	)
 
+	// Fourth run.Func: consumes task lifecycle events and clears the retry
+	// guard record for a task that reached a terminal status, so a failed
+	// review releases its suppression immediately instead of waiting out the
+	// staleness bound.
+	retryGuardOutcomeConsumer := pkg.NewRetryGuardOutcomeConsumer(
+		saramaClientProvider,
+		db,
+		a.TopicPrefix,
+		retryGuard,
+	)
+
 	glog.V(2).
 		Infof("maintainer-watcher-github-pr starting stage=%s scope=%s interval=%s listen=%s schema=%s", a.Stage, a.RepoScope, a.PollInterval, a.Listen, lib.GithubPRReviewV1SchemaID)
 
 	pollOnce := a.pollOnce(w)
 
-	// Order: poll → HTTP → command consumer (spec 066 AC 9: three run.Funcs).
+	// Order: poll → HTTP → command consumer → retry-guard outcome consumer
+	// (spec 066 AC 9: four run.Funcs).
 	return run.CancelOnFirstFinish(ctx,
 		a.runPollLoop(pollOnce, pollInterval),
 		a.createHTTPServer(pollOnce),
 		commandConsumer,
+		retryGuardOutcomeConsumer,
 	)
 }
 

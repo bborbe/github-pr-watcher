@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	cdb "github.com/bborbe/cqrs/cdb"
@@ -82,6 +83,16 @@ type RetryGuard interface {
 	// Record stores that a review was published for pr, so a later Check
 	// suppresses a duplicate while it is fresh.
 	Record(ctx context.Context, tx libkv.Tx, pr RetryGuardPR, taskID string) error
+	// ClearByTaskID scans the in-memory ledger for the record whose stored task
+	// identifier equals taskID, deletes it if present, and logs the fixed clear
+	// line at default verbosity. It reports whether a record was deleted; an
+	// unknown identifier is a silent no-op.
+	ClearByTaskID(
+		ctx context.Context,
+		tx libkv.Tx,
+		taskID string,
+		outcome string,
+	) (bool, error)
 }
 
 // PublishRecorder records that a review task was published for one head SHA,
@@ -221,12 +232,13 @@ func (g *retryGuard) decideFresh(
 	glog.Infof("retry guard: suppressed in-flight run pr=%s/%s#%d sha=%s"+
 		" task_id=%s age_seconds=%d",
 		pr.Owner, pr.Repo, pr.Number, pr.HeadSHA, record.TaskID, ageSec)
-	return RetryGuardDecision{
+	decision := RetryGuardDecision{
 		Action:         RetryGuardActionSkip,
 		Reason:         RetryGuardReasonSkipInflight,
 		ExistingTaskID: record.TaskID,
 		RecordAge:      age,
-	}, errors.Wrapf(
+	}
+	return decision, errors.Wrapf(
 		ctx, cdb.ErrCommandObjectSkipped,
 		"in-flight review already published pr=%s/%s#%d sha=%s task_id=%s",
 		pr.Owner, pr.Repo, pr.Number, pr.HeadSHA, record.TaskID,
@@ -255,6 +267,52 @@ func (g *retryGuard) Record(
 		return errors.Wrap(ctx, err, "store retry guard record")
 	}
 	return nil
+}
+
+// ClearByTaskID deletes the ledger record whose stored task identifier equals
+// taskID, logging the clear line for each deleted record. A value that cannot
+// be decoded cannot name a task and is skipped; an identifier that matches no
+// record is a silent no-op.
+func (g *retryGuard) ClearByTaskID(
+	ctx context.Context,
+	tx libkv.Tx,
+	taskID string,
+	outcome string,
+) (bool, error) {
+	bucket, err := tx.Bucket(ctx, retryGuardBucketName)
+	if err != nil {
+		if errors.Is(err, libkv.BucketNotFoundError) {
+			return false, nil
+		}
+		return false, errors.Wrap(ctx, err, "get retry guard bucket")
+	}
+
+	keys := make([][]byte, 0)
+	it := bucket.Iterator()
+	defer it.Close()
+	for it.Rewind(); it.Valid(); it.Next() {
+		item := it.Item()
+		var record retryGuardRecord
+		if decodeErr := item.Value(func(value []byte) error {
+			return json.Unmarshal(value, &record)
+		}); decodeErr != nil {
+			continue
+		}
+		if record.TaskID != taskID {
+			continue
+		}
+		keys = append(keys, append([]byte(nil), item.Key()...))
+	}
+
+	for _, key := range keys {
+		if err := bucket.Delete(ctx, key); err != nil {
+			return false, errors.Wrap(ctx, err, "delete retry guard record")
+		}
+		pr, sha := splitRetryGuardKey(string(key))
+		glog.Infof("retry guard cleared reason=task_outcome_%s pr=%s sha=%s task_id=%s",
+			outcome, pr, sha, taskID)
+	}
+	return len(keys) > 0, nil
 }
 
 // prune deletes every record older than the staleness bound and every value
@@ -323,4 +381,31 @@ func (g *retryGuard) recordAge(publishedAt libtime.DateTime) libtime.Duration {
 
 func retryGuardKey(pr RetryGuardPR) []byte {
 	return []byte(fmt.Sprintf("%s/%s#%d@%s", pr.Owner, pr.Repo, pr.Number, pr.HeadSHA))
+}
+
+// retryGuardOutcomeToken maps the review task's diagnostics outcome to the
+// token used in the clear line. The producer emits "failed", "success" or
+// "skipped"; an unrecognized or absent diagnostics outcome falls back to the
+// terminal status ("completed" or "aborted").
+func retryGuardOutcomeToken(diagnosticsOutcome string, status string) string {
+	switch diagnosticsOutcome {
+	case "failed":
+		return "failed"
+	case "success":
+		return "completed"
+	case "skipped":
+		return "skipped"
+	default:
+		return status
+	}
+}
+
+// splitRetryGuardKey splits a ledger key "<owner>/<repo>#<n>@<sha>" into the
+// pull-request part and the head SHA. A key without '@' returns the whole key
+// as the pull-request part and an empty SHA.
+func splitRetryGuardKey(key string) (pr string, sha string) {
+	if at := strings.LastIndex(key, "@"); at >= 0 {
+		return key[:at], key[at+1:]
+	}
+	return key, ""
 }

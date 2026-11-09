@@ -28,6 +28,22 @@ type RetryGuard struct {
 		result1 pkg.RetryGuardDecision
 		result2 error
 	}
+	ClearByTaskIDStub        func(context.Context, kv.Tx, string, string) (bool, error)
+	clearByTaskIDMutex       sync.RWMutex
+	clearByTaskIDArgsForCall []struct {
+		arg1 context.Context
+		arg2 kv.Tx
+		arg3 string
+		arg4 string
+	}
+	clearByTaskIDReturns struct {
+		result1 bool
+		result2 error
+	}
+	clearByTaskIDReturnsOnCall map[int]struct {
+		result1 bool
+		result2 error
+	}
 	RecordStub        func(context.Context, kv.Tx, pkg.RetryGuardPR, string) error
 	recordMutex       sync.RWMutex
 	recordArgsForCall []struct {
@@ -108,6 +124,73 @@ func (fake *RetryGuard) CheckReturnsOnCall(i int, result1 pkg.RetryGuardDecision
 	}
 	fake.checkReturnsOnCall[i] = struct {
 		result1 pkg.RetryGuardDecision
+		result2 error
+	}{result1, result2}
+}
+
+func (fake *RetryGuard) ClearByTaskID(arg1 context.Context, arg2 kv.Tx, arg3 string, arg4 string) (bool, error) {
+	fake.clearByTaskIDMutex.Lock()
+	ret, specificReturn := fake.clearByTaskIDReturnsOnCall[len(fake.clearByTaskIDArgsForCall)]
+	fake.clearByTaskIDArgsForCall = append(fake.clearByTaskIDArgsForCall, struct {
+		arg1 context.Context
+		arg2 kv.Tx
+		arg3 string
+		arg4 string
+	}{arg1, arg2, arg3, arg4})
+	stub := fake.ClearByTaskIDStub
+	fakeReturns := fake.clearByTaskIDReturns
+	fake.recordInvocation("ClearByTaskID", []interface{}{arg1, arg2, arg3, arg4})
+	fake.clearByTaskIDMutex.Unlock()
+	if stub != nil {
+		return stub(arg1, arg2, arg3, arg4)
+	}
+	if specificReturn {
+		return ret.result1, ret.result2
+	}
+	return fakeReturns.result1, fakeReturns.result2
+}
+
+func (fake *RetryGuard) ClearByTaskIDCallCount() int {
+	fake.clearByTaskIDMutex.RLock()
+	defer fake.clearByTaskIDMutex.RUnlock()
+	return len(fake.clearByTaskIDArgsForCall)
+}
+
+func (fake *RetryGuard) ClearByTaskIDCalls(stub func(context.Context, kv.Tx, string, string) (bool, error)) {
+	fake.clearByTaskIDMutex.Lock()
+	defer fake.clearByTaskIDMutex.Unlock()
+	fake.ClearByTaskIDStub = stub
+}
+
+func (fake *RetryGuard) ClearByTaskIDArgsForCall(i int) (context.Context, kv.Tx, string, string) {
+	fake.clearByTaskIDMutex.RLock()
+	defer fake.clearByTaskIDMutex.RUnlock()
+	argsForCall := fake.clearByTaskIDArgsForCall[i]
+	return argsForCall.arg1, argsForCall.arg2, argsForCall.arg3, argsForCall.arg4
+}
+
+func (fake *RetryGuard) ClearByTaskIDReturns(result1 bool, result2 error) {
+	fake.clearByTaskIDMutex.Lock()
+	defer fake.clearByTaskIDMutex.Unlock()
+	fake.ClearByTaskIDStub = nil
+	fake.clearByTaskIDReturns = struct {
+		result1 bool
+		result2 error
+	}{result1, result2}
+}
+
+func (fake *RetryGuard) ClearByTaskIDReturnsOnCall(i int, result1 bool, result2 error) {
+	fake.clearByTaskIDMutex.Lock()
+	defer fake.clearByTaskIDMutex.Unlock()
+	fake.ClearByTaskIDStub = nil
+	if fake.clearByTaskIDReturnsOnCall == nil {
+		fake.clearByTaskIDReturnsOnCall = make(map[int]struct {
+			result1 bool
+			result2 error
+		})
+	}
+	fake.clearByTaskIDReturnsOnCall[i] = struct {
+		result1 bool
 		result2 error
 	}{result1, result2}
 }
