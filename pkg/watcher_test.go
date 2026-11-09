@@ -86,6 +86,57 @@ func newTestWatcher(
 	)
 }
 
+// newTestWatcherWithTracker mirrors newTestWatcher and wires one PublishTracker
+// into both the publisher and the watcher, so a cycle's publish count can be
+// asserted.
+func newTestWatcherWithTracker(
+	ghClient pkg.GitHubClient,
+	createSender task.CreateCommandSender,
+	cursorPath string,
+	startTime libtime.DateTime,
+	fakeMetrics *mocks.Metrics,
+	trustDecision trust.Trust,
+	tracker *pkg.PublishTracker,
+) pkg.Watcher {
+	publisher := pkg.NewTaskPublisher(
+		createSender,
+		trustDecision,
+		fakeMetrics,
+		pkg.TaskConfig{
+			Stage:       "dev",
+			MaxSlugLen:  pkg.DefaultMaxSlugLen,
+			MaxTitleLen: pkg.DefaultMaxTitleLen,
+			TaskSuffix:  "",
+		},
+		ghClient,
+		pkg.WithPublishTracker(tracker),
+	)
+	return pkg.NewWatcher(
+		ghClient,
+		publisher,
+		fakeMetrics,
+		cursorPath,
+		startTime,
+		"bborbe",
+		filter.TaskCreationFilters{
+			filter.NewDraftFilter(),
+			filter.NewBotAuthorFilter([]string{"dependabot[bot]"}),
+		},
+		filter.TaskCreationFilters{
+			filter.NewDraftFilter(),
+		},
+		"",
+		"",
+		false,
+		nil,
+		trustDecision,
+		newDisabledUnreviewedScanner(),
+		noOpCoalescer(),
+		libtime.NewCurrentDateTime(),
+		pkg.WithWatcherPublishTracker(tracker),
+	)
+}
+
 func newTestWatcherWithOverride(
 	ghClient pkg.GitHubClient,
 	createSender task.CreateCommandSender,
@@ -431,6 +482,74 @@ var _ = Describe("pkg.Watcher", func() {
 			Expect(fakeMetrics.IncPRPublishedCallCount()).To(Equal(1))
 			command := fakeMetrics.IncPRPublishedArgsForCall(0)
 			Expect(command).To(Equal("create"))
+		})
+
+		It("records the publish on the tracker", func() {
+			ghClient.SearchPRsReturns(pkg.SearchResult{
+				PullRequests: []pkg.PullRequest{{
+					Number:      42,
+					Owner:       "bborbe",
+					Repo:        "code-reviewer",
+					Title:       "feat: new feature",
+					HTMLURL:     "https://github.com/bborbe/maintainer/pull/42",
+					AuthorLogin: "alice",
+					UpdatedAt:   libtime.DateTime(time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC)),
+				}},
+				HasNextPage:   false,
+				RateRemaining: 100,
+			}, nil)
+			ghClient.GetPRDetailsReturns(
+				pkg.PRDetails{
+					HeadSHA:  "abc123",
+					CloneURL: "https://github.com/owner/repo.git",
+					BaseRef:  "master",
+				},
+				nil,
+			)
+			createSender.SendCommandReturns(nil)
+
+			tracker := pkg.NewPublishTracker(libtime.CurrentDateTimeGetterFunc(
+				func() libtime.DateTime { return startTime },
+			))
+			w := newTestWatcherWithTracker(
+				ghClient,
+				createSender,
+				cursorPath,
+				startTime,
+				fakeMetrics,
+				trust.NewAuthorAllowlist([]string{"alice"}),
+				tracker,
+			)
+			Expect(w.Poll(ctx)).NotTo(HaveOccurred())
+
+			count, last := tracker.Snapshot()
+			Expect(count).To(Equal(int64(1)))
+			Expect(last.IsZero()).To(BeFalse())
+		})
+
+		It("records nothing when the cycle published nothing", func() {
+			ghClient.SearchPRsReturns(pkg.SearchResult{
+				PullRequests:  nil,
+				HasNextPage:   false,
+				RateRemaining: 100,
+			}, nil)
+
+			tracker := pkg.NewPublishTracker(libtime.CurrentDateTimeGetterFunc(
+				func() libtime.DateTime { return startTime },
+			))
+			w := newTestWatcherWithTracker(
+				ghClient,
+				createSender,
+				cursorPath,
+				startTime,
+				fakeMetrics,
+				trust.NewAuthorAllowlist([]string{"alice"}),
+				tracker,
+			)
+			Expect(w.Poll(ctx)).NotTo(HaveOccurred())
+
+			count, _ := tracker.Snapshot()
+			Expect(count).To(Equal(int64(0)))
 		})
 	})
 
@@ -3398,6 +3517,105 @@ var _ = Describe("BuildCreateCommand forced re-review", func() {
 		Expect(string(forced.TaskIdentifier)).To(Equal("a25d2b9a-c548-50b5-83c5-fdc6f2fe8927"))
 	})
 })
+
+var _ = Describe("TaskPublisher.PublishRedrive", func() {
+	var (
+		ctx          context.Context
+		createSender *taskmocks.TaskCreateCommandSender
+		ghClient     *mocks.GitHubClient
+		fakeMetrics  *mocks.Metrics
+		pr           pkg.PullRequest
+		details      pkg.PRDetails
+	)
+
+	BeforeEach(func() {
+		ctx = context.Background()
+		createSender = new(taskmocks.TaskCreateCommandSender)
+		ghClient = new(mocks.GitHubClient)
+		fakeMetrics = new(mocks.Metrics)
+		pr = pkg.PullRequest{
+			Number:      42,
+			Owner:       "bborbe",
+			Repo:        "repo",
+			Title:       "feat: new feature",
+			HTMLURL:     "https://github.com/bborbe/repo/pull/42",
+			AuthorLogin: "alice",
+			UpdatedAt:   libtime.DateTime(time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC)),
+		}
+		details = pkg.PRDetails{
+			HeadSHA:  "abc123",
+			CloneURL: "https://github.com/bborbe/repo.git",
+			BaseRef:  "master",
+		}
+	})
+
+	publisher := func(opts ...pkg.TaskPublisherOption) pkg.TaskPublisher {
+		return pkg.NewTaskPublisher(
+			createSender,
+			trust.NewAuthorAllowlist([]string{"alice"}),
+			fakeMetrics,
+			pkg.TaskConfig{
+				Stage:       "dev",
+				MaxSlugLen:  pkg.DefaultMaxSlugLen,
+				MaxTitleLen: pkg.DefaultMaxTitleLen,
+			},
+			ghClient,
+			opts...,
+		)
+	}
+
+	It("puts a retry token in the title so the controller cannot dedup it away", func() {
+		// The agent controller dedups on TITLE PATH, so a salted identifier with
+		// an unchanged title is rejected with ErrTaskAlreadyExists and re-runs
+		// nothing. This is the assertion that catches that regression.
+		taskID := pkg.DeriveTaskIDForce(
+			"bborbe", "repo", 42, "abc123", "1700000000000000000",
+		).String()
+		Expect(publisher().PublishRedrive(ctx, pr, taskID, details)).To(BeTrue())
+
+		Expect(createSender.SendCommandCallCount()).To(Equal(1))
+		_, cmd := createSender.SendCommandArgsForCall(0)
+		Expect(cmd.Title).To(HaveSuffix(" - retry-" + taskID[:8]))
+		Expect(string(cmd.TaskIdentifier)).To(Equal(taskID))
+	})
+
+	It("publishes a title distinct from the plain create for the same PR and head SHA", func() {
+		taskID := pkg.DeriveTaskID("bborbe", "repo", 42, "abc123").String()
+		Expect(publisher().PublishCreate(ctx, pr, taskID, details)).To(BeTrue())
+		Expect(publisher().PublishRedrive(ctx, pr, taskID, details)).To(BeTrue())
+
+		Expect(createSender.SendCommandCallCount()).To(Equal(2))
+		_, plain := createSender.SendCommandArgsForCall(0)
+		_, redrive := createSender.SendCommandArgsForCall(1)
+		Expect(redrive.Title).NotTo(Equal(plain.Title))
+	})
+
+	It("does not refresh the retry guard ledger, so a forced /trigger still works", func() {
+		rec := &recordingRecorder{}
+		pub := publisher(pkg.WithPublishRecorder(rec))
+		taskID := pkg.DeriveTaskID("bborbe", "repo", 42, "abc123").String()
+
+		Expect(pub.PublishCreate(ctx, pr, taskID, details)).To(BeTrue())
+		Expect(rec.calls).To(Equal(1))
+
+		Expect(pub.PublishRedrive(ctx, pr, taskID, details)).To(BeTrue())
+		Expect(rec.calls).To(Equal(1))
+	})
+})
+
+// recordingRecorder counts RecordPublish calls so the ledger half of the
+// PublishRedrive contract is asserted rather than assumed.
+type recordingRecorder struct {
+	calls int
+}
+
+func (r *recordingRecorder) RecordPublish(
+	_ context.Context,
+	_ pkg.RetryGuardPR,
+	_ string,
+) {
+	r.calls++
+}
 
 var _ = Describe("oversized park predicate", func() {
 	makeDetails := func(additions, changedFiles int) pkg.PRDetails {

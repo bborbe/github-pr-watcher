@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"sync/atomic"
 
 	agentlib "github.com/bborbe/agent"
 	task "github.com/bborbe/agent/command/task"
@@ -54,6 +55,21 @@ type TaskConfig struct {
 // Returns true on successful publish, false on trust check failure or send failure.
 type TaskPublisher interface {
 	PublishCreate(ctx context.Context, pr PullRequest, taskIDStr string, details PRDetails) bool
+	// PublishRedrive publishes a review task for a record that has outlived the
+	// retry guard's staleness bound with no verdict at its head SHA. It differs
+	// from PublishCreate in exactly two ways, both required for the command to
+	// do anything:
+	//
+	//   - The title carries a `retry-<token>` segment. The agent controller
+	//     dedups on the TITLE PATH, not on task_identifier, so a salted id with
+	//     an unchanged title is rejected with ErrTaskAlreadyExists and re-runs
+	//     nothing — see computePRTitle.
+	//   - The publish is NOT recorded in the retry guard's ledger. Recording it
+	//     would keep the ledger permanently fresh while re-drives continue, and
+	//     an operator's forced /trigger on the same PR would then be suppressed
+	//     as in-flight for an hour after every re-drive, which is the manual
+	//     lever's whole purpose gone.
+	PublishRedrive(ctx context.Context, pr PullRequest, taskIDStr string, details PRDetails) bool
 	// PublishOverride publishes a `pr-override` task for a labeled PR. It is
 	// trusted-authors-only. Returns (handled, emitted):
 	//   - handled=true: this is a trusted-author override case; the caller must
@@ -109,6 +125,15 @@ func WithOverrideLedger(ledger OverrideLedger) TaskPublisherOption {
 	}
 }
 
+// WithPublishTracker makes the publisher note every successful send on the
+// shared PublishTracker, so the watcher can report a cycle that published
+// nothing instead of staying silent about it.
+func WithPublishTracker(tracker *PublishTracker) TaskPublisherOption {
+	return func(p *taskPublisher) {
+		p.tracker = tracker
+	}
+}
+
 // NewTaskPublisher returns a TaskPublisher that performs trust evaluation
 // then publishes a CreateTaskCommand via the given CreateCommandSender.
 func NewTaskPublisher(
@@ -151,6 +176,10 @@ type taskPublisher struct {
 	// Nil-tolerant: a publisher built without one never suppresses a review,
 	// which is the pre-ledger behaviour.
 	overrideLedger OverrideLedger
+	// tracker notes every successful publish so the watcher can tell an idle
+	// publish path from a stopped one. Nil-tolerant: a publisher built without
+	// one simply records nothing.
+	tracker *PublishTracker
 }
 
 // PublishCreate implements TaskPublisher.
@@ -159,6 +188,36 @@ func (p *taskPublisher) PublishCreate(
 	pr PullRequest,
 	taskIDStr string,
 	details PRDetails,
+) bool {
+	return p.publishReview(ctx, pr, taskIDStr, details, publishMode{record: true})
+}
+
+// PublishRedrive implements TaskPublisher — see the interface for why the title
+// must change and why the guard's ledger must not be refreshed.
+func (p *taskPublisher) PublishRedrive(
+	ctx context.Context,
+	pr PullRequest,
+	taskIDStr string,
+	details PRDetails,
+) bool {
+	return p.publishReview(ctx, pr, taskIDStr, details, publishMode{forced: true})
+}
+
+// publishMode selects the two things a review publish can do differently: salt
+// the title with a retry token (forced), and record the publish in the retry
+// guard's ledger (record).
+type publishMode struct {
+	forced bool
+	record bool
+}
+
+// publishReview is the shared body of PublishCreate and PublishRedrive.
+func (p *taskPublisher) publishReview(
+	ctx context.Context,
+	pr PullRequest,
+	taskIDStr string,
+	details PRDetails,
+	mode publishMode,
 ) bool {
 	// A review is never published for a SHA a fresh override owns.
 	//
@@ -195,7 +254,7 @@ func (p *taskPublisher) PublishCreate(
 		p.cfg.TaskSuffix,
 		p.cfg.TargetVault,
 		trustResult,
-		false, // poll path is never a forced re-review
+		mode.forced,
 		p.cfg.MaxAdditions,
 		p.cfg.MaxChangedFiles,
 		exclusion,
@@ -208,18 +267,23 @@ func (p *taskPublisher) PublishCreate(
 	}
 	// Count oversized trusted-author PRs the poll parked at human_review
 	// separately from normal reviews — matches BuildCreateCommand's decision
-	// (park only applies to trusted authors in the poll path, where forced is
-	// always false). The parked count is how the crash fix proves itself live.
-	parked := trustResult.Success() &&
+	// (only an unforced publish parks). The parked count is how the crash fix
+	// proves itself live.
+	parked := !mode.forced && trustResult.Success() &&
 		oversized(details, exclusion, p.cfg.MaxAdditions, p.cfg.MaxChangedFiles)
 	if parked {
 		p.metrics.IncPRPublished("parked")
 	} else {
 		p.metrics.IncPRPublished("create")
 	}
-	glog.V(2).Infof("published CreateTaskCommand pr=%s/%s#%d sha=%s taskID=%s trusted=%t parked=%t",
-		pr.Owner, pr.Repo, pr.Number, details.HeadSHA, taskIDStr, trustResult.Success(), parked)
-	p.recordPublished(ctx, pr, taskIDStr, details)
+	glog.V(2).Infof("published CreateTaskCommand pr=%s/%s#%d sha=%s taskID=%s"+
+		" trusted=%t parked=%t forced=%t",
+		pr.Owner, pr.Repo, pr.Number, details.HeadSHA, taskIDStr,
+		trustResult.Success(), parked, mode.forced)
+	p.tracker.Record()
+	if mode.record {
+		p.recordPublished(ctx, pr, taskIDStr, details)
+	}
 	return true
 }
 
@@ -346,6 +410,7 @@ func (p *taskPublisher) PublishOverride(
 	glog.V(2).Infof("published override CreateTaskCommand pr=%s/%s#%d sha=%s taskID=%s",
 		pr.Owner, pr.Repo, pr.Number, details.HeadSHA, taskIDStr)
 	p.metrics.IncPRPublished("override")
+	p.tracker.Record()
 	p.recordOverride(ctx, pr, taskIDStr, details)
 	return true, true
 }
@@ -380,6 +445,7 @@ func (p *taskPublisher) PublishMechanicalOverride(
 	glog.Infof("mechanical override pr=%s/%s#%d sha=%s rule=%s",
 		pr.Owner, pr.Repo, pr.Number, details.HeadSHA, overrideReasonTrivialBotBump)
 	p.metrics.IncPRPublished("override_mechanical")
+	p.tracker.Record()
 	p.recordOverride(ctx, pr, taskIDStr, details)
 	return true
 }
@@ -536,6 +602,13 @@ type watcher struct {
 	// refusals stay log-and-counter only, which is the pre-escalation
 	// behaviour and what the watcher's own tests exercise by default.
 	escalator escalate.Escalator
+	// publishTracker is the shared count of successful publishes. Nil means no
+	// liveness line is emitted, which is the pre-tracker behaviour.
+	publishTracker *PublishTracker
+	// idleCycles counts consecutive poll cycles that published nothing, so the
+	// silence line carries how long the path has been quiet, not just that this
+	// cycle was.
+	idleCycles atomic.Int64
 }
 
 // WatcherOption configures optional watcher dependencies without widening the
@@ -548,6 +621,15 @@ type WatcherOption func(*watcher)
 func WithEscalator(escalator escalate.Escalator) WatcherOption {
 	return func(w *watcher) {
 		w.escalator = escalator
+	}
+}
+
+// WithWatcherPublishTracker wires the tracker the publisher records on, so the
+// watcher can log a cycle that published nothing for any PR. Without it no
+// liveness line is emitted.
+func WithWatcherPublishTracker(tracker *PublishTracker) WatcherOption {
+	return func(w *watcher) {
+		w.publishTracker = tracker
 	}
 }
 
@@ -570,6 +652,11 @@ func (w *watcher) rateLimitRemainingForGauge(ctx context.Context) int {
 }
 
 func (w *watcher) Poll(ctx context.Context) error {
+	publishedBefore, _ := w.publishTracker.Snapshot()
+	// Runs on every exit path: a cycle that aborted still published nothing,
+	// and the silence is the fact this line exists to report.
+	defer func() { w.logPublishLiveness(publishedBefore) }()
+
 	cursorState, err := LoadCursor(ctx, w.cursorPath, w.startTime)
 	if err != nil {
 		return errors.Wrapf(ctx, err, "load cursor")
@@ -617,6 +704,48 @@ func (w *watcher) Poll(ctx context.Context) error {
 	w.unreviewedScanner.Scan(ctx)
 	w.metrics.IncPollCycle("success")
 	return nil
+}
+
+// logPublishLiveness turns a cycle that published nothing into a statement
+// rather than an absence.
+//
+// The publish path used to report only what it published, so a cycle that
+// emitted nothing was indistinguishable from a watcher with no work: measured
+// 2026-11-07, zero publishes for any PR across the 30 minutes to 17:52 while
+// the unreviewed scanner kept listing bborbe/nuke#1104. The line carries the
+// duration of the silence and the population that was owed a review, so
+// "nothing to do" and "nothing happened" read differently.
+//
+// The population is the scanner's candidate count, NOT the raw search count: a
+// PR sitting at the `updated:>=cursor` boundary is returned on every cycle and
+// legitimately produces nothing (already published, filtered, or in flight), so
+// keying the line on the search count would fire it every cycle on a healthy
+// watcher and bury the signal it exists to carry.
+func (w *watcher) logPublishLiveness(publishedBefore int64) {
+	if w.publishTracker == nil {
+		return
+	}
+	publishedAfter, last := w.publishTracker.Snapshot()
+	if publishedAfter > publishedBefore {
+		w.idleCycles.Store(0)
+		return
+	}
+	idleCycles := w.idleCycles.Add(1)
+	candidates := 0
+	if w.unreviewedScanner != nil {
+		candidates = w.unreviewedScanner.LastCandidates()
+	}
+	if candidates == 0 {
+		return
+	}
+	idleFor := "never"
+	if !last.IsZero() {
+		idleFor = w.currentDateTime.Now().Sub(last).String()
+	}
+	glog.Infof(
+		"publish path silent: 0 publishes this cycle candidates=%d last_publish=%s idle_cycles=%d",
+		candidates, idleFor, idleCycles,
+	)
 }
 
 // fetchAllPRs paginates GitHub search results. Returns (prs, "") on success,

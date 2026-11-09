@@ -100,6 +100,9 @@ func CreateWatcher(
 	coalescer coalesce.Coalescer,
 	escalator escalate.Escalator,
 ) pkg.Watcher {
+	// One tracker shared by the publisher and the watcher: the publisher notes
+	// each successful send, the watcher reports a cycle that recorded none.
+	publishTracker := pkg.NewPublishTracker(currentDateTime)
 	publisher := pkg.NewTaskPublisher(
 		createSender,
 		trustDecision,
@@ -116,6 +119,7 @@ func CreateWatcher(
 		ghClient,
 		pkg.WithPublishRecorder(publishRecorder),
 		pkg.WithOverrideLedger(overrideLedger),
+		pkg.WithPublishTracker(publishTracker),
 	)
 	unreviewedScanner := pkg.NewUnreviewedScanner(
 		ghClient,
@@ -148,6 +152,7 @@ func CreateWatcher(
 		coalescer,
 		currentDateTime,
 		pkg.WithEscalator(escalator),
+		pkg.WithWatcherPublishTracker(publishTracker),
 	)
 }
 
