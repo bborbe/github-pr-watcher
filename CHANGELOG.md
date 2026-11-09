@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## Unreleased
+## v0.23.3
 
 - fix: clear the retry guard's in-flight record when the review task reaches a terminal status, so a forced re-trigger after a failed review publishes instead of being silently suppressed for the full one-hour bound — the watcher consumes the prefixed task event stream, deletes the ledger record whose stored task identifier matches, and logs `retry guard cleared reason=task_outcome_<outcome> …`; non-terminal events and delete events leave the record in place, and the suppression window, prune and decision logic are unchanged
 
