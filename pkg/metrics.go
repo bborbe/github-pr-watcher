@@ -56,9 +56,11 @@ type UnreviewedPR struct {
 	Repo string
 	// Number is the pull-request number, rendered as the gauge's pr label.
 	Number int
-	// RetriesExhausted marks a PR whose retry budget is used up and whose last
-	// retry has had a full threshold without a review, so the scan gave up on
-	// it. Rendered as the gauge's retries_exhausted label.
+	// RetriesExhausted marks a PR whose bounded retry budget is spent. The
+	// scan keeps re-driving such a PR once per stale hour, so the label means
+	// "the budget is gone", not "nothing is being tried", and it stays true
+	// through those re-drives rather than flapping every threshold. Rendered
+	// as the gauge's retries_exhausted label.
 	RetriesExhausted bool
 }
 
@@ -96,12 +98,12 @@ var (
 
 	unreviewedPRs = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "github_pr_watcher_unreviewed_prs",
-		Help: "Open pull requests the watcher would hand to the reviewer whose current head SHA has no review from a configured reviewer bot after waiting longer than the unreviewed threshold. Value 1 per such PR; retries_exhausted is true once the bounded re-publish budget is used up and the last retry has had a full threshold without a review.",
+		Help: "Open pull requests the watcher would hand to the reviewer whose current head SHA has no review from a configured reviewer bot after waiting longer than the unreviewed threshold. Value 1 per such PR; retries_exhausted is true once the bounded re-publish budget is spent, and stays true through the hourly stale re-drive.",
 	}, []string{"repo", "pr", "retries_exhausted"})
 
 	unreviewedRetriesTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "github_pr_watcher_unreviewed_retries_total",
-		Help: "Total number of review tasks re-published by the unreviewed-PR retry pass, by repo. Bounded by UNREVIEWED_RETRY_MAX per (PR, head SHA) per process lifetime.",
+		Help: "Total number of review tasks re-published by the unreviewed-PR retry pass, by repo. Bounded by UNREVIEWED_RETRY_MAX per (PR, head SHA) per process lifetime, plus one stale re-drive per hour once that budget is spent.",
 	}, []string{"repo"})
 
 	escalationsTotal = prometheus.NewCounterVec(prometheus.CounterOpts{

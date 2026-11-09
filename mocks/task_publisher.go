@@ -56,6 +56,20 @@ type TaskPublisher struct {
 		result1 bool
 		result2 bool
 	}
+	PublishRedriveStub        func(context.Context, pkg.PullRequest, string, pkg.PRDetails) bool
+	publishRedriveMutex       sync.RWMutex
+	publishRedriveArgsForCall []struct {
+		arg1 context.Context
+		arg2 pkg.PullRequest
+		arg3 string
+		arg4 pkg.PRDetails
+	}
+	publishRedriveReturns struct {
+		result1 bool
+	}
+	publishRedriveReturnsOnCall map[int]struct {
+		result1 bool
+	}
 	invocations      map[string][][]interface{}
 	invocationsMutex sync.RWMutex
 }
@@ -253,6 +267,70 @@ func (fake *TaskPublisher) PublishOverrideReturnsOnCall(i int, result1 bool, res
 		result1 bool
 		result2 bool
 	}{result1, result2}
+}
+
+func (fake *TaskPublisher) PublishRedrive(arg1 context.Context, arg2 pkg.PullRequest, arg3 string, arg4 pkg.PRDetails) bool {
+	fake.publishRedriveMutex.Lock()
+	ret, specificReturn := fake.publishRedriveReturnsOnCall[len(fake.publishRedriveArgsForCall)]
+	fake.publishRedriveArgsForCall = append(fake.publishRedriveArgsForCall, struct {
+		arg1 context.Context
+		arg2 pkg.PullRequest
+		arg3 string
+		arg4 pkg.PRDetails
+	}{arg1, arg2, arg3, arg4})
+	stub := fake.PublishRedriveStub
+	fakeReturns := fake.publishRedriveReturns
+	fake.recordInvocation("PublishRedrive", []interface{}{arg1, arg2, arg3, arg4})
+	fake.publishRedriveMutex.Unlock()
+	if stub != nil {
+		return stub(arg1, arg2, arg3, arg4)
+	}
+	if specificReturn {
+		return ret.result1
+	}
+	return fakeReturns.result1
+}
+
+func (fake *TaskPublisher) PublishRedriveCallCount() int {
+	fake.publishRedriveMutex.RLock()
+	defer fake.publishRedriveMutex.RUnlock()
+	return len(fake.publishRedriveArgsForCall)
+}
+
+func (fake *TaskPublisher) PublishRedriveCalls(stub func(context.Context, pkg.PullRequest, string, pkg.PRDetails) bool) {
+	fake.publishRedriveMutex.Lock()
+	defer fake.publishRedriveMutex.Unlock()
+	fake.PublishRedriveStub = stub
+}
+
+func (fake *TaskPublisher) PublishRedriveArgsForCall(i int) (context.Context, pkg.PullRequest, string, pkg.PRDetails) {
+	fake.publishRedriveMutex.RLock()
+	defer fake.publishRedriveMutex.RUnlock()
+	argsForCall := fake.publishRedriveArgsForCall[i]
+	return argsForCall.arg1, argsForCall.arg2, argsForCall.arg3, argsForCall.arg4
+}
+
+func (fake *TaskPublisher) PublishRedriveReturns(result1 bool) {
+	fake.publishRedriveMutex.Lock()
+	defer fake.publishRedriveMutex.Unlock()
+	fake.PublishRedriveStub = nil
+	fake.publishRedriveReturns = struct {
+		result1 bool
+	}{result1}
+}
+
+func (fake *TaskPublisher) PublishRedriveReturnsOnCall(i int, result1 bool) {
+	fake.publishRedriveMutex.Lock()
+	defer fake.publishRedriveMutex.Unlock()
+	fake.PublishRedriveStub = nil
+	if fake.publishRedriveReturnsOnCall == nil {
+		fake.publishRedriveReturnsOnCall = make(map[int]struct {
+			result1 bool
+		})
+	}
+	fake.publishRedriveReturnsOnCall[i] = struct {
+		result1 bool
+	}{result1}
 }
 
 func (fake *TaskPublisher) Invocations() map[string][][]interface{} {

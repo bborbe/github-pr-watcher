@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -40,6 +41,7 @@ var _ = Describe("pkg.UnreviewedScanner", func() {
 		ghClient = new(mocks.GitHubClient)
 		publisher = new(mocks.TaskPublisher)
 		publisher.PublishCreateReturns(true)
+		publisher.PublishRedriveReturns(true)
 		fakeMetrics = new(mocks.Metrics)
 		now = libtime.DateTime(time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC))
 		currentDateTime = libtime.CurrentDateTimeGetterFunc(
@@ -427,6 +429,22 @@ var _ = Describe("pkg.UnreviewedScanner", func() {
 		Expect(prs).To(BeEmpty())
 	})
 
+	It("reports the candidate population the watcher's silence line reads", func() {
+		searchOpenReturns(openPR(42, "alice", now.Add(-libtime.Hour)))
+		s := newScanner(qualifying(), defaultFilter(), trustAlice())
+		Expect(s.LastCandidates()).To(Equal(0))
+
+		s.Scan(ctx)
+		Expect(s.LastCandidates()).To(Equal(1))
+
+		// A PR that has waited less than the threshold is not owed a review, so
+		// it must not count as population — otherwise the watcher's silence
+		// line fires on a healthy cycle.
+		searchOpenReturns(openPR(43, "alice", now.Add(-libtime.Minute)))
+		s.Scan(ctx)
+		Expect(s.LastCandidates()).To(Equal(0))
+	})
+
 	Describe("retrying unreviewed PRs", func() {
 		It("re-publishes the original task with the derived task ID", func() {
 			searchOpenReturns(openPR(42, "alice", now.Add(-libtime.Hour)))
@@ -476,12 +494,14 @@ var _ = Describe("pkg.UnreviewedScanner", func() {
 				))
 			}
 
-			// No clock advance: still within the wait after attempt 3.
+			// No clock advance. The budget is spent, so the gauge reports the
+			// PR as exhausted immediately and keeps doing so through the
+			// stale re-drive that follows — no flapping.
 			s.Scan(ctx)
 			Expect(publisher.PublishCreateCallCount()).To(Equal(3))
 			prs, _ := fakeMetrics.SetUnreviewedPRsArgsForCall(3)
 			Expect(prs).To(Equal([]pkg.UnreviewedPR{
-				{Repo: "bborbe/repo", Number: 42, RetriesExhausted: false},
+				{Repo: "bborbe/repo", Number: 42, RetriesExhausted: true},
 			}))
 
 			now = now.Add(30 * libtime.Minute)
@@ -491,6 +511,58 @@ var _ = Describe("pkg.UnreviewedScanner", func() {
 			Expect(prs).To(Equal([]pkg.UnreviewedPR{
 				{Repo: "bborbe/repo", Number: 42, RetriesExhausted: true},
 			}))
+		})
+
+		It("re-drives a stale record with a salted task id once the stale window passes", func() {
+			searchOpenReturns(openPR(42, "alice", now.Add(-libtime.Hour)))
+			s := newScanner(qualifying(), defaultFilter(), trustAlice())
+			s.Scan(ctx)
+			now = now.Add(30 * libtime.Minute)
+			s.Scan(ctx)
+			now = now.Add(30 * libtime.Minute)
+			s.Scan(ctx)
+			Expect(publisher.PublishCreateCallCount()).To(Equal(3))
+
+			// Budget spent, but no full stale window since the last attempt:
+			// nothing is published and the wait is not mistaken for silence.
+			now = now.Add(30 * libtime.Minute)
+			s.Scan(ctx)
+			Expect(publisher.PublishCreateCallCount()).To(Equal(3))
+			Expect(publisher.PublishRedriveCallCount()).To(Equal(0))
+
+			// Exactly one stale window is still in-flight to the guard (it calls
+			// a record stale only when strictly older), so the scan waits.
+			now = now.Add(30 * libtime.Minute)
+			s.Scan(ctx)
+			Expect(publisher.PublishRedriveCallCount()).To(Equal(0))
+
+			// Past the window: the record is dead (no legitimate run outlives it,
+			// and a verdict would have removed the PR from the candidate set), so
+			// the review is re-driven with a salted id the controller has not seen.
+			now = now.Add(libtime.Second)
+			s.Scan(ctx)
+			Expect(publisher.PublishCreateCallCount()).To(Equal(3))
+			Expect(publisher.PublishRedriveCallCount()).To(Equal(1))
+			_, _, redriveID, _ := publisher.PublishRedriveArgsForCall(0)
+			Expect(redriveID).NotTo(Equal(
+				pkg.DeriveTaskID("bborbe", "repo", 42, "sha-head").String(),
+			))
+			Expect(redriveID).To(Equal(
+				pkg.DeriveTaskIDForce(
+					"bborbe", "repo", 42, "sha-head",
+					strconv.FormatInt(now.Time().UnixNano(), 10),
+				).String(),
+			))
+			Expect(fakeMetrics.IncUnreviewedRetryCallCount()).To(Equal(4))
+
+			// A re-drive paces the next one a full stale window later, so a
+			// permanently broken reviewer cannot burst review pods.
+			now = now.Add(libtime.Hour - libtime.Minute)
+			s.Scan(ctx)
+			Expect(publisher.PublishRedriveCallCount()).To(Equal(1))
+			now = now.Add(libtime.Minute + libtime.Second)
+			s.Scan(ctx)
+			Expect(publisher.PublishRedriveCallCount()).To(Equal(2))
 		})
 
 		It("keeps a PR eligible when PublishCreate fails", func() {

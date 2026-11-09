@@ -49,7 +49,7 @@ Two independent decision chains run per PR — see [`docs/watcher-decision-chain
 | `BACKFILL_DURATION` | no | `720h` (30d) | On cold start, backdate the initial cursor by this; empty disables |
 | `REVIEWER_BOT_LOGINS` | yes | — | Comma-separated GitHub logins of the reviewer bots. A publishable PR whose current head SHA has no review from one of them, after waiting longer than `UNREVIEWED_THRESHOLD`, is reported on `github_pr_watcher_unreviewed_prs`. Required: the retry guard's verdict check cannot tell a finished review from an in-flight one without it, so the watcher refuses to start when it is empty |
 | `UNREVIEWED_THRESHOLD` | no | `30m` | How long a PR must wait without a reviewer-bot review before it is reported (Go duration; must be positive), and how long to wait between retries of an unreviewed PR. Ignored (and not validated) when `REVIEWER_BOT_LOGINS` is empty |
-| `UNREVIEWED_RETRY_MAX` | no | `3` | How many times the scan re-publishes the original review task for a still-unreviewed PR, one threshold apart, before marking it `retries_exhausted`; `0` disables retrying. Ignored (and not range-validated) when `REVIEWER_BOT_LOGINS` is empty |
+| `UNREVIEWED_RETRY_MAX` | no | `3` | How many times the scan re-publishes the original review task for a still-unreviewed PR, one threshold apart, before marking it `retries_exhausted`; `0` disables retrying. A PR past the budget is still re-driven once per stale hour (see § Stale re-drive) unless this is `0`. Ignored (and not range-validated) when `REVIEWER_BOT_LOGINS` is empty |
 | `SENTRY_DSN` | no | — | Sentry DSN for error tracking |
 | `SENTRY_PROXY` | no | — | HTTP proxy URL for Sentry transport |
 
@@ -137,9 +137,9 @@ counters are shared cross-service metric names, distinguished by their
 
 | Metric | Type | Labels | Meaning |
 |---|---|---|---|
-| `github_pr_watcher_unreviewed_prs` | gauge | `repo` (`owner/repo`), `pr` (number), `retries_exhausted` (`true`/`false`) | `1` for every open, publishable, trusted-author PR whose current head SHA has no review from a configured reviewer bot after waiting longer than `UNREVIEWED_THRESHOLD`. The PR leaves the gauge as soon as a matching review lands on its head SHA, or when it stops qualifying (closed, drafted, untrusted, oversized-parked, …). `retries_exhausted="true"` means the retry budget is used up AND the last retry has had a full threshold without a review — the alert fires on that |
+| `github_pr_watcher_unreviewed_prs` | gauge | `repo` (`owner/repo`), `pr` (number), `retries_exhausted` (`true`/`false`) | `1` for every open, publishable, trusted-author PR whose current head SHA has no review from a configured reviewer bot after waiting longer than `UNREVIEWED_THRESHOLD`. The PR leaves the gauge as soon as a matching review lands on its head SHA, or when it stops qualifying (closed, drafted, untrusted, oversized-parked, …). `retries_exhausted="true"` means the bounded retry budget is spent; it stays true through the stale re-drive that follows, so the alert fires once and holds while no review arrives — the alert fires on that |
 | `github_pr_watcher_unreviewed_scan_last_success_timestamp_seconds` | gauge | — | Unix seconds of the last complete unreviewed-PR scan. `0` until the first one — alert rules on it must guard `> 0`, which is how a scan that keeps failing becomes visible |
-| `github_pr_watcher_unreviewed_retries_total` | counter | `repo` (`owner/repo`) | Review tasks re-published by the retry pass. Bounded by `UNREVIEWED_RETRY_MAX` per (PR, head SHA) per process lifetime. A retry is a re-send, not proof the review arrived — pair it with the gauge |
+| `github_pr_watcher_unreviewed_retries_total` | counter | `repo` (`owner/repo`) | Review tasks re-published by the retry pass. Bounded by `UNREVIEWED_RETRY_MAX` per (PR, head SHA) per process lifetime, plus one stale re-drive per hour once that budget is spent. A retry is a re-send, not proof the review arrived — pair it with the gauge |
 | `github_api_calls_total` | counter | `service` (`github-pr-watcher`), `credential` (App id), `bucket` (`search`/`graphql`/`core`), `outcome` (`success`/`error`), `cluster` | GitHub API HTTP round trips, counted once per call at the transport including transport errors. The bucket is derived from the request path, so interleaved search and core calls are attributed correctly |
 | `github_api_rate_limited_total` | counter | `service` (`github-pr-watcher`), `credential` (App id), `bucket` (`search`/`graphql`/`core`), `class` (`unclassified`), `cluster` | GitHub API responses rejected by rate limiting: status 429, or 403 with `X-RateLimit-Remaining: 0` or a `Retry-After` header. `class` is always `unclassified` until a classification rule distinguishes primary from secondary limiting |
 
@@ -162,16 +162,62 @@ When a scan finds a PR still unreviewed, it re-publishes that PR's original
 review task — the same `DeriveTaskID` and the same create command the poll would
 send — up to `UNREVIEWED_RETRY_MAX` times per (PR, head SHA), one
 `UNREVIEWED_THRESHOLD` apart. A new commit is a new head SHA and starts a fresh
-budget; a pod restart can grant up to `UNREVIEWED_RETRY_MAX` more. The retry
-only ever re-sends the create command: it never forces a re-review, never
-mutates GitHub, and only fires after a complete, successful scan. Each retry
+budget; a pod restart can grant up to `UNREVIEWED_RETRY_MAX` more. Each retry
 logs one `unreviewed retry …` line and increments
 `github_pr_watcher_unreviewed_retries_total`.
 
+### Stale re-drive
+
+Once the budget is spent the PR is **not** abandoned. When the last publish is
+older than the retry guard's one-hour staleness bound — the same bound that
+decides when an in-flight record is dead — and the head SHA still carries no
+reviewer verdict, the scan publishes a **re-drive** instead of the deterministic
+task. Two things differ from a plain retry, and both are load-bearing:
+
+- **The title carries a `retry-<token>` segment.** The agent controller dedups
+  on the task **title path**, not on `task_identifier`, so re-sending the same
+  title is rejected with `ErrTaskAlreadyExists` and re-runs nothing — which is
+  what `bborbe/nuke#1104` measured on 2026-11-07, where two re-publishes
+  updated the task file without restarting the job. The re-drive salts both the
+  identifier (`DeriveTaskIDForce`, nonce = publish time) and the title token, so
+  the controller has never seen the pair and actually runs the review.
+- **The retry guard's ledger is not refreshed.** Recording the re-drive would
+  keep the ledger permanently fresh while re-drives continue, and an operator's
+  forced `/trigger` on the same PR would then be suppressed as in-flight for an
+  hour after every re-drive — the manual lever's whole purpose gone.
+
+The attempt count is deliberately not reset by a re-drive: the budget stays
+spent (the gauge keeps reporting `retries_exhausted="true"`) while the re-drive
+clock moves, so a permanently broken reviewer costs at most one review task per
+hour per PR rather than a burst every threshold. Each re-drive logs one
+`unreviewed redrive stale record …` line carrying both task ids and the idle
+seconds.
+
+### Silence is never an outcome
+
+Every PR the scan lists produces exactly one of three lines — a publish
+(`unreviewed retry` / `unreviewed redrive`), a suppression
+(`unreviewed suppress … reason=publish_declined`), or a skip with its reason
+(`unreviewed skip … reason=retries_disabled|retry_backoff|retries_exhausted`) —
+and the cycle ends with
+`unreviewed scan reconcile candidates=N published=P suppressed=S skipped=K`,
+whose three counts sum to N. The reconcile line, the publishes and the
+suppressions are at the default log level; the skips are at `-v=1` (the deployed
+watcher runs `-v=2`) because a skip repeats every cycle for as long as the
+condition holds, and the reconcile line already carries the count.
+
+At the watcher level, a poll cycle that publishes nothing for any PR logs
+`publish path silent: 0 publishes this cycle candidates=<n> last_publish=<age>
+idle_cycles=<n>` at the default log level. `candidates` is the unreviewed
+scanner's population — PRs actually owed a review — not the raw search count: a
+PR sitting at the `updated:>=cursor` boundary is returned every cycle and
+legitimately produces nothing, so keying on the search count would fire the line
+on a healthy watcher and bury the signal. "No work owed" (candidates=0) is
+silent; "work owed, nothing published" is the anomaly, and its absence from the
+logs is what made the 2026-11-07 outage look like a quiet watcher.
+
 Known limits:
 
-- A retry cannot revive a task that already exists but never dispatched — only a
-  new commit does. An exhausted PR needs a human.
 - The agent controller dedups on the task **title path**, which embeds the
   slugified PR title, so editing a PR's title between the original publish and a
   retry can produce a second review task for the same commit.
@@ -181,7 +227,9 @@ Known limits:
   same cycle — harmless (the controller dedups), but it counts as a retry.
 - If `PublishCreate` keeps returning `false` (e.g. Kafka down), attempts never
   reach the budget, so `retries_exhausted` never flips — watch
-  `github_pr_watcher_prs_total{command="error"}` for that case.
+  `github_pr_watcher_prs_total{command="error"}` for that case. Every such cycle
+  now logs `unreviewed suppress … reason=publish_declined` for the PR, and the
+  watcher logs `publish path silent`.
 
 Known limitation: `UpdatedAt` moves on comments and label changes too — including
 the watcher's own trivial-PR label — which restarts the wait and can delay a
