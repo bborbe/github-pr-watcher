@@ -1,8 +1,13 @@
 ---
-status: approved
+status: completed
 spec: [005-bug-retry-guard-never-learns-outcome]
+summary: Added the retry-guard outcome message handler and reconnecting consumer, derived the task event topic from the schema, wired it as the fourth run.Func, and covered it with external and internal tests.
+execution_id: 6bd9c30e-d1b7-5dbd-8798-0f83b15e142a-exec-015-spec-005-retry-guard-outcome-consumer
+dark-factory-version: dev
 created: "2026-11-09T18:04:24Z"
 queued: "2026-11-09T18:32:58Z"
+started: "2026-11-09T18:41:00Z"
+completed: "2026-11-09T18:45:07Z"
 branch: dark-factory/bug-retry-guard-never-learns-outcome
 ---
 

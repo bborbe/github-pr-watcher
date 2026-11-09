@@ -3,6 +3,7 @@ module github.com/bborbe/github-pr-watcher
 go 1.27.3
 
 require (
+	github.com/IBM/sarama v1.61.1
 	github.com/bborbe/agent v0.112.0
 	github.com/bborbe/cqrs v0.6.12
 	github.com/bborbe/errors v1.6.3
@@ -18,6 +19,7 @@ require (
 	github.com/bborbe/service v1.11.0
 	github.com/bborbe/time v1.27.17
 	github.com/bborbe/validation v1.5.5
+	github.com/bborbe/vault-cli v0.177.0
 	github.com/golang/glog v1.2.5
 	github.com/google/go-github/v62 v62.0.0
 	github.com/google/uuid v1.6.0
@@ -29,7 +31,6 @@ require (
 )
 
 require (
-	github.com/IBM/sarama v1.61.1 // indirect
 	github.com/Masterminds/semver/v3 v3.5.0 // indirect
 	github.com/a2aproject/a2a-go/v2 v2.6.0 // indirect
 	github.com/bborbe/argument/v2 v2.13.6 // indirect
@@ -37,7 +38,6 @@ require (
 	github.com/bborbe/k8s v1.14.23 // indirect
 	github.com/bborbe/math v1.4.15 // indirect
 	github.com/bborbe/strimzi v1.8.21 // indirect
-	github.com/bborbe/vault-cli v0.177.0 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/bradleyfalzon/ghinstallation/v2 v2.19.0 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
