@@ -279,6 +279,15 @@ func (s *unreviewedScanner) retry(
 	now libtime.DateTime,
 ) {
 	published, suppressed, skipped := 0, 0, 0
+	defer func() {
+		if len(candidates) == 0 {
+			return
+		}
+		glog.Infof(
+			"unreviewed scan reconcile candidates=%d published=%d suppressed=%d skipped=%d",
+			len(candidates), published, suppressed, skipped,
+		)
+	}()
 	for _, c := range candidates {
 		select {
 		case <-ctx.Done():
@@ -294,12 +303,6 @@ func (s *unreviewedScanner) retry(
 		case retrySkipped:
 			skipped++
 		}
-	}
-	if len(candidates) > 0 {
-		glog.Infof(
-			"unreviewed scan reconcile candidates=%d published=%d suppressed=%d skipped=%d",
-			len(candidates), published, suppressed, skipped,
-		)
 	}
 }
 
@@ -327,14 +330,14 @@ func (s *unreviewedScanner) retryCandidate(
 	entry := s.retryState[taskID]
 
 	if s.cfg.RetryMax == 0 {
-		glog.Infof("unreviewed skip pr=%s/%s#%d sha=%s reason=retries_disabled",
+		glog.V(1).Infof("unreviewed skip pr=%s/%s#%d sha=%s reason=retries_disabled",
 			c.pr.Owner, c.pr.Repo, c.pr.Number, c.details.HeadSHA)
 		return retrySkipped
 	}
 
 	if entry.attempts < s.cfg.RetryMax {
 		if entry.attempts > 0 && now.Sub(entry.lastAttempt) < s.cfg.Threshold {
-			glog.Infof("unreviewed skip pr=%s/%s#%d sha=%s reason=retry_backoff"+
+			glog.V(1).Infof("unreviewed skip pr=%s/%s#%d sha=%s reason=retry_backoff"+
 				" retry_in=%s attempt=%d/%d",
 				c.pr.Owner, c.pr.Repo, c.pr.Number, c.details.HeadSHA,
 				(s.cfg.Threshold - now.Sub(entry.lastAttempt)).String(),
@@ -345,8 +348,11 @@ func (s *unreviewedScanner) retryCandidate(
 	}
 
 	idle := now.Sub(entry.lastAttempt)
-	if idle.Duration() < retryGuardStaleAfter {
-		glog.Infof("unreviewed skip pr=%s/%s#%d sha=%s reason=retries_exhausted"+
+	// <=, not <: retryGuard.Check calls a record stale only when its age is
+	// strictly greater than the bound, so at exactly one hour the guard still
+	// considers it in flight. Re-driving one tick earlier would race that.
+	if idle.Duration() <= retryGuardStaleAfter {
+		glog.V(1).Infof("unreviewed skip pr=%s/%s#%d sha=%s reason=retries_exhausted"+
 			" redrive_in=%s attempts=%d/%d",
 			c.pr.Owner, c.pr.Repo, c.pr.Number, c.details.HeadSHA,
 			(retryGuardStaleAfter - idle.Duration()).String(), entry.attempts, s.cfg.RetryMax)
@@ -401,7 +407,11 @@ func (s *unreviewedScanner) publishStaleRedrive(
 		c.pr.Owner, c.pr.Repo, c.pr.Number, c.details.HeadSHA,
 		strconv.FormatInt(now.Time().UnixNano(), 10),
 	).String()
-	if !s.publisher.PublishCreate(ctx, c.pr, redriveID, c.details) {
+	// PublishRedrive, not PublishCreate: the salted id alone changes nothing,
+	// because the controller dedups on the title path — the redrive method is
+	// what puts the retry token in the title (and keeps the retry guard's
+	// ledger untouched so an operator's forced /trigger still works).
+	if !s.publisher.PublishRedrive(ctx, c.pr, redriveID, c.details) {
 		glog.Infof("unreviewed suppress pr=%s/%s#%d sha=%s reason=publish_declined",
 			c.pr.Owner, c.pr.Repo, c.pr.Number, c.details.HeadSHA)
 		return retrySuppressed

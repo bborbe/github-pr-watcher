@@ -55,6 +55,21 @@ type TaskConfig struct {
 // Returns true on successful publish, false on trust check failure or send failure.
 type TaskPublisher interface {
 	PublishCreate(ctx context.Context, pr PullRequest, taskIDStr string, details PRDetails) bool
+	// PublishRedrive publishes a review task for a record that has outlived the
+	// retry guard's staleness bound with no verdict at its head SHA. It differs
+	// from PublishCreate in exactly two ways, both required for the command to
+	// do anything:
+	//
+	//   - The title carries a `retry-<token>` segment. The agent controller
+	//     dedups on the TITLE PATH, not on task_identifier, so a salted id with
+	//     an unchanged title is rejected with ErrTaskAlreadyExists and re-runs
+	//     nothing — see computePRTitle.
+	//   - The publish is NOT recorded in the retry guard's ledger. Recording it
+	//     would keep the ledger permanently fresh while re-drives continue, and
+	//     an operator's forced /trigger on the same PR would then be suppressed
+	//     as in-flight for an hour after every re-drive, which is the manual
+	//     lever's whole purpose gone.
+	PublishRedrive(ctx context.Context, pr PullRequest, taskIDStr string, details PRDetails) bool
 	// PublishOverride publishes a `pr-override` task for a labeled PR. It is
 	// trusted-authors-only. Returns (handled, emitted):
 	//   - handled=true: this is a trusted-author override case; the caller must
@@ -174,6 +189,36 @@ func (p *taskPublisher) PublishCreate(
 	taskIDStr string,
 	details PRDetails,
 ) bool {
+	return p.publishReview(ctx, pr, taskIDStr, details, publishMode{record: true})
+}
+
+// PublishRedrive implements TaskPublisher — see the interface for why the title
+// must change and why the guard's ledger must not be refreshed.
+func (p *taskPublisher) PublishRedrive(
+	ctx context.Context,
+	pr PullRequest,
+	taskIDStr string,
+	details PRDetails,
+) bool {
+	return p.publishReview(ctx, pr, taskIDStr, details, publishMode{forced: true})
+}
+
+// publishMode selects the two things a review publish can do differently: salt
+// the title with a retry token (forced), and record the publish in the retry
+// guard's ledger (record).
+type publishMode struct {
+	forced bool
+	record bool
+}
+
+// publishReview is the shared body of PublishCreate and PublishRedrive.
+func (p *taskPublisher) publishReview(
+	ctx context.Context,
+	pr PullRequest,
+	taskIDStr string,
+	details PRDetails,
+	mode publishMode,
+) bool {
 	// A review is never published for a SHA a fresh override owns.
 	//
 	// Returning false is the honest answer: nothing was published. The poll loop
@@ -209,7 +254,7 @@ func (p *taskPublisher) PublishCreate(
 		p.cfg.TaskSuffix,
 		p.cfg.TargetVault,
 		trustResult,
-		false, // poll path is never a forced re-review
+		mode.forced,
 		p.cfg.MaxAdditions,
 		p.cfg.MaxChangedFiles,
 		exclusion,
@@ -224,17 +269,21 @@ func (p *taskPublisher) PublishCreate(
 	// separately from normal reviews — matches BuildCreateCommand's decision
 	// (park only applies to trusted authors in the poll path, where forced is
 	// always false). The parked count is how the crash fix proves itself live.
-	parked := trustResult.Success() &&
+	parked := !mode.forced && trustResult.Success() &&
 		oversized(details, exclusion, p.cfg.MaxAdditions, p.cfg.MaxChangedFiles)
 	if parked {
 		p.metrics.IncPRPublished("parked")
 	} else {
 		p.metrics.IncPRPublished("create")
 	}
-	glog.V(2).Infof("published CreateTaskCommand pr=%s/%s#%d sha=%s taskID=%s trusted=%t parked=%t",
-		pr.Owner, pr.Repo, pr.Number, details.HeadSHA, taskIDStr, trustResult.Success(), parked)
+	glog.V(2).Infof("published CreateTaskCommand pr=%s/%s#%d sha=%s taskID=%s"+
+		" trusted=%t parked=%t forced=%t",
+		pr.Owner, pr.Repo, pr.Number, details.HeadSHA, taskIDStr,
+		trustResult.Success(), parked, mode.forced)
 	p.tracker.Record()
-	p.recordPublished(ctx, pr, taskIDStr, details)
+	if mode.record {
+		p.recordPublished(ctx, pr, taskIDStr, details)
+	}
 	return true
 }
 

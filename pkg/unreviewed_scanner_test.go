@@ -41,6 +41,7 @@ var _ = Describe("pkg.UnreviewedScanner", func() {
 		ghClient = new(mocks.GitHubClient)
 		publisher = new(mocks.TaskPublisher)
 		publisher.PublishCreateReturns(true)
+		publisher.PublishRedriveReturns(true)
 		fakeMetrics = new(mocks.Metrics)
 		now = libtime.DateTime(time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC))
 		currentDateTime = libtime.CurrentDateTimeGetterFunc(
@@ -511,14 +512,22 @@ var _ = Describe("pkg.UnreviewedScanner", func() {
 			now = now.Add(30 * libtime.Minute)
 			s.Scan(ctx)
 			Expect(publisher.PublishCreateCallCount()).To(Equal(3))
+			Expect(publisher.PublishRedriveCallCount()).To(Equal(0))
 
-			// One full stale window after the last attempt: the record is dead
-			// (no legitimate run outlives it, and a verdict would have removed
-			// the PR from the candidate set), so the review is re-driven.
+			// Exactly one stale window is still in-flight to the guard (it calls
+			// a record stale only when strictly older), so the scan waits.
 			now = now.Add(30 * libtime.Minute)
 			s.Scan(ctx)
-			Expect(publisher.PublishCreateCallCount()).To(Equal(4))
-			_, _, redriveID, _ := publisher.PublishCreateArgsForCall(3)
+			Expect(publisher.PublishRedriveCallCount()).To(Equal(0))
+
+			// Past the window: the record is dead (no legitimate run outlives it,
+			// and a verdict would have removed the PR from the candidate set), so
+			// the review is re-driven with a salted id the controller has not seen.
+			now = now.Add(libtime.Second)
+			s.Scan(ctx)
+			Expect(publisher.PublishCreateCallCount()).To(Equal(3))
+			Expect(publisher.PublishRedriveCallCount()).To(Equal(1))
+			_, _, redriveID, _ := publisher.PublishRedriveArgsForCall(0)
 			Expect(redriveID).NotTo(Equal(
 				pkg.DeriveTaskID("bborbe", "repo", 42, "sha-head").String(),
 			))
@@ -534,10 +543,10 @@ var _ = Describe("pkg.UnreviewedScanner", func() {
 			// permanently broken reviewer cannot burst review pods.
 			now = now.Add(libtime.Hour - libtime.Minute)
 			s.Scan(ctx)
-			Expect(publisher.PublishCreateCallCount()).To(Equal(4))
-			now = now.Add(libtime.Minute)
+			Expect(publisher.PublishRedriveCallCount()).To(Equal(1))
+			now = now.Add(libtime.Minute + libtime.Second)
 			s.Scan(ctx)
-			Expect(publisher.PublishCreateCallCount()).To(Equal(5))
+			Expect(publisher.PublishRedriveCallCount()).To(Equal(2))
 		})
 
 		It("keeps a PR eligible when PublishCreate fails", func() {

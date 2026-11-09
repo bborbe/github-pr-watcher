@@ -171,12 +171,20 @@ logs one `unreviewed retry …` line and increments
 Once the budget is spent the PR is **not** abandoned. When the last publish is
 older than the retry guard's one-hour staleness bound — the same bound that
 decides when an in-flight record is dead — and the head SHA still carries no
-reviewer verdict, the scan publishes a **salted** task id
-(`DeriveTaskIDForce`, nonce = the publish time) instead of the deterministic
-one. That difference is load-bearing: a same-id re-send is deduped by the agent
-controller and re-runs nothing, which is what `bborbe/nuke#1104` measured — two
-re-publishes that updated the task file without restarting the job. A salted id
-has never been seen by the controller, so the review actually runs.
+reviewer verdict, the scan publishes a **re-drive** instead of the deterministic
+task. Two things differ from a plain retry, and both are load-bearing:
+
+- **The title carries a `retry-<token>` segment.** The agent controller dedups
+  on the task **title path**, not on `task_identifier`, so re-sending the same
+  title is rejected with `ErrTaskAlreadyExists` and re-runs nothing — which is
+  what `bborbe/nuke#1104` measured on 2026-11-07, where two re-publishes
+  updated the task file without restarting the job. The re-drive salts both the
+  identifier (`DeriveTaskIDForce`, nonce = publish time) and the title token, so
+  the controller has never seen the pair and actually runs the review.
+- **The retry guard's ledger is not refreshed.** Recording the re-drive would
+  keep the ledger permanently fresh while re-drives continue, and an operator's
+  forced `/trigger` on the same PR would then be suppressed as in-flight for an
+  hour after every re-drive — the manual lever's whole purpose gone.
 
 The attempt count is deliberately not reset by a re-drive: the budget stays
 spent (the gauge keeps reporting `retries_exhausted="true"`) while the re-drive
@@ -193,7 +201,10 @@ Every PR the scan lists produces exactly one of three lines — a publish
 (`unreviewed skip … reason=retries_disabled|retry_backoff|retries_exhausted`) —
 and the cycle ends with
 `unreviewed scan reconcile candidates=N published=P suppressed=S skipped=K`,
-whose three counts sum to N.
+whose three counts sum to N. The reconcile line, the publishes and the
+suppressions are at the default log level; the skips are at `-v=1` (the deployed
+watcher runs `-v=2`) because a skip repeats every cycle for as long as the
+condition holds, and the reconcile line already carries the count.
 
 At the watcher level, a poll cycle that publishes nothing for any PR logs
 `publish path silent: 0 publishes this cycle prs=<n> last_publish=<age>

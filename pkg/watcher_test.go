@@ -3518,6 +3518,78 @@ var _ = Describe("BuildCreateCommand forced re-review", func() {
 	})
 })
 
+var _ = Describe("TaskPublisher.PublishRedrive", func() {
+	var (
+		ctx          context.Context
+		createSender *taskmocks.TaskCreateCommandSender
+		ghClient     *mocks.GitHubClient
+		fakeMetrics  *mocks.Metrics
+		pr           pkg.PullRequest
+		details      pkg.PRDetails
+	)
+
+	BeforeEach(func() {
+		ctx = context.Background()
+		createSender = new(taskmocks.TaskCreateCommandSender)
+		ghClient = new(mocks.GitHubClient)
+		fakeMetrics = new(mocks.Metrics)
+		pr = pkg.PullRequest{
+			Number:      42,
+			Owner:       "bborbe",
+			Repo:        "repo",
+			Title:       "feat: new feature",
+			HTMLURL:     "https://github.com/bborbe/repo/pull/42",
+			AuthorLogin: "alice",
+			UpdatedAt:   libtime.DateTime(time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC)),
+		}
+		details = pkg.PRDetails{
+			HeadSHA:  "abc123",
+			CloneURL: "https://github.com/bborbe/repo.git",
+			BaseRef:  "master",
+		}
+	})
+
+	publisher := func() pkg.TaskPublisher {
+		return pkg.NewTaskPublisher(
+			createSender,
+			trust.NewAuthorAllowlist([]string{"alice"}),
+			fakeMetrics,
+			pkg.TaskConfig{
+				Stage:       "dev",
+				MaxSlugLen:  pkg.DefaultMaxSlugLen,
+				MaxTitleLen: pkg.DefaultMaxTitleLen,
+			},
+			ghClient,
+		)
+	}
+
+	It("puts a retry token in the title so the controller cannot dedup it away", func() {
+		// The agent controller dedups on TITLE PATH, so a salted identifier with
+		// an unchanged title is rejected with ErrTaskAlreadyExists and re-runs
+		// nothing. This is the assertion that catches that regression.
+		taskID := pkg.DeriveTaskIDForce(
+			"bborbe", "repo", 42, "abc123", "1700000000000000000",
+		).String()
+		Expect(publisher().PublishRedrive(ctx, pr, taskID, details)).To(BeTrue())
+
+		Expect(createSender.SendCommandCallCount()).To(Equal(1))
+		_, cmd := createSender.SendCommandArgsForCall(0)
+		Expect(cmd.Title).To(HaveSuffix(" - retry-" + taskID[:8]))
+		Expect(string(cmd.TaskIdentifier)).To(Equal(taskID))
+	})
+
+	It("publishes a title distinct from the plain create for the same PR and head SHA", func() {
+		taskID := pkg.DeriveTaskID("bborbe", "repo", 42, "abc123").String()
+		Expect(publisher().PublishCreate(ctx, pr, taskID, details)).To(BeTrue())
+		Expect(publisher().PublishRedrive(ctx, pr, taskID, details)).To(BeTrue())
+
+		Expect(createSender.SendCommandCallCount()).To(Equal(2))
+		_, plain := createSender.SendCommandArgsForCall(0)
+		_, redrive := createSender.SendCommandArgsForCall(1)
+		Expect(redrive.Title).NotTo(Equal(plain.Title))
+	})
+})
+
 var _ = Describe("oversized park predicate", func() {
 	makeDetails := func(additions, changedFiles int) pkg.PRDetails {
 		return pkg.PRDetails{

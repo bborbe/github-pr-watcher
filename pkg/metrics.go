@@ -56,11 +56,11 @@ type UnreviewedPR struct {
 	Repo string
 	// Number is the pull-request number, rendered as the gauge's pr label.
 	Number int
-	// RetriesExhausted marks a PR whose bounded retry budget is used up and
-	// whose last attempt has had a full threshold without a review. The scan
-	// keeps re-driving such a PR once per stale hour, so the label means
-	// "retrying did not help", not "nothing is being tried". Rendered as the
-	// gauge's retries_exhausted label.
+	// RetriesExhausted marks a PR whose bounded retry budget is spent. The
+	// scan keeps re-driving such a PR once per stale hour, so the label means
+	// "the budget is gone", not "nothing is being tried", and it stays true
+	// through those re-drives rather than flapping every threshold. Rendered
+	// as the gauge's retries_exhausted label.
 	RetriesExhausted bool
 }
 
