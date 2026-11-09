@@ -279,15 +279,16 @@ func (s *unreviewedScanner) retry(
 	candidates []unreviewedCandidate,
 	now libtime.DateTime,
 ) {
-	published, suppressed, skipped := 0, 0, 0
+	published, suppressed := 0, 0
 	defer func() {
 		if len(candidates) == 0 {
 			return
 		}
-		// Anything the loop never reached (a cancelled context) counts as
-		// skipped, so the three counts always sum to the candidate population
-		// the line reports.
-		skipped = len(candidates) - published - suppressed
+		// Every candidate that was neither published nor suppressed was
+		// skipped — including any the loop never reached because the context
+		// was cancelled — so the three counts always sum to the population the
+		// line reports.
+		skipped := len(candidates) - published - suppressed
 		glog.Infof(
 			"unreviewed scan reconcile candidates=%d published=%d suppressed=%d skipped=%d",
 			len(candidates), published, suppressed, skipped,
@@ -306,7 +307,6 @@ func (s *unreviewedScanner) retry(
 		case retrySuppressed:
 			suppressed++
 		case retrySkipped:
-			skipped++
 		}
 	}
 }
@@ -317,17 +317,19 @@ func (s *unreviewedScanner) retry(
 // Two publish shapes, because they answer two different failures:
 //
 //   - Within the budget, the deterministic task id is re-sent. That heals a
-//     command lost before the controller saw it, and cannot duplicate a live run
-//     because the controller dedups the id.
+//     command lost before the controller saw it, and cannot duplicate a live
+//     run because the title is byte-identical to the one already accepted, so
+//     the controller's title-path dedup drops it.
 //   - Past the budget and past retryGuardStaleAfter, the record is dead: no
 //     legitimate review run outlives that bound, and a verdict at the head SHA
-//     would have removed the PR from the candidate set. A same-id re-send is
-//     deduped by the controller and re-runs nothing, so the re-drive changes
-//     both halves of the controller's dedup key: a salted task id and, through
-//     PublishRedrive, a title carrying a `retry-<token>` segment. The title is
-//     the half that matters — the controller dedups on the title PATH, so the
-//     salted id alone was a no-op, measured on bborbe/nuke#1104 whose
-//     re-publishes updated the task file without restarting the job.
+//     would have removed the PR from the candidate set. A same-title re-send is
+//     deduped by the controller and re-runs nothing, so the re-drive carries a
+//     title the controller has not accepted before — PublishRedrive appends a
+//     `retry-<token>` segment, and the salted task id gives that token a fresh
+//     value. The title is the axis that matters: the controller dedups on the
+//     title PATH, so salting the id alone was a no-op, measured on
+//     bborbe/nuke#1104 whose re-publishes updated the task file without
+//     restarting the job.
 func (s *unreviewedScanner) retryCandidate(
 	ctx context.Context,
 	c unreviewedCandidate,
