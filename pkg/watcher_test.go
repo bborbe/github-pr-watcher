@@ -3549,7 +3549,7 @@ var _ = Describe("TaskPublisher.PublishRedrive", func() {
 		}
 	})
 
-	publisher := func() pkg.TaskPublisher {
+	publisher := func(opts ...pkg.TaskPublisherOption) pkg.TaskPublisher {
 		return pkg.NewTaskPublisher(
 			createSender,
 			trust.NewAuthorAllowlist([]string{"alice"}),
@@ -3560,6 +3560,7 @@ var _ = Describe("TaskPublisher.PublishRedrive", func() {
 				MaxTitleLen: pkg.DefaultMaxTitleLen,
 			},
 			ghClient,
+			opts...,
 		)
 	}
 
@@ -3588,7 +3589,33 @@ var _ = Describe("TaskPublisher.PublishRedrive", func() {
 		_, redrive := createSender.SendCommandArgsForCall(1)
 		Expect(redrive.Title).NotTo(Equal(plain.Title))
 	})
+
+	It("does not refresh the retry guard ledger, so a forced /trigger still works", func() {
+		rec := &recordingRecorder{}
+		pub := publisher(pkg.WithPublishRecorder(rec))
+		taskID := pkg.DeriveTaskID("bborbe", "repo", 42, "abc123").String()
+
+		Expect(pub.PublishCreate(ctx, pr, taskID, details)).To(BeTrue())
+		Expect(rec.calls).To(Equal(1))
+
+		Expect(pub.PublishRedrive(ctx, pr, taskID, details)).To(BeTrue())
+		Expect(rec.calls).To(Equal(1))
+	})
 })
+
+// recordingRecorder counts RecordPublish calls so the ledger half of the
+// PublishRedrive contract is asserted rather than assumed.
+type recordingRecorder struct {
+	calls int
+}
+
+func (r *recordingRecorder) RecordPublish(
+	_ context.Context,
+	_ pkg.RetryGuardPR,
+	_ string,
+) {
+	r.calls++
+}
 
 var _ = Describe("oversized park predicate", func() {
 	makeDetails := func(additions, changedFiles int) pkg.PRDetails {

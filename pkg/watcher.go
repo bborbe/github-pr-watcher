@@ -267,8 +267,8 @@ func (p *taskPublisher) publishReview(
 	}
 	// Count oversized trusted-author PRs the poll parked at human_review
 	// separately from normal reviews — matches BuildCreateCommand's decision
-	// (park only applies to trusted authors in the poll path, where forced is
-	// always false). The parked count is how the crash fix proves itself live.
+	// (only an unforced publish parks). The parked count is how the crash fix
+	// proves itself live.
 	parked := !mode.forced && trustResult.Success() &&
 		oversized(details, exclusion, p.cfg.MaxAdditions, p.cfg.MaxChangedFiles)
 	if parked {

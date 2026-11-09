@@ -92,9 +92,10 @@ func parseUnreviewedThreshold(ctx context.Context, raw string) (libtime.Duration
 // task for those still unreviewed — a bounded number of retries, then one
 // salted stale re-drive per hour for as long as no verdict arrives.
 //
-// It publishes only through TaskPublisher.PublishCreate with the deterministic
-// DeriveTaskID, and never mutates GitHub — the scan is a read plus a re-send of
-// an existing command, nothing more.
+// It publishes only through the shared TaskPublisher — a bounded retry as
+// PublishCreate with the deterministic DeriveTaskID, and a stale re-drive as
+// PublishRedrive with a salted one — and never mutates GitHub. The scan is a
+// read plus a re-send of an existing command, nothing more.
 //
 // Scan deliberately returns no error: a failed or interrupted scan must never
 // fail the poll cycle. It leaves the previous gauge values in place instead,
@@ -270,9 +271,9 @@ const (
 // spent and no legitimate run can still be in flight — re-drives the review on
 // the stale clock instead of falling silent.
 //
-// It publishes only through TaskPublisher.PublishCreate, never the force path:
-// a bounded retry re-sends the deterministic DeriveTaskID, and a stale re-drive
-// sends a salted one (see retryCandidate).
+// It publishes only through the shared TaskPublisher: a bounded retry re-sends
+// the deterministic DeriveTaskID through PublishCreate, and a stale re-drive
+// sends a salted one through PublishRedrive (see retryCandidate).
 func (s *unreviewedScanner) retry(
 	ctx context.Context,
 	candidates []unreviewedCandidate,
@@ -283,6 +284,10 @@ func (s *unreviewedScanner) retry(
 		if len(candidates) == 0 {
 			return
 		}
+		// Anything the loop never reached (a cancelled context) counts as
+		// skipped, so the three counts always sum to the candidate population
+		// the line reports.
+		skipped = len(candidates) - published - suppressed
 		glog.Infof(
 			"unreviewed scan reconcile candidates=%d published=%d suppressed=%d skipped=%d",
 			len(candidates), published, suppressed, skipped,
@@ -317,10 +322,12 @@ func (s *unreviewedScanner) retry(
 //   - Past the budget and past retryGuardStaleAfter, the record is dead: no
 //     legitimate review run outlives that bound, and a verdict at the head SHA
 //     would have removed the PR from the candidate set. A same-id re-send is
-//     deduped by the controller and re-runs nothing — measured on
-//     bborbe/nuke#1104, whose re-publishes updated the task file without
-//     restarting the job — so the re-drive is salted with a nonce the
-//     controller has never seen.
+//     deduped by the controller and re-runs nothing, so the re-drive changes
+//     both halves of the controller's dedup key: a salted task id and, through
+//     PublishRedrive, a title carrying a `retry-<token>` segment. The title is
+//     the half that matters — the controller dedups on the title PATH, so the
+//     salted id alone was a no-op, measured on bborbe/nuke#1104 whose
+//     re-publishes updated the task file without restarting the job.
 func (s *unreviewedScanner) retryCandidate(
 	ctx context.Context,
 	c unreviewedCandidate,
