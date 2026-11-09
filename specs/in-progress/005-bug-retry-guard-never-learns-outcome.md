@@ -1,6 +1,8 @@
 ---
-status: approved
+status: prompted
 approved: "2026-11-09T17:40:34Z"
+generating: "2026-11-09T17:58:07Z"
+prompted: "2026-11-09T18:21:04Z"
 branch: dark-factory/bug-retry-guard-never-learns-outcome
 ---
 

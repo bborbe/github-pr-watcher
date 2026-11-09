@@ -36,6 +36,7 @@ var _ = Describe("RetryGuard", func() {
 		otherPR         pkg.RetryGuardPR
 		check           func(pkg.RetryGuardPR) (pkg.RetryGuardDecision, error)
 		record          func(pkg.RetryGuardPR, string) error
+		clearTask       func(string) (bool, error)
 		inflightCounter func() float64
 	)
 
@@ -72,6 +73,19 @@ var _ = Describe("RetryGuard", func() {
 			return db.Update(ctx, func(ctx context.Context, tx libkv.Tx) error {
 				return guard.Record(ctx, tx, target, taskID)
 			})
+		}
+
+		clearTask = func(taskID string) (bool, error) {
+			var (
+				cleared  bool
+				clearErr error
+			)
+			err := db.Update(ctx, func(ctx context.Context, tx libkv.Tx) error {
+				cleared, clearErr = guard.ClearByTaskID(ctx, tx, taskID, "completed")
+				return nil
+			})
+			Expect(err).NotTo(HaveOccurred())
+			return cleared, clearErr
 		}
 	})
 
@@ -234,5 +248,72 @@ var _ = Describe("RetryGuard", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(decision.Action).To(Equal(pkg.RetryGuardActionCreate))
 		Expect(decision.Reason).To(Equal(pkg.RetryGuardReasonCreate))
+	})
+
+	It("AC1: clears the in-flight record for a task identifier", func() {
+		Expect(record(pr, "task-1")).To(Succeed())
+
+		cleared, err := clearTask("task-1")
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(cleared).To(BeTrue())
+
+		decision, checkErr := check(pr)
+		Expect(checkErr).NotTo(HaveOccurred())
+		Expect(decision.Action).To(Equal(pkg.RetryGuardActionCreate))
+		Expect(decision.Reason).To(Equal(pkg.RetryGuardReasonCreate))
+		Expect(ghClient.ListReviewsCallCount()).To(Equal(0))
+	})
+
+	It("AC3: leaves the record in place for a different task identifier", func() {
+		ghClient.ListReviewsReturns(nil, nil)
+		Expect(record(pr, "task-1")).To(Succeed())
+
+		cleared, err := clearTask("task-2")
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(cleared).To(BeFalse())
+
+		decision, checkErr := check(pr)
+		Expect(checkErr).To(HaveOccurred())
+		Expect(decision.Reason).To(Equal(pkg.RetryGuardReasonSkipInflight))
+	})
+
+	It("clears only the record whose task identifier matches", func() {
+		ghClient.ListReviewsReturns(nil, nil)
+		Expect(record(pr, "task-1")).To(Succeed())
+		Expect(record(otherPR, "task-2")).To(Succeed())
+
+		cleared, err := clearTask("task-1")
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(cleared).To(BeTrue())
+
+		first, firstErr := check(pr)
+		Expect(firstErr).NotTo(HaveOccurred())
+		Expect(first.Reason).To(Equal(pkg.RetryGuardReasonCreate))
+
+		second, secondErr := check(otherPR)
+		Expect(secondErr).To(HaveOccurred())
+		Expect(second.Reason).To(Equal(pkg.RetryGuardReasonSkipInflight))
+	})
+
+	It("is idempotent: a second clear of the same identifier returns false", func() {
+		Expect(record(pr, "task-1")).To(Succeed())
+
+		first, firstErr := clearTask("task-1")
+		second, secondErr := clearTask("task-1")
+
+		Expect(firstErr).NotTo(HaveOccurred())
+		Expect(secondErr).NotTo(HaveOccurred())
+		Expect(first).To(BeTrue())
+		Expect(second).To(BeFalse())
+	})
+
+	It("returns false with no error when the ledger bucket is missing", func() {
+		cleared, err := clearTask("task-1")
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(cleared).To(BeFalse())
 	})
 })
