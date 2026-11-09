@@ -98,7 +98,7 @@ var (
 
 	unreviewedPRs = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "github_pr_watcher_unreviewed_prs",
-		Help: "Open pull requests the watcher would hand to the reviewer whose current head SHA has no review from a configured reviewer bot after waiting longer than the unreviewed threshold. Value 1 per such PR; retries_exhausted is true once the bounded re-publish budget is used up and the last retry has had a full threshold without a review.",
+		Help: "Open pull requests the watcher would hand to the reviewer whose current head SHA has no review from a configured reviewer bot after waiting longer than the unreviewed threshold. Value 1 per such PR; retries_exhausted is true once the bounded re-publish budget is spent, and stays true through the hourly stale re-drive.",
 	}, []string{"repo", "pr", "retries_exhausted"})
 
 	unreviewedRetriesTotal = prometheus.NewCounterVec(prometheus.CounterOpts{

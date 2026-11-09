@@ -238,7 +238,7 @@ func (s *unreviewedScanner) Scan(ctx context.Context) {
 		unreviewed = append(unreviewed, UnreviewedPR{
 			Repo:             c.pr.Owner + "/" + c.pr.Repo,
 			Number:           c.pr.Number,
-			RetriesExhausted: s.retriesExhausted(c.pr, c.details, now),
+			RetriesExhausted: s.retriesExhausted(c.pr, c.details),
 		})
 	}
 	s.metrics.SetUnreviewedPRs(unreviewed, now)
@@ -420,19 +420,19 @@ func (s *unreviewedScanner) publishStaleRedrive(
 }
 
 // retriesExhausted reports whether this PR's bounded retry budget is spent.
-// It stays true through a stale re-drive — the budget is still gone, and the
-// alert on the gauge should keep firing while the re-drive is the only thing
-// still trying — and only a review at the head SHA clears the series.
+// It is stable once spent — it does not flip back after a stale re-drive — so
+// the alert on the gauge fires once and stays on while no review arrives,
+// instead of flapping every threshold. Only a review at the head SHA, or a new
+// commit, clears the series.
 func (s *unreviewedScanner) retriesExhausted(
 	pr PullRequest,
 	details PRDetails,
-	now libtime.DateTime,
 ) bool {
 	if s.cfg.RetryMax == 0 {
 		return true
 	}
 	entry := s.retryState[DeriveTaskID(pr.Owner, pr.Repo, pr.Number, details.HeadSHA).String()]
-	return entry.attempts >= s.cfg.RetryMax && now.Sub(entry.lastAttempt) >= s.cfg.Threshold
+	return entry.attempts >= s.cfg.RetryMax
 }
 
 // pruneState drops retry and reviewed-cache entries whose PR is absent from

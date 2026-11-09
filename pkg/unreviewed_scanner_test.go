@@ -477,12 +477,14 @@ var _ = Describe("pkg.UnreviewedScanner", func() {
 				))
 			}
 
-			// No clock advance: still within the wait after attempt 3.
+			// No clock advance. The budget is spent, so the gauge reports the
+			// PR as exhausted immediately and keeps doing so through the
+			// stale re-drive that follows — no flapping.
 			s.Scan(ctx)
 			Expect(publisher.PublishCreateCallCount()).To(Equal(3))
 			prs, _ := fakeMetrics.SetUnreviewedPRsArgsForCall(3)
 			Expect(prs).To(Equal([]pkg.UnreviewedPR{
-				{Repo: "bborbe/repo", Number: 42, RetriesExhausted: false},
+				{Repo: "bborbe/repo", Number: 42, RetriesExhausted: true},
 			}))
 
 			now = now.Add(30 * libtime.Minute)
