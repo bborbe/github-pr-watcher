@@ -653,10 +653,9 @@ func (w *watcher) rateLimitRemainingForGauge(ctx context.Context) int {
 
 func (w *watcher) Poll(ctx context.Context) error {
 	publishedBefore, _ := w.publishTracker.Snapshot()
-	prsSeen := 0
 	// Runs on every exit path: a cycle that aborted still published nothing,
 	// and the silence is the fact this line exists to report.
-	defer func() { w.logPublishLiveness(publishedBefore, prsSeen) }()
+	defer func() { w.logPublishLiveness(publishedBefore) }()
 
 	cursorState, err := LoadCursor(ctx, w.cursorPath, w.startTime)
 	if err != nil {
@@ -673,7 +672,6 @@ func (w *watcher) Poll(ctx context.Context) error {
 		w.metrics.IncPollCycle(abortReason)
 		return nil
 	}
-	prsSeen = len(allPRs)
 
 	select {
 	case <-ctx.Done():
@@ -715,9 +713,15 @@ func (w *watcher) Poll(ctx context.Context) error {
 // emitted nothing was indistinguishable from a watcher with no work: measured
 // 2026-11-07, zero publishes for any PR across the 30 minutes to 17:52 while
 // the unreviewed scanner kept listing bborbe/nuke#1104. The line carries the
-// duration of the silence and the population the cycle saw, so "nothing to do"
-// and "nothing happened" read differently.
-func (w *watcher) logPublishLiveness(publishedBefore int64, prsSeen int) {
+// duration of the silence and the population that was owed a review, so
+// "nothing to do" and "nothing happened" read differently.
+//
+// The population is the scanner's candidate count, NOT the raw search count: a
+// PR sitting at the `updated:>=cursor` boundary is returned on every cycle and
+// legitimately produces nothing (already published, filtered, or in flight), so
+// keying the line on the search count would fire it every cycle on a healthy
+// watcher and bury the signal it exists to carry.
+func (w *watcher) logPublishLiveness(publishedBefore int64) {
 	if w.publishTracker == nil {
 		return
 	}
@@ -727,12 +731,11 @@ func (w *watcher) logPublishLiveness(publishedBefore int64, prsSeen int) {
 		return
 	}
 	idleCycles := w.idleCycles.Add(1)
-	// A cycle that saw no open PRs has nothing to publish and says nothing:
-	// the failure this line exists for is work listed and not acted on, and a
-	// line every five minutes on a quiet fleet would bury it. A cycle that
-	// aborted before the search leaves prsSeen at 0 and is covered by
-	// poll_cycles_total{result="github_error"|"rate_limited"}.
-	if prsSeen == 0 {
+	candidates := 0
+	if w.unreviewedScanner != nil {
+		candidates = w.unreviewedScanner.LastCandidates()
+	}
+	if candidates == 0 {
 		return
 	}
 	idleFor := "never"
@@ -740,8 +743,8 @@ func (w *watcher) logPublishLiveness(publishedBefore int64, prsSeen int) {
 		idleFor = w.currentDateTime.Now().Sub(last).String()
 	}
 	glog.Infof(
-		"publish path silent: 0 publishes this cycle prs=%d last_publish=%s idle_cycles=%d",
-		prsSeen, idleFor, idleCycles,
+		"publish path silent: 0 publishes this cycle candidates=%d last_publish=%s idle_cycles=%d",
+		candidates, idleFor, idleCycles,
 	)
 }
 

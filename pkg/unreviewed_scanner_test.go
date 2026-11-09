@@ -429,6 +429,22 @@ var _ = Describe("pkg.UnreviewedScanner", func() {
 		Expect(prs).To(BeEmpty())
 	})
 
+	It("reports the candidate population the watcher's silence line reads", func() {
+		searchOpenReturns(openPR(42, "alice", now.Add(-libtime.Hour)))
+		s := newScanner(qualifying(), defaultFilter(), trustAlice())
+		Expect(s.LastCandidates()).To(Equal(0))
+
+		s.Scan(ctx)
+		Expect(s.LastCandidates()).To(Equal(1))
+
+		// A PR that has waited less than the threshold is not owed a review, so
+		// it must not count as population — otherwise the watcher's silence
+		// line fires on a healthy cycle.
+		searchOpenReturns(openPR(43, "alice", now.Add(-libtime.Minute)))
+		s.Scan(ctx)
+		Expect(s.LastCandidates()).To(Equal(0))
+	})
+
 	Describe("retrying unreviewed PRs", func() {
 		It("re-publishes the original task with the derived task ID", func() {
 			searchOpenReturns(openPR(42, "alice", now.Add(-libtime.Hour)))

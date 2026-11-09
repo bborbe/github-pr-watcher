@@ -207,11 +207,14 @@ watcher runs `-v=2`) because a skip repeats every cycle for as long as the
 condition holds, and the reconcile line already carries the count.
 
 At the watcher level, a poll cycle that publishes nothing for any PR logs
-`publish path silent: 0 publishes this cycle prs=<n> last_publish=<age>
-idle_cycles=<n>` at the default log level. The line carries the population the
-cycle saw, so "no work to do" (prs=0) and "work listed, nothing published"
-(prs>0) read differently — the distinction whose absence made the 2026-11-07
-outage look like a quiet watcher.
+`publish path silent: 0 publishes this cycle candidates=<n> last_publish=<age>
+idle_cycles=<n>` at the default log level. `candidates` is the unreviewed
+scanner's population — PRs actually owed a review — not the raw search count: a
+PR sitting at the `updated:>=cursor` boundary is returned every cycle and
+legitimately produces nothing, so keying on the search count would fire the line
+on a healthy watcher and bury the signal. "No work owed" (candidates=0) is
+silent; "work owed, nothing published" is the anomaly, and its absence from the
+logs is what made the 2026-11-07 outage look like a quiet watcher.
 
 Known limits:
 

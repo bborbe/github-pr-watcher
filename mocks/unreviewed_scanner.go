@@ -12,6 +12,16 @@ import (
 )
 
 type UnreviewedScanner struct {
+	LastCandidatesStub        func() int
+	lastCandidatesMutex       sync.RWMutex
+	lastCandidatesArgsForCall []struct {
+	}
+	lastCandidatesReturns struct {
+		result1 int
+	}
+	lastCandidatesReturnsOnCall map[int]struct {
+		result1 int
+	}
 	ScanStub        func(context.Context)
 	scanMutex       sync.RWMutex
 	scanArgsForCall []struct {
@@ -19,6 +29,59 @@ type UnreviewedScanner struct {
 	}
 	invocations      map[string][][]interface{}
 	invocationsMutex sync.RWMutex
+}
+
+func (fake *UnreviewedScanner) LastCandidates() int {
+	fake.lastCandidatesMutex.Lock()
+	ret, specificReturn := fake.lastCandidatesReturnsOnCall[len(fake.lastCandidatesArgsForCall)]
+	fake.lastCandidatesArgsForCall = append(fake.lastCandidatesArgsForCall, struct {
+	}{})
+	stub := fake.LastCandidatesStub
+	fakeReturns := fake.lastCandidatesReturns
+	fake.recordInvocation("LastCandidates", []interface{}{})
+	fake.lastCandidatesMutex.Unlock()
+	if stub != nil {
+		return stub()
+	}
+	if specificReturn {
+		return ret.result1
+	}
+	return fakeReturns.result1
+}
+
+func (fake *UnreviewedScanner) LastCandidatesCallCount() int {
+	fake.lastCandidatesMutex.RLock()
+	defer fake.lastCandidatesMutex.RUnlock()
+	return len(fake.lastCandidatesArgsForCall)
+}
+
+func (fake *UnreviewedScanner) LastCandidatesCalls(stub func() int) {
+	fake.lastCandidatesMutex.Lock()
+	defer fake.lastCandidatesMutex.Unlock()
+	fake.LastCandidatesStub = stub
+}
+
+func (fake *UnreviewedScanner) LastCandidatesReturns(result1 int) {
+	fake.lastCandidatesMutex.Lock()
+	defer fake.lastCandidatesMutex.Unlock()
+	fake.LastCandidatesStub = nil
+	fake.lastCandidatesReturns = struct {
+		result1 int
+	}{result1}
+}
+
+func (fake *UnreviewedScanner) LastCandidatesReturnsOnCall(i int, result1 int) {
+	fake.lastCandidatesMutex.Lock()
+	defer fake.lastCandidatesMutex.Unlock()
+	fake.LastCandidatesStub = nil
+	if fake.lastCandidatesReturnsOnCall == nil {
+		fake.lastCandidatesReturnsOnCall = make(map[int]struct {
+			result1 int
+		})
+	}
+	fake.lastCandidatesReturnsOnCall[i] = struct {
+		result1 int
+	}{result1}
 }
 
 func (fake *UnreviewedScanner) Scan(arg1 context.Context) {

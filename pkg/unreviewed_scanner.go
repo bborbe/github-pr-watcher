@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/bborbe/errors"
@@ -103,6 +104,12 @@ func parseUnreviewedThreshold(ctx context.Context, raw string) (libtime.Duration
 // last-successful-scan timestamp rather than through a broken poll.
 type UnreviewedScanner interface {
 	Scan(ctx context.Context)
+	// LastCandidates returns how many PRs the last complete scan found still
+	// owed a review. It is the population the watcher's silence line needs:
+	// the raw search count is not it, because a PR sitting at the cursor
+	// boundary is listed on every cycle and legitimately produces nothing.
+	// Zero before the first complete scan and after a scan that aborted.
+	LastCandidates() int
 }
 
 // NewUnreviewedScanner returns an UnreviewedScanner backed by the shared
@@ -186,6 +193,10 @@ type unreviewedScanner struct {
 	// comment or label moves UpdatedAt, so a change always re-checks. Guarded
 	// by mu.
 	reviewedCache map[string]libtime.DateTime
+	// lastCandidates is the size of the last complete scan's candidate set,
+	// reported through LastCandidates. Atomic rather than mu-guarded: the
+	// watcher reads it right after Scan, and Scan holds mu for its whole body.
+	lastCandidates atomic.Int64
 }
 
 // Scan fetches every open PR in scope, qualifies each one, and publishes the
@@ -228,6 +239,10 @@ func (s *unreviewedScanner) Scan(ctx context.Context) {
 		candidates = append(candidates, unreviewedCandidate{pr: pr, details: details})
 	}
 
+	// Recorded before the retry pass so the watcher's silence line reads this
+	// cycle's population even when the retry pass is cancelled.
+	s.lastCandidates.Store(int64(len(candidates)))
+
 	// Retry runs after qualification and before the gauge is published, so the
 	// retries_exhausted label reflects this cycle's decisions. A cancelled
 	// context stops retrying — the remaining PRs wait for the next scan — but
@@ -252,6 +267,14 @@ func (s *unreviewedScanner) Scan(ctx context.Context) {
 		glog.V(2).Infof("unreviewed scan found %d prs: %s",
 			len(unreviewed), formatUnreviewedPRs(unreviewed))
 	}
+}
+
+// LastCandidates implements UnreviewedScanner.
+func (s *unreviewedScanner) LastCandidates() int {
+	if s == nil {
+		return 0
+	}
+	return int(s.lastCandidates.Load())
 }
 
 // retryOutcome is the single thing that happened to one candidate in one scan.
