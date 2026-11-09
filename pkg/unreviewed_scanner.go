@@ -8,8 +8,10 @@ import (
 	"context"
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/bborbe/errors"
 	"github.com/bborbe/github-pr-watcher/pkg/filter"
@@ -87,7 +89,8 @@ func parseUnreviewedThreshold(ctx context.Context, raw string) (libtime.Duration
 // UnreviewedScanner reports, once per poll cycle, the open pull requests the
 // watcher would hand to the reviewer whose current head SHA still has no
 // review from a configured reviewer bot, and re-publishes the original review
-// task for those still unreviewed, a bounded number of times.
+// task for those still unreviewed — a bounded number of retries, then one
+// salted stale re-drive per hour for as long as no verdict arrives.
 //
 // It publishes only through TaskPublisher.PublishCreate with the deterministic
 // DeriveTaskID, and never mutates GitHub — the scan is a read plus a re-send of
@@ -250,15 +253,32 @@ func (s *unreviewedScanner) Scan(ctx context.Context) {
 	}
 }
 
-// retry re-publishes the original review task for each still-unreviewed
-// candidate, up to RetryMax successful publishes per (PR, head SHA). It
-// publishes only through TaskPublisher.PublishCreate with the deterministic
-// DeriveTaskID — never the force path, never anything but the create command.
+// retryOutcome is the single thing that happened to one candidate in one scan.
+// Every candidate produces exactly one, so the counts reconcile against the
+// population the scan listed and no PR can be listed and then dropped without a
+// line saying what became of it.
+type retryOutcome int
+
+const (
+	retryPublished retryOutcome = iota
+	retrySuppressed
+	retrySkipped
+)
+
+// retry re-publishes the review task for each still-unreviewed candidate, up to
+// RetryMax successful publishes per (PR, head SHA), and — once that budget is
+// spent and no legitimate run can still be in flight — re-drives the review on
+// the stale clock instead of falling silent.
+//
+// It publishes only through TaskPublisher.PublishCreate, never the force path:
+// a bounded retry re-sends the deterministic DeriveTaskID, and a stale re-drive
+// sends a salted one (see retryCandidate).
 func (s *unreviewedScanner) retry(
 	ctx context.Context,
 	candidates []unreviewedCandidate,
 	now libtime.DateTime,
 ) {
+	published, suppressed, skipped := 0, 0, 0
 	for _, c := range candidates {
 		select {
 		case <-ctx.Done():
@@ -266,34 +286,143 @@ func (s *unreviewedScanner) retry(
 			return
 		default:
 		}
-		taskID := DeriveTaskID(c.pr.Owner, c.pr.Repo, c.pr.Number, c.details.HeadSHA).String()
-		entry := s.retryState[taskID]
-		if entry.attempts >= s.cfg.RetryMax {
-			continue
+		switch s.retryCandidate(ctx, c, now) {
+		case retryPublished:
+			published++
+		case retrySuppressed:
+			suppressed++
+		case retrySkipped:
+			skipped++
 		}
-		if entry.attempts > 0 && now.Sub(entry.lastAttempt) < s.cfg.Threshold {
-			continue
-		}
-		// A failed publish changes nothing — neither attempts nor lastAttempt —
-		// so the PR is eligible again on the very next scan.
-		if !s.publisher.PublishCreate(ctx, c.pr, taskID, c.details) {
-			continue
-		}
-		s.retryState[taskID] = unreviewedRetry{
-			prKey:       prKey(c.pr),
-			attempts:    entry.attempts + 1,
-			lastAttempt: now,
-		}
-		s.metrics.IncUnreviewedRetry(c.pr.Owner + "/" + c.pr.Repo)
-		glog.Infof("unreviewed retry pr=%s/%s#%d sha=%s task_id=%s attempt=%d/%d",
-			c.pr.Owner, c.pr.Repo, c.pr.Number, c.details.HeadSHA, taskID,
-			entry.attempts+1, s.cfg.RetryMax)
+	}
+	if len(candidates) > 0 {
+		glog.Infof(
+			"unreviewed scan reconcile candidates=%d published=%d suppressed=%d skipped=%d",
+			len(candidates), published, suppressed, skipped,
+		)
 	}
 }
 
-// retriesExhausted reports whether the scan has given up on this PR: either
-// retrying is disabled, or the budget is used up and the last retry has had a
-// full threshold without a review arriving.
+// retryCandidate re-publishes one still-unreviewed PR and reports exactly one
+// outcome, logging the reason for anything that is not a publish.
+//
+// Two publish shapes, because they answer two different failures:
+//
+//   - Within the budget, the deterministic task id is re-sent. That heals a
+//     command lost before the controller saw it, and cannot duplicate a live run
+//     because the controller dedups the id.
+//   - Past the budget and past retryGuardStaleAfter, the record is dead: no
+//     legitimate review run outlives that bound, and a verdict at the head SHA
+//     would have removed the PR from the candidate set. A same-id re-send is
+//     deduped by the controller and re-runs nothing — measured on
+//     bborbe/nuke#1104, whose re-publishes updated the task file without
+//     restarting the job — so the re-drive is salted with a nonce the
+//     controller has never seen.
+func (s *unreviewedScanner) retryCandidate(
+	ctx context.Context,
+	c unreviewedCandidate,
+	now libtime.DateTime,
+) retryOutcome {
+	taskID := DeriveTaskID(c.pr.Owner, c.pr.Repo, c.pr.Number, c.details.HeadSHA).String()
+	entry := s.retryState[taskID]
+
+	if s.cfg.RetryMax == 0 {
+		glog.Infof("unreviewed skip pr=%s/%s#%d sha=%s reason=retries_disabled",
+			c.pr.Owner, c.pr.Repo, c.pr.Number, c.details.HeadSHA)
+		return retrySkipped
+	}
+
+	if entry.attempts < s.cfg.RetryMax {
+		if entry.attempts > 0 && now.Sub(entry.lastAttempt) < s.cfg.Threshold {
+			glog.Infof("unreviewed skip pr=%s/%s#%d sha=%s reason=retry_backoff"+
+				" retry_in=%s attempt=%d/%d",
+				c.pr.Owner, c.pr.Repo, c.pr.Number, c.details.HeadSHA,
+				(s.cfg.Threshold - now.Sub(entry.lastAttempt)).String(),
+				entry.attempts, s.cfg.RetryMax)
+			return retrySkipped
+		}
+		return s.publishRetry(ctx, c, taskID, entry, now)
+	}
+
+	idle := now.Sub(entry.lastAttempt)
+	if idle.Duration() < retryGuardStaleAfter {
+		glog.Infof("unreviewed skip pr=%s/%s#%d sha=%s reason=retries_exhausted"+
+			" redrive_in=%s attempts=%d/%d",
+			c.pr.Owner, c.pr.Repo, c.pr.Number, c.details.HeadSHA,
+			(retryGuardStaleAfter - idle.Duration()).String(), entry.attempts, s.cfg.RetryMax)
+		return retrySkipped
+	}
+
+	return s.publishStaleRedrive(ctx, c, taskID, entry, now)
+}
+
+// publishRetry sends the bounded retry: the same deterministic task id the poll
+// path published, so a command lost before the controller saw it is delivered
+// again. A failed publish changes nothing — neither attempts nor lastAttempt —
+// so the PR is eligible again on the very next scan.
+func (s *unreviewedScanner) publishRetry(
+	ctx context.Context,
+	c unreviewedCandidate,
+	taskID string,
+	entry unreviewedRetry,
+	now libtime.DateTime,
+) retryOutcome {
+	if !s.publisher.PublishCreate(ctx, c.pr, taskID, c.details) {
+		glog.Infof("unreviewed suppress pr=%s/%s#%d sha=%s reason=publish_declined",
+			c.pr.Owner, c.pr.Repo, c.pr.Number, c.details.HeadSHA)
+		return retrySuppressed
+	}
+	s.retryState[taskID] = unreviewedRetry{
+		prKey:       prKey(c.pr),
+		attempts:    entry.attempts + 1,
+		lastAttempt: now,
+	}
+	s.metrics.IncUnreviewedRetry(c.pr.Owner + "/" + c.pr.Repo)
+	glog.Infof("unreviewed retry pr=%s/%s#%d sha=%s task_id=%s attempt=%d/%d",
+		c.pr.Owner, c.pr.Repo, c.pr.Number, c.details.HeadSHA, taskID,
+		entry.attempts+1, s.cfg.RetryMax)
+	return retryPublished
+}
+
+// publishStaleRedrive sends a salted re-drive for a record that has outlived
+// retryGuardStaleAfter with no verdict at its head SHA. The attempt count is
+// deliberately not reset: the budget stays spent (so the gauge keeps reporting
+// the PR as exhausted) while lastAttempt moves, which paces the next re-drive
+// one stale window later instead of letting it burst.
+func (s *unreviewedScanner) publishStaleRedrive(
+	ctx context.Context,
+	c unreviewedCandidate,
+	taskID string,
+	entry unreviewedRetry,
+	now libtime.DateTime,
+) retryOutcome {
+	idle := now.Sub(entry.lastAttempt)
+	redriveID := DeriveTaskIDForce(
+		c.pr.Owner, c.pr.Repo, c.pr.Number, c.details.HeadSHA,
+		strconv.FormatInt(now.Time().UnixNano(), 10),
+	).String()
+	if !s.publisher.PublishCreate(ctx, c.pr, redriveID, c.details) {
+		glog.Infof("unreviewed suppress pr=%s/%s#%d sha=%s reason=publish_declined",
+			c.pr.Owner, c.pr.Repo, c.pr.Number, c.details.HeadSHA)
+		return retrySuppressed
+	}
+	s.retryState[taskID] = unreviewedRetry{
+		prKey:       prKey(c.pr),
+		attempts:    entry.attempts,
+		lastAttempt: now,
+	}
+	s.metrics.IncUnreviewedRetry(c.pr.Owner + "/" + c.pr.Repo)
+	glog.Infof("unreviewed redrive stale record pr=%s/%s#%d sha=%s task_id=%s"+
+		" stale_task_id=%s idle_seconds=%d",
+		c.pr.Owner, c.pr.Repo, c.pr.Number, c.details.HeadSHA, redriveID, taskID,
+		int64(idle.Duration()/time.Second))
+	return retryPublished
+}
+
+// retriesExhausted reports whether this PR's bounded retry budget is spent.
+// It stays true through a stale re-drive — the budget is still gone, and the
+// alert on the gauge should keep firing while the re-drive is the only thing
+// still trying — and only a review at the head SHA clears the series.
 func (s *unreviewedScanner) retriesExhausted(
 	pr PullRequest,
 	details PRDetails,

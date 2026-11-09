@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -491,6 +492,50 @@ var _ = Describe("pkg.UnreviewedScanner", func() {
 			Expect(prs).To(Equal([]pkg.UnreviewedPR{
 				{Repo: "bborbe/repo", Number: 42, RetriesExhausted: true},
 			}))
+		})
+
+		It("re-drives a stale record with a salted task id once the stale window passes", func() {
+			searchOpenReturns(openPR(42, "alice", now.Add(-libtime.Hour)))
+			s := newScanner(qualifying(), defaultFilter(), trustAlice())
+			s.Scan(ctx)
+			now = now.Add(30 * libtime.Minute)
+			s.Scan(ctx)
+			now = now.Add(30 * libtime.Minute)
+			s.Scan(ctx)
+			Expect(publisher.PublishCreateCallCount()).To(Equal(3))
+
+			// Budget spent, but no full stale window since the last attempt:
+			// nothing is published and the wait is not mistaken for silence.
+			now = now.Add(30 * libtime.Minute)
+			s.Scan(ctx)
+			Expect(publisher.PublishCreateCallCount()).To(Equal(3))
+
+			// One full stale window after the last attempt: the record is dead
+			// (no legitimate run outlives it, and a verdict would have removed
+			// the PR from the candidate set), so the review is re-driven.
+			now = now.Add(30 * libtime.Minute)
+			s.Scan(ctx)
+			Expect(publisher.PublishCreateCallCount()).To(Equal(4))
+			_, _, redriveID, _ := publisher.PublishCreateArgsForCall(3)
+			Expect(redriveID).NotTo(Equal(
+				pkg.DeriveTaskID("bborbe", "repo", 42, "sha-head").String(),
+			))
+			Expect(redriveID).To(Equal(
+				pkg.DeriveTaskIDForce(
+					"bborbe", "repo", 42, "sha-head",
+					strconv.FormatInt(now.Time().UnixNano(), 10),
+				).String(),
+			))
+			Expect(fakeMetrics.IncUnreviewedRetryCallCount()).To(Equal(4))
+
+			// A re-drive paces the next one a full stale window later, so a
+			// permanently broken reviewer cannot burst review pods.
+			now = now.Add(libtime.Hour - libtime.Minute)
+			s.Scan(ctx)
+			Expect(publisher.PublishCreateCallCount()).To(Equal(4))
+			now = now.Add(libtime.Minute)
+			s.Scan(ctx)
+			Expect(publisher.PublishCreateCallCount()).To(Equal(5))
 		})
 
 		It("keeps a PR eligible when PublishCreate fails", func() {
