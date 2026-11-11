@@ -1,25 +1,25 @@
 module github.com/bborbe/github-pr-watcher
 
-go 1.27.3
+go 1.27.4
 
 require (
 	github.com/IBM/sarama v1.61.1
-	github.com/bborbe/agent v0.139.7
+	github.com/bborbe/agent v0.141.0
 	github.com/bborbe/cqrs v0.6.15
 	github.com/bborbe/errors v1.6.6
 	github.com/bborbe/http v1.26.33
-	github.com/bborbe/kafka v1.29.12
-	github.com/bborbe/kv v1.21.28
+	github.com/bborbe/kafka v1.29.13
+	github.com/bborbe/kv v1.21.29
 	github.com/bborbe/log v1.7.8
-	github.com/bborbe/maintainer v0.51.1
-	github.com/bborbe/notification v0.7.11
-	github.com/bborbe/parse v1.12.5
-	github.com/bborbe/run v1.11.10
+	github.com/bborbe/maintainer v0.51.2
+	github.com/bborbe/notification v0.7.12
+	github.com/bborbe/parse v1.12.7
+	github.com/bborbe/run v1.11.11
 	github.com/bborbe/sentry v1.10.7
-	github.com/bborbe/service v1.11.2
-	github.com/bborbe/time v1.27.26
+	github.com/bborbe/service v1.11.3
+	github.com/bborbe/time v1.27.28
 	github.com/bborbe/validation v1.5.9
-	github.com/bborbe/vault-cli v0.191.0
+	github.com/bborbe/vault-cli v0.192.1
 	github.com/golang/glog v1.2.5
 	github.com/google/go-github/v62 v62.0.0
 	github.com/google/uuid v1.6.0
@@ -34,10 +34,10 @@ require (
 	github.com/Masterminds/semver/v3 v3.5.0 // indirect
 	github.com/a2aproject/a2a-go/v2 v2.7.0 // indirect
 	github.com/bborbe/argument/v2 v2.13.10 // indirect
-	github.com/bborbe/collection v1.21.6 // indirect
-	github.com/bborbe/k8s v1.14.32 // indirect
+	github.com/bborbe/collection v1.21.7 // indirect
+	github.com/bborbe/k8s v1.14.33 // indirect
 	github.com/bborbe/math v1.4.19 // indirect
-	github.com/bborbe/strimzi v1.8.23 // indirect
+	github.com/bborbe/strimzi v1.8.24 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/bradleyfalzon/ghinstallation/v2 v2.19.0 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
@@ -59,7 +59,7 @@ require (
 	github.com/google/go-cmp v0.7.0 // indirect
 	github.com/google/go-github/v88 v88.0.0 // indirect
 	github.com/google/go-querystring v1.2.0 // indirect
-	github.com/google/pprof v0.0.0-20261110164715-8bb1ee682bd8 // indirect
+	github.com/google/pprof v0.0.0-20261111065629-49901cbc7227 // indirect
 	github.com/hashicorp/go-uuid v1.0.4 // indirect
 	github.com/jcmturner/aescts/v2 v2.0.0 // indirect
 	github.com/jcmturner/dnsutils/v2 v2.0.0 // indirect
@@ -91,7 +91,7 @@ require (
 	golang.org/x/term v0.48.0 // indirect
 	golang.org/x/text v0.44.0 // indirect
 	golang.org/x/time v0.16.0 // indirect
-	golang.org/x/tools v0.52.0 // indirect
+	golang.org/x/tools v0.52.1-0.20261106145633-d407941a339a // indirect
 	google.golang.org/protobuf v1.36.12 // indirect
 	gopkg.in/evanphx/json-patch.v4 v4.13.0 // indirect
 	gopkg.in/inf.v0 v0.9.1 // indirect
