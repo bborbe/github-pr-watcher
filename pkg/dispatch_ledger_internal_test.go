@@ -46,4 +46,18 @@ func TestCountUndispatchedScopesToPublishesThisProcessMade(t *testing.T) {
 	if got := s.countUndispatched([]unreviewedCandidate{c}); got != 0 {
 		t.Fatalf("countUndispatched = %d; want 0 once the dispatch was observed", got)
 	}
+
+	// A stale re-drive publishes under a SALTED id, and the task event — and so
+	// the mark — carries that id. Counting against the deterministic id alone
+	// would leave a recovered task reading as undispatched forever, which is the
+	// false signal this instrument exists to remove.
+	redriveID := "salted-redrive-id"
+	s.retryState[taskID] = unreviewedRetry{attempts: 3, publishedID: redriveID}
+	if got := s.countUndispatched([]unreviewedCandidate{c}); got != 1 {
+		t.Fatalf("countUndispatched = %d; want 1 while the salted re-drive is unmarked", got)
+	}
+	ledger.Mark(redriveID)
+	if got := s.countUndispatched([]unreviewedCandidate{c}); got != 0 {
+		t.Fatalf("countUndispatched = %d; want 0 once the salted re-drive dispatched", got)
+	}
 }

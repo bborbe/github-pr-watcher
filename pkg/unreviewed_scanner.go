@@ -155,6 +155,13 @@ type unreviewedRetry struct {
 	prKey       string
 	attempts    int
 	lastAttempt libtime.DateTime
+	// publishedID is the task id the LAST publish used. It is not always the
+	// deterministic DeriveTaskID: a stale re-drive publishes under a salted id,
+	// and the task event — and therefore the dispatch mark — carries that one.
+	// Counting against the deterministic id alone would leave a recovered task
+	// reading as undispatched forever, which is the false signal this whole
+	// instrument exists to remove.
+	publishedID string
 }
 
 // unreviewedCandidate is one PR that qualified this scan, paired with the
@@ -360,10 +367,18 @@ func (s *unreviewedScanner) countUndispatched(candidates []unreviewedCandidate) 
 	undispatched := 0
 	for _, c := range candidates {
 		taskID := DeriveTaskID(c.pr.Owner, c.pr.Repo, c.pr.Number, c.details.HeadSHA).String()
-		if _, publishedHere := s.retryState[taskID]; !publishedHere {
+		entry, publishedHere := s.retryState[taskID]
+		if !publishedHere {
 			continue
 		}
-		if !s.dispatchLedger.Seen(taskID) {
+		// The mark carries whichever id the last publish used — a stale re-drive
+		// salts it — so check that id, falling back to the deterministic one for
+		// an entry written before publishedID existed.
+		marked := entry.publishedID
+		if marked == "" {
+			marked = taskID
+		}
+		if !s.dispatchLedger.Seen(marked) {
 			undispatched++
 		}
 	}
@@ -450,6 +465,7 @@ func (s *unreviewedScanner) publishRetry(
 		prKey:       prKey(c.pr),
 		attempts:    entry.attempts + 1,
 		lastAttempt: now,
+		publishedID: taskID,
 	}
 	s.metrics.IncUnreviewedRetry(c.pr.Owner + "/" + c.pr.Repo)
 	glog.Infof("unreviewed retry pr=%s/%s#%d sha=%s task_id=%s attempt=%d/%d",
@@ -488,6 +504,7 @@ func (s *unreviewedScanner) publishStaleRedrive(
 		prKey:       prKey(c.pr),
 		attempts:    entry.attempts,
 		lastAttempt: now,
+		publishedID: redriveID,
 	}
 	s.metrics.IncUnreviewedRetry(c.pr.Owner + "/" + c.pr.Repo)
 	glog.Infof("unreviewed redrive stale record pr=%s/%s#%d sha=%s task_id=%s"+
