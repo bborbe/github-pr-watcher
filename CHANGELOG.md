@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+- feat: **the unreviewed scan now reports `undispatched`.** A publish the executor never picks up and a publish whose review simply has not finished both leave the PR unreviewed, so the retry loop re-published both and reported success either way — the scanner's own signal said "published" and nothing anywhere said "and nothing ever ran". The task-event consumer already sees every lifecycle event and returned early on all but the terminal ones; a spawn notification carries `job_started_at`, so it now marks that task id in a `DispatchLedger`, and the scan counts candidates this process published that never showed a mark.
+- fix: the count is scoped to publishes **this process** made, not to the population on disk. `retryState` holds only this process's publishes, so a restarted pod reports zero until it publishes something itself — without that, every task already in flight at startup reads as undispatched, reporting a healthy pipeline as broken. `undispatched` is a subset of `published`, so `published + suppressed + skipped == candidates` still holds.
+
 ## v0.24.1
 
 - chore: update Go to 1.27.4 and github.com/bborbe/agent to v0.141.0, github.com/bborbe/kafka to v1.29.13, github.com/bborbe/kv to v1.21.29, github.com/bborbe/maintainer to v0.51.2, github.com/bborbe/notification to v0.7.12, github.com/bborbe/parse to v1.12.7, github.com/bborbe/run to v1.11.11, github.com/bborbe/service to v1.11.3, github.com/bborbe/time to v1.27.28, github.com/bborbe/vault-cli to v0.192.1

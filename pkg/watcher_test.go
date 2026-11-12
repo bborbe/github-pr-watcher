@@ -334,6 +334,7 @@ func newDisabledUnreviewedScanner() pkg.UnreviewedScanner {
 	return pkg.NewUnreviewedScanner(
 		new(mocks.GitHubClient),
 		new(mocks.TaskPublisher),
+		pkg.NewDispatchLedger(),
 		new(mocks.Metrics),
 		libtime.CurrentDateTimeGetterFunc(func() libtime.DateTime {
 			return libtime.DateTime(time.Time{})

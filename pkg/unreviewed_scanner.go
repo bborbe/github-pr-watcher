@@ -120,6 +120,7 @@ type UnreviewedScanner interface {
 func NewUnreviewedScanner(
 	ghClient GitHubClient,
 	publisher TaskPublisher,
+	dispatchLedger DispatchLedger,
 	metrics Metrics,
 	currentDateTime libtime.CurrentDateTimeGetter,
 	scope string,
@@ -132,6 +133,7 @@ func NewUnreviewedScanner(
 	return &unreviewedScanner{
 		ghClient:           ghClient,
 		publisher:          publisher,
+		dispatchLedger:     dispatchLedger,
 		metrics:            metrics,
 		currentDateTime:    currentDateTime,
 		scope:              scope,
@@ -153,6 +155,13 @@ type unreviewedRetry struct {
 	prKey       string
 	attempts    int
 	lastAttempt libtime.DateTime
+	// publishedID is the task id the LAST publish used. It is not always the
+	// deterministic DeriveTaskID: a stale re-drive publishes under a salted id,
+	// and the task event — and therefore the dispatch mark — carries that one.
+	// Counting against the deterministic id alone would leave a recovered task
+	// reading as undispatched forever, which is the false signal this whole
+	// instrument exists to remove.
+	publishedID string
 }
 
 // unreviewedCandidate is one PR that qualified this scan, paired with the
@@ -173,6 +182,7 @@ type unreviewedScanner struct {
 	mu                 sync.Mutex
 	ghClient           GitHubClient
 	publisher          TaskPublisher
+	dispatchLedger     DispatchLedger
 	metrics            Metrics
 	currentDateTime    libtime.CurrentDateTimeGetter
 	scope              string
@@ -307,14 +317,26 @@ func (s *unreviewedScanner) retry(
 		if len(candidates) == 0 {
 			return
 		}
+		// undispatched counts candidates THIS process published that never showed
+		// a dispatch event. It is a SUBSET of published, not a fourth bucket, so
+		// the sum invariant below still holds: a publish that dispatched is
+		// counted in both.
+		//
+		// The process-lifetime scoping is what keeps it honest. retryState holds
+		// only publishes made by this process, so a restarted pod reports zero
+		// until it publishes something itself — it must not inherit another
+		// process's publishes as undispatched, which would report a healthy
+		// pipeline as broken and reproduce the original defect from the other
+		// side.
+		undispatched := s.countUndispatched(candidates)
 		// Every candidate that was neither published nor suppressed was
 		// skipped — including any the loop never reached because the context
 		// was cancelled — so the three counts always sum to the population the
 		// line reports.
 		skipped := len(candidates) - published - suppressed
 		glog.Infof(
-			"unreviewed scan reconcile candidates=%d published=%d suppressed=%d skipped=%d",
-			len(candidates), published, suppressed, skipped,
+			"unreviewed scan reconcile candidates=%d published=%d suppressed=%d skipped=%d undispatched=%d",
+			len(candidates), published, suppressed, skipped, undispatched,
 		)
 	}()
 	for _, c := range candidates {
@@ -332,6 +354,35 @@ func (s *unreviewedScanner) retry(
 		case retrySkipped:
 		}
 	}
+}
+
+// countUndispatched reports how many candidates this process published and never
+// observed being dispatched.
+//
+// The retryState lookup is the scoping, not an optimisation: it holds only
+// publishes made by this process, so a pod that just started counts zero until it
+// publishes something itself. Without it a restart would report every in-flight
+// task as undispatched — the same false signal, inverted.
+func (s *unreviewedScanner) countUndispatched(candidates []unreviewedCandidate) int {
+	undispatched := 0
+	for _, c := range candidates {
+		taskID := DeriveTaskID(c.pr.Owner, c.pr.Repo, c.pr.Number, c.details.HeadSHA).String()
+		entry, publishedHere := s.retryState[taskID]
+		if !publishedHere {
+			continue
+		}
+		// The mark carries whichever id the last publish used — a stale re-drive
+		// salts it — so check that id, falling back to the deterministic one for
+		// an entry written before publishedID existed.
+		marked := entry.publishedID
+		if marked == "" {
+			marked = taskID
+		}
+		if !s.dispatchLedger.Seen(marked) {
+			undispatched++
+		}
+	}
+	return undispatched
 }
 
 // retryCandidate re-publishes one still-unreviewed PR and reports exactly one
@@ -414,6 +465,7 @@ func (s *unreviewedScanner) publishRetry(
 		prKey:       prKey(c.pr),
 		attempts:    entry.attempts + 1,
 		lastAttempt: now,
+		publishedID: taskID,
 	}
 	s.metrics.IncUnreviewedRetry(c.pr.Owner + "/" + c.pr.Repo)
 	glog.Infof("unreviewed retry pr=%s/%s#%d sha=%s task_id=%s attempt=%d/%d",
@@ -452,6 +504,7 @@ func (s *unreviewedScanner) publishStaleRedrive(
 		prKey:       prKey(c.pr),
 		attempts:    entry.attempts,
 		lastAttempt: now,
+		publishedID: redriveID,
 	}
 	s.metrics.IncUnreviewedRetry(c.pr.Owner + "/" + c.pr.Repo)
 	glog.Infof("unreviewed redrive stale record pr=%s/%s#%d sha=%s task_id=%s"+

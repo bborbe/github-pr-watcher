@@ -96,7 +96,7 @@ var _ = Describe("pkg.UnreviewedScanner", func() {
 		t trust.Trust,
 	) pkg.UnreviewedScanner {
 		return pkg.NewUnreviewedScanner(
-			ghClient, publisher, fakeMetrics, currentDateTime, "bborbe",
+			ghClient, publisher, pkg.NewDispatchLedger(), fakeMetrics, currentDateTime, "bborbe",
 			f, t, "override-review", 0, 0, cfg,
 		)
 	}
@@ -279,7 +279,7 @@ var _ = Describe("pkg.UnreviewedScanner", func() {
 	Describe("oversized PRs", func() {
 		oversizedScanner := func(maxAdditions int) pkg.UnreviewedScanner {
 			return pkg.NewUnreviewedScanner(
-				ghClient, publisher, fakeMetrics, currentDateTime, "bborbe",
+				ghClient, publisher, pkg.NewDispatchLedger(), fakeMetrics, currentDateTime, "bborbe",
 				defaultFilter(), trustAlice(), "override-review", maxAdditions, 0, qualifying(),
 			)
 		}
@@ -404,7 +404,7 @@ var _ = Describe("pkg.UnreviewedScanner", func() {
 		ghClient.ListReviewsReturns(nil, errors.Errorf(ctx, "boom"))
 
 		scanner := pkg.NewUnreviewedScanner(
-			ghClient, publisher, fakeMetrics, currentDateTime, "bborbe",
+			ghClient, publisher, pkg.NewDispatchLedger(), fakeMetrics, currentDateTime, "bborbe",
 			defaultFilter(), trustAlice(), "override-review", 0, 0, qualifying(),
 		)
 		publisher := new(mocks.TaskPublisher)

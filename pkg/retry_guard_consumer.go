@@ -66,7 +66,7 @@ func retryGuardDiagnosticsOutcome(ctx context.Context, content agentlib.TaskCont
 // status is ignored, so a running review keeps suppressing. The task identifier
 // is the Kafka message key (the sender writes EventObject.ID, which is
 // base.EventID(task.TaskIdentifier), there).
-func NewRetryGuardOutcomeMessageHandler(guard RetryGuard) libkafka.MessageHandlerTx {
+func NewRetryGuardOutcomeMessageHandler(guard RetryGuard, ledger DispatchLedger) libkafka.MessageHandlerTx {
 	return libkafka.MessageHandlerTxFunc(
 		func(ctx context.Context, tx libkv.Tx, msg *sarama.ConsumerMessage) error {
 			if len(msg.Value) == 0 {
@@ -75,6 +75,14 @@ func NewRetryGuardOutcomeMessageHandler(guard RetryGuard) libkafka.MessageHandle
 			var task agentlib.Task
 			if err := json.Unmarshal(msg.Value, &task); err != nil {
 				return errors.Wrap(ctx, err, "decode task event")
+			}
+			// The dispatch mark comes BEFORE the terminal gate: a spawn notification
+			// is not terminal, and it is the only event that proves the executor
+			// picked the task up. job_started_at is written by the executor's spawn
+			// notification and never by an agent delivery, so its presence is
+			// exactly "a Job was spawned for this task".
+			if startedAt, ok := task.Frontmatter.String("job_started_at"); ok && startedAt != "" {
+				ledger.Mark(string(msg.Key))
 			}
 			status := task.Frontmatter.Status()
 			if !isRetryGuardTerminalStatus(status) {
@@ -111,6 +119,7 @@ func NewRetryGuardOutcomeConsumer(
 	db libkv.DB,
 	prefix base.TopicPrefix,
 	guard RetryGuard,
+	ledger DispatchLedger,
 ) run.Func {
 	consumer := libkafka.NewOffsetConsumerHighwaterMarksBatchWithProvider(
 		saramaClientProvider,
@@ -124,7 +133,7 @@ func NewRetryGuardOutcomeConsumer(
 			db,
 			libkafka.NewMessageHandlerBatchTx(
 				libkafka.NewMessageHandlerTxSkipErrors(
-					NewRetryGuardOutcomeMessageHandler(guard),
+					NewRetryGuardOutcomeMessageHandler(guard, ledger),
 					log.DefaultSamplerFactory,
 				),
 			),

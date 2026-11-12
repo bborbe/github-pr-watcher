@@ -82,6 +82,7 @@ func CreateWatcher(
 	sideEffectFilter filter.TaskCreationFilter,
 	stage string,
 	metrics pkg.Metrics,
+	dispatchLedger pkg.DispatchLedger,
 	trustDecision trust.Trust,
 	maxSlugLen int,
 	maxTitleLen int,
@@ -100,8 +101,7 @@ func CreateWatcher(
 	coalescer coalesce.Coalescer,
 	escalator escalate.Escalator,
 ) pkg.Watcher {
-	// One tracker shared by the publisher and the watcher: the publisher notes
-	// each successful send, the watcher reports a cycle that recorded none.
+	// One tracker shared by publisher and watcher: the publisher notes each send.
 	publishTracker := pkg.NewPublishTracker(currentDateTime)
 	publisher := pkg.NewTaskPublisher(
 		createSender,
@@ -122,17 +122,9 @@ func CreateWatcher(
 		pkg.WithPublishTracker(publishTracker),
 	)
 	unreviewedScanner := pkg.NewUnreviewedScanner(
-		ghClient,
-		publisher,
-		metrics,
-		currentDateTime,
-		scope,
-		taskCreationFilter,
-		trustDecision,
-		overrideLabel,
-		maxAdditions,
-		maxChangedFiles,
-		unreviewedConfig,
+		ghClient, publisher, dispatchLedger, metrics, currentDateTime, scope,
+		taskCreationFilter, trustDecision, overrideLabel,
+		maxAdditions, maxChangedFiles, unreviewedConfig,
 	)
 	return pkg.NewWatcher(
 		ghClient,
