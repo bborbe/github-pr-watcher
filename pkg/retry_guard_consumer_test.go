@@ -117,7 +117,7 @@ var _ = Describe("RetryGuardOutcome", func() {
 			ctx,
 			newTask("task-1", "completed", "## Diagnostics\n\n```yaml\noutcome: failed\n```\n"),
 		)
-		Expect(consume(pkg.NewRetryGuardOutcomeMessageHandler(guard), msg)).To(Succeed())
+		Expect(consume(pkg.NewRetryGuardOutcomeMessageHandler(guard, pkg.NewDispatchLedger()), msg)).To(Succeed())
 
 		decision, err := check(pr)
 
@@ -132,7 +132,7 @@ var _ = Describe("RetryGuardOutcome", func() {
 			fake := new(mocks.RetryGuard)
 			msg := newTaskEventMessage(ctx, newTask("task-1", status.String(), ""))
 
-			Expect(consume(pkg.NewRetryGuardOutcomeMessageHandler(fake), msg)).To(Succeed())
+			Expect(consume(pkg.NewRetryGuardOutcomeMessageHandler(fake, pkg.NewDispatchLedger()), msg)).To(Succeed())
 
 			Expect(fake.ClearByTaskIDCallCount()).To(Equal(wantCalls))
 		},
@@ -149,7 +149,7 @@ var _ = Describe("RetryGuardOutcome", func() {
 		Expect(record(pr, "task-1")).To(Succeed())
 
 		msg := newTaskEventMessage(ctx, newTask("task-1", "in_progress", ""))
-		Expect(consume(pkg.NewRetryGuardOutcomeMessageHandler(guard), msg)).To(Succeed())
+		Expect(consume(pkg.NewRetryGuardOutcomeMessageHandler(guard, pkg.NewDispatchLedger()), msg)).To(Succeed())
 
 		decision, err := check(pr)
 
@@ -166,12 +166,12 @@ var _ = Describe("RetryGuardOutcome", func() {
 		// see the call with task-2 while the real guard leaves task-1 alone.
 		fake := new(mocks.RetryGuard)
 		msg := newTaskEventMessage(ctx, newTask("task-2", "completed", ""))
-		Expect(consume(pkg.NewRetryGuardOutcomeMessageHandler(fake), msg)).To(Succeed())
+		Expect(consume(pkg.NewRetryGuardOutcomeMessageHandler(fake, pkg.NewDispatchLedger()), msg)).To(Succeed())
 		Expect(fake.ClearByTaskIDCallCount()).To(Equal(1))
 		_, _, clearedTaskID, _ := fake.ClearByTaskIDArgsForCall(0)
 		Expect(clearedTaskID).To(Equal("task-2"))
 
-		Expect(consume(pkg.NewRetryGuardOutcomeMessageHandler(guard), msg)).To(Succeed())
+		Expect(consume(pkg.NewRetryGuardOutcomeMessageHandler(guard, pkg.NewDispatchLedger()), msg)).To(Succeed())
 
 		decision, err := check(pr)
 
@@ -184,7 +184,7 @@ var _ = Describe("RetryGuardOutcome", func() {
 			fake := new(mocks.RetryGuard)
 			msg := newTaskEventMessage(ctx, newTask("task-1", status, content))
 
-			Expect(consume(pkg.NewRetryGuardOutcomeMessageHandler(fake), msg)).To(Succeed())
+			Expect(consume(pkg.NewRetryGuardOutcomeMessageHandler(fake, pkg.NewDispatchLedger()), msg)).To(Succeed())
 
 			Expect(fake.ClearByTaskIDCallCount()).To(Equal(1))
 			_, _, taskID, outcome := fake.ClearByTaskIDArgsForCall(0)
@@ -207,7 +207,7 @@ var _ = Describe("RetryGuardOutcome", func() {
 			newTask("task-abc", "completed", "## Diagnostics\n\n```yaml\noutcome: success\n```\n"),
 		)
 
-		Expect(consume(pkg.NewRetryGuardOutcomeMessageHandler(fake), msg)).To(Succeed())
+		Expect(consume(pkg.NewRetryGuardOutcomeMessageHandler(fake, pkg.NewDispatchLedger()), msg)).To(Succeed())
 
 		Expect(fake.ClearByTaskIDCallCount()).To(Equal(1))
 		_, _, taskID, outcome := fake.ClearByTaskIDArgsForCall(0)
@@ -226,7 +226,7 @@ var _ = Describe("RetryGuardOutcome", func() {
 			domain.TaskStatusHold,
 		} {
 			msg := newTaskEventMessage(ctx, newTask("task-1", status.String(), ""))
-			Expect(consume(pkg.NewRetryGuardOutcomeMessageHandler(guard), msg)).To(Succeed())
+			Expect(consume(pkg.NewRetryGuardOutcomeMessageHandler(guard, pkg.NewDispatchLedger()), msg)).To(Succeed())
 		}
 
 		decision, err := check(pr)
@@ -239,7 +239,7 @@ var _ = Describe("RetryGuardOutcome", func() {
 		fake := new(mocks.RetryGuard)
 		msg := &sarama.ConsumerMessage{Key: []byte("task-1"), Value: nil}
 
-		Expect(consume(pkg.NewRetryGuardOutcomeMessageHandler(fake), msg)).To(Succeed())
+		Expect(consume(pkg.NewRetryGuardOutcomeMessageHandler(fake, pkg.NewDispatchLedger()), msg)).To(Succeed())
 
 		Expect(fake.ClearByTaskIDCallCount()).To(Equal(0))
 	})
@@ -250,6 +250,7 @@ var _ = Describe("RetryGuardOutcome", func() {
 			pkg.NewMemDB(),
 			base.TopicPrefix("develop"),
 			new(mocks.RetryGuard),
+			pkg.NewDispatchLedger(),
 		)
 		Expect(runFunc).NotTo(BeNil())
 	})

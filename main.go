@@ -378,6 +378,11 @@ func (a *application) Run(ctx context.Context, _ libsentry.Client) error {
 	)
 	defer coalescer.Close()
 
+	// One ledger shared by the scanner and the task-event consumer: the consumer
+	// marks a task id when it sees the executor's spawn notification, and the
+	// scanner counts the publishes it never saw dispatched.
+	dispatchLedger := pkg.NewDispatchLedger()
+
 	w := factory.CreateWatcher(
 		ghClient,
 		createSender,
@@ -388,6 +393,7 @@ func (a *application) Run(ctx context.Context, _ libsentry.Client) error {
 		sideEffectFilter,
 		a.Stage,
 		metrics,
+		dispatchLedger,
 		trustDecision,
 		a.MaxSlugLen,
 		a.MaxTitleLen,
@@ -462,6 +468,7 @@ func (a *application) Run(ctx context.Context, _ libsentry.Client) error {
 		db,
 		a.TopicPrefix,
 		retryGuard,
+		dispatchLedger,
 	)
 
 	glog.V(2).

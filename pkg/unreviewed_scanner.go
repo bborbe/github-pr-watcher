@@ -120,6 +120,7 @@ type UnreviewedScanner interface {
 func NewUnreviewedScanner(
 	ghClient GitHubClient,
 	publisher TaskPublisher,
+	dispatchLedger DispatchLedger,
 	metrics Metrics,
 	currentDateTime libtime.CurrentDateTimeGetter,
 	scope string,
@@ -132,6 +133,7 @@ func NewUnreviewedScanner(
 	return &unreviewedScanner{
 		ghClient:           ghClient,
 		publisher:          publisher,
+		dispatchLedger:     dispatchLedger,
 		metrics:            metrics,
 		currentDateTime:    currentDateTime,
 		scope:              scope,
@@ -173,6 +175,7 @@ type unreviewedScanner struct {
 	mu                 sync.Mutex
 	ghClient           GitHubClient
 	publisher          TaskPublisher
+	dispatchLedger     DispatchLedger
 	metrics            Metrics
 	currentDateTime    libtime.CurrentDateTimeGetter
 	scope              string
@@ -307,14 +310,26 @@ func (s *unreviewedScanner) retry(
 		if len(candidates) == 0 {
 			return
 		}
+		// undispatched counts candidates THIS process published that never showed
+		// a dispatch event. It is a SUBSET of published, not a fourth bucket, so
+		// the sum invariant below still holds: a publish that dispatched is
+		// counted in both.
+		//
+		// The process-lifetime scoping is what keeps it honest. retryState holds
+		// only publishes made by this process, so a restarted pod reports zero
+		// until it publishes something itself — it must not inherit another
+		// process's publishes as undispatched, which would report a healthy
+		// pipeline as broken and reproduce the original defect from the other
+		// side.
+		undispatched := s.countUndispatched(candidates)
 		// Every candidate that was neither published nor suppressed was
 		// skipped — including any the loop never reached because the context
 		// was cancelled — so the three counts always sum to the population the
 		// line reports.
 		skipped := len(candidates) - published - suppressed
 		glog.Infof(
-			"unreviewed scan reconcile candidates=%d published=%d suppressed=%d skipped=%d",
-			len(candidates), published, suppressed, skipped,
+			"unreviewed scan reconcile candidates=%d published=%d suppressed=%d skipped=%d undispatched=%d",
+			len(candidates), published, suppressed, skipped, undispatched,
 		)
 	}()
 	for _, c := range candidates {
@@ -332,6 +347,27 @@ func (s *unreviewedScanner) retry(
 		case retrySkipped:
 		}
 	}
+}
+
+// countUndispatched reports how many candidates this process published and never
+// observed being dispatched.
+//
+// The retryState lookup is the scoping, not an optimisation: it holds only
+// publishes made by this process, so a pod that just started counts zero until it
+// publishes something itself. Without it a restart would report every in-flight
+// task as undispatched — the same false signal, inverted.
+func (s *unreviewedScanner) countUndispatched(candidates []unreviewedCandidate) int {
+	undispatched := 0
+	for _, c := range candidates {
+		taskID := DeriveTaskID(c.pr.Owner, c.pr.Repo, c.pr.Number, c.details.HeadSHA).String()
+		if _, publishedHere := s.retryState[taskID]; !publishedHere {
+			continue
+		}
+		if !s.dispatchLedger.Seen(taskID) {
+			undispatched++
+		}
+	}
+	return undispatched
 }
 
 // retryCandidate re-publishes one still-unreviewed PR and reports exactly one
