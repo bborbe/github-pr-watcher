@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## Unreleased
+## v0.26.0
 
 - feat: **hold a PR with a `CHANGES_REQUESTED` review while the `do-not-merge` label is present.** The webhook receiver already published a commit-status command on every label-changing delivery, but that route cannot work: the reviewer App declares no `Commit statuses: Write`, and an installation cannot grant a permission the App does not declare. A `CHANGES_REQUESTED` review blocks the merge on every ruleset that sets `required_approving_review_count: 1`, and the App already holds `Pull requests: Write`. A new `set-do-not-merge-review` command on the same `githubprreview` topic trio carries it, so no new schema and no `bborbe/maintainer` change. The blocking review is idempotent — one per PR, keyed on the gate's own reviews, never one per webhook delivery — and a push does not clear a `CHANGES_REQUESTED`, so the hold survives new commits
 - feat: removing the label dismisses the gate's own review, restoring whatever verdict the reviewer held before the label appeared. It dismisses rather than approving: an `APPROVE` would fabricate a verdict the reviewer never reached and would erase a real finding on a PR the bot had genuinely rejected. Scoping is by a body marker (`<!-- do-not-merge-gate -->`), so the bot's genuine `CHANGES_REQUESTED` reviews on the same PR are never dismissed
