@@ -255,7 +255,7 @@ type GitHubClient struct {
 		result1 pkg.SearchResult
 		result2 error
 	}
-	SubmitReviewStub        func(context.Context, string, string, int, string, string, pkg.ReviewState) error
+	SubmitReviewStub        func(context.Context, string, string, int, string, string, pkg.ReviewEvent) error
 	submitReviewMutex       sync.RWMutex
 	submitReviewArgsForCall []struct {
 		arg1 context.Context
@@ -264,7 +264,7 @@ type GitHubClient struct {
 		arg4 int
 		arg5 string
 		arg6 string
-		arg7 pkg.ReviewState
+		arg7 pkg.ReviewEvent
 	}
 	submitReviewReturns struct {
 		result1 error
@@ -1333,7 +1333,7 @@ func (fake *GitHubClient) SearchPRsReturnsOnCall(i int, result1 pkg.SearchResult
 	}{result1, result2}
 }
 
-func (fake *GitHubClient) SubmitReview(arg1 context.Context, arg2 string, arg3 string, arg4 int, arg5 string, arg6 string, arg7 pkg.ReviewState) error {
+func (fake *GitHubClient) SubmitReview(arg1 context.Context, arg2 string, arg3 string, arg4 int, arg5 string, arg6 string, arg7 pkg.ReviewEvent) error {
 	fake.submitReviewMutex.Lock()
 	ret, specificReturn := fake.submitReviewReturnsOnCall[len(fake.submitReviewArgsForCall)]
 	fake.submitReviewArgsForCall = append(fake.submitReviewArgsForCall, struct {
@@ -1343,7 +1343,7 @@ func (fake *GitHubClient) SubmitReview(arg1 context.Context, arg2 string, arg3 s
 		arg4 int
 		arg5 string
 		arg6 string
-		arg7 pkg.ReviewState
+		arg7 pkg.ReviewEvent
 	}{arg1, arg2, arg3, arg4, arg5, arg6, arg7})
 	stub := fake.SubmitReviewStub
 	fakeReturns := fake.submitReviewReturns
@@ -1364,13 +1364,13 @@ func (fake *GitHubClient) SubmitReviewCallCount() int {
 	return len(fake.submitReviewArgsForCall)
 }
 
-func (fake *GitHubClient) SubmitReviewCalls(stub func(context.Context, string, string, int, string, string, pkg.ReviewState) error) {
+func (fake *GitHubClient) SubmitReviewCalls(stub func(context.Context, string, string, int, string, string, pkg.ReviewEvent) error) {
 	fake.submitReviewMutex.Lock()
 	defer fake.submitReviewMutex.Unlock()
 	fake.SubmitReviewStub = stub
 }
 
-func (fake *GitHubClient) SubmitReviewArgsForCall(i int) (context.Context, string, string, int, string, string, pkg.ReviewState) {
+func (fake *GitHubClient) SubmitReviewArgsForCall(i int) (context.Context, string, string, int, string, string, pkg.ReviewEvent) {
 	fake.submitReviewMutex.RLock()
 	defer fake.submitReviewMutex.RUnlock()
 	argsForCall := fake.submitReviewArgsForCall[i]

@@ -136,7 +136,7 @@ func blockPR(
 		prInfo.Number,
 		headSHA,
 		DoNotMergeReviewBody,
-		pkg.ReviewStateChangesRequested,
+		pkg.ReviewEventRequestChanges,
 	); err != nil {
 		return skipIfPermanent(ctx, err, "submit do-not-merge review", prURL)
 	}

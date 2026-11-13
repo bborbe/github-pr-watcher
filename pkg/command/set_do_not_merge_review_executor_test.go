@@ -92,7 +92,9 @@ var _ = Describe("SetDoNotMergeReviewCommandExecutor", func() {
 			Expect(number).To(Equal(42))
 			Expect(commitID).To(Equal("abc123"))
 			Expect(body).To(Equal(command.DoNotMergeReviewBody))
-			Expect(event).To(Equal(pkg.ReviewStateChangesRequested))
+			// The submission event is REQUEST_CHANGES; CHANGES_REQUESTED is the
+			// state the API reports back, and passing it as the event is a 422.
+			Expect(event).To(Equal(pkg.ReviewEventRequestChanges))
 			Expect(ghClient.DismissReviewCallCount()).To(Equal(0))
 		})
 
