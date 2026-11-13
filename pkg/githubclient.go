@@ -265,7 +265,7 @@ type GitHubClient interface {
 		owner, repo string,
 		number int,
 		commitID, body string,
-		event ReviewState,
+		event ReviewEvent,
 	) error
 
 	// DismissReview dismisses one review by id, removing its standing verdict
@@ -339,6 +339,25 @@ const (
 	CommitStateSuccess CommitState = "success"
 	// CommitStateFailure reports that the PR carries the blocking label.
 	CommitStateFailure CommitState = "failure"
+)
+
+// ReviewEvent is the value the reviews API accepts in the `event` field when
+// SUBMITTING a review. It is deliberately a different type from ReviewState
+// because the two vocabularies do not match: the API takes REQUEST_CHANGES and
+// reports back CHANGES_REQUESTED. Passing the state name as the event is a 422
+// ("Variable $event of type PullRequestReviewEvent was provided invalid
+// value") — measured live on bborbe/go-skeleton#127, 2026-11-13, on the first
+// dev deploy of the do-not-merge gate.
+type ReviewEvent string
+
+const (
+	// ReviewEventApprove submits an approving review.
+	ReviewEventApprove ReviewEvent = "APPROVE"
+	// ReviewEventRequestChanges submits a blocking review. The resulting
+	// ReviewState is CHANGES_REQUESTED, not this value.
+	ReviewEventRequestChanges ReviewEvent = "REQUEST_CHANGES"
+	// ReviewEventComment submits a comment-only review.
+	ReviewEventComment ReviewEvent = "COMMENT"
 )
 
 // Review is a single PR review, reduced to the fields the unreviewed-PR scan
@@ -1158,7 +1177,7 @@ func (c *githubClient) SubmitReview(
 	owner, repo string,
 	number int,
 	commitID, body string,
-	event ReviewState,
+	event ReviewEvent,
 ) error {
 	_, _, err := c.client.PullRequests.CreateReview(
 		ctx,
