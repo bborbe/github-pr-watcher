@@ -45,6 +45,22 @@ type GitHubClient struct {
 	closePRReturnsOnCall map[int]struct {
 		result1 error
 	}
+	DismissReviewStub        func(context.Context, string, string, int, int64, string) error
+	dismissReviewMutex       sync.RWMutex
+	dismissReviewArgsForCall []struct {
+		arg1 context.Context
+		arg2 string
+		arg3 string
+		arg4 int
+		arg5 int64
+		arg6 string
+	}
+	dismissReviewReturns struct {
+		result1 error
+	}
+	dismissReviewReturnsOnCall map[int]struct {
+		result1 error
+	}
 	EnableAutoMergeStub        func(context.Context, string, string, int) error
 	enableAutoMergeMutex       sync.RWMutex
 	enableAutoMergeArgsForCall []struct {
@@ -239,6 +255,23 @@ type GitHubClient struct {
 		result1 pkg.SearchResult
 		result2 error
 	}
+	SubmitReviewStub        func(context.Context, string, string, int, string, string, pkg.ReviewState) error
+	submitReviewMutex       sync.RWMutex
+	submitReviewArgsForCall []struct {
+		arg1 context.Context
+		arg2 string
+		arg3 string
+		arg4 int
+		arg5 string
+		arg6 string
+		arg7 pkg.ReviewState
+	}
+	submitReviewReturns struct {
+		result1 error
+	}
+	submitReviewReturnsOnCall map[int]struct {
+		result1 error
+	}
 	UpdateBranchStub        func(context.Context, string, string, int) error
 	updateBranchMutex       sync.RWMutex
 	updateBranchArgsForCall []struct {
@@ -383,6 +416,72 @@ func (fake *GitHubClient) ClosePRReturnsOnCall(i int, result1 error) {
 		})
 	}
 	fake.closePRReturnsOnCall[i] = struct {
+		result1 error
+	}{result1}
+}
+
+func (fake *GitHubClient) DismissReview(arg1 context.Context, arg2 string, arg3 string, arg4 int, arg5 int64, arg6 string) error {
+	fake.dismissReviewMutex.Lock()
+	ret, specificReturn := fake.dismissReviewReturnsOnCall[len(fake.dismissReviewArgsForCall)]
+	fake.dismissReviewArgsForCall = append(fake.dismissReviewArgsForCall, struct {
+		arg1 context.Context
+		arg2 string
+		arg3 string
+		arg4 int
+		arg5 int64
+		arg6 string
+	}{arg1, arg2, arg3, arg4, arg5, arg6})
+	stub := fake.DismissReviewStub
+	fakeReturns := fake.dismissReviewReturns
+	fake.recordInvocation("DismissReview", []interface{}{arg1, arg2, arg3, arg4, arg5, arg6})
+	fake.dismissReviewMutex.Unlock()
+	if stub != nil {
+		return stub(arg1, arg2, arg3, arg4, arg5, arg6)
+	}
+	if specificReturn {
+		return ret.result1
+	}
+	return fakeReturns.result1
+}
+
+func (fake *GitHubClient) DismissReviewCallCount() int {
+	fake.dismissReviewMutex.RLock()
+	defer fake.dismissReviewMutex.RUnlock()
+	return len(fake.dismissReviewArgsForCall)
+}
+
+func (fake *GitHubClient) DismissReviewCalls(stub func(context.Context, string, string, int, int64, string) error) {
+	fake.dismissReviewMutex.Lock()
+	defer fake.dismissReviewMutex.Unlock()
+	fake.DismissReviewStub = stub
+}
+
+func (fake *GitHubClient) DismissReviewArgsForCall(i int) (context.Context, string, string, int, int64, string) {
+	fake.dismissReviewMutex.RLock()
+	defer fake.dismissReviewMutex.RUnlock()
+	argsForCall := fake.dismissReviewArgsForCall[i]
+	return argsForCall.arg1, argsForCall.arg2, argsForCall.arg3, argsForCall.arg4, argsForCall.arg5, argsForCall.arg6
+}
+
+func (fake *GitHubClient) DismissReviewReturns(result1 error) {
+	fake.dismissReviewMutex.Lock()
+	defer fake.dismissReviewMutex.Unlock()
+	fake.DismissReviewStub = nil
+	fake.dismissReviewReturns = struct {
+		result1 error
+	}{result1}
+}
+
+func (fake *GitHubClient) DismissReviewReturnsOnCall(i int, result1 error) {
+	fake.dismissReviewMutex.Lock()
+	defer fake.dismissReviewMutex.Unlock()
+	fake.DismissReviewStub = nil
+	if fake.dismissReviewReturnsOnCall == nil {
+		fake.dismissReviewReturnsOnCall = make(map[int]struct {
+			result1 error
+		})
+	}
+	fake.dismissReviewReturnsOnCall[i] = struct {
 		result1 error
 	}{result1}
 }
@@ -1232,6 +1331,73 @@ func (fake *GitHubClient) SearchPRsReturnsOnCall(i int, result1 pkg.SearchResult
 		result1 pkg.SearchResult
 		result2 error
 	}{result1, result2}
+}
+
+func (fake *GitHubClient) SubmitReview(arg1 context.Context, arg2 string, arg3 string, arg4 int, arg5 string, arg6 string, arg7 pkg.ReviewState) error {
+	fake.submitReviewMutex.Lock()
+	ret, specificReturn := fake.submitReviewReturnsOnCall[len(fake.submitReviewArgsForCall)]
+	fake.submitReviewArgsForCall = append(fake.submitReviewArgsForCall, struct {
+		arg1 context.Context
+		arg2 string
+		arg3 string
+		arg4 int
+		arg5 string
+		arg6 string
+		arg7 pkg.ReviewState
+	}{arg1, arg2, arg3, arg4, arg5, arg6, arg7})
+	stub := fake.SubmitReviewStub
+	fakeReturns := fake.submitReviewReturns
+	fake.recordInvocation("SubmitReview", []interface{}{arg1, arg2, arg3, arg4, arg5, arg6, arg7})
+	fake.submitReviewMutex.Unlock()
+	if stub != nil {
+		return stub(arg1, arg2, arg3, arg4, arg5, arg6, arg7)
+	}
+	if specificReturn {
+		return ret.result1
+	}
+	return fakeReturns.result1
+}
+
+func (fake *GitHubClient) SubmitReviewCallCount() int {
+	fake.submitReviewMutex.RLock()
+	defer fake.submitReviewMutex.RUnlock()
+	return len(fake.submitReviewArgsForCall)
+}
+
+func (fake *GitHubClient) SubmitReviewCalls(stub func(context.Context, string, string, int, string, string, pkg.ReviewState) error) {
+	fake.submitReviewMutex.Lock()
+	defer fake.submitReviewMutex.Unlock()
+	fake.SubmitReviewStub = stub
+}
+
+func (fake *GitHubClient) SubmitReviewArgsForCall(i int) (context.Context, string, string, int, string, string, pkg.ReviewState) {
+	fake.submitReviewMutex.RLock()
+	defer fake.submitReviewMutex.RUnlock()
+	argsForCall := fake.submitReviewArgsForCall[i]
+	return argsForCall.arg1, argsForCall.arg2, argsForCall.arg3, argsForCall.arg4, argsForCall.arg5, argsForCall.arg6, argsForCall.arg7
+}
+
+func (fake *GitHubClient) SubmitReviewReturns(result1 error) {
+	fake.submitReviewMutex.Lock()
+	defer fake.submitReviewMutex.Unlock()
+	fake.SubmitReviewStub = nil
+	fake.submitReviewReturns = struct {
+		result1 error
+	}{result1}
+}
+
+func (fake *GitHubClient) SubmitReviewReturnsOnCall(i int, result1 error) {
+	fake.submitReviewMutex.Lock()
+	defer fake.submitReviewMutex.Unlock()
+	fake.SubmitReviewStub = nil
+	if fake.submitReviewReturnsOnCall == nil {
+		fake.submitReviewReturnsOnCall = make(map[int]struct {
+			result1 error
+		})
+	}
+	fake.submitReviewReturnsOnCall[i] = struct {
+		result1 error
+	}{result1}
 }
 
 func (fake *GitHubClient) UpdateBranch(arg1 context.Context, arg2 string, arg3 string, arg4 int) error {

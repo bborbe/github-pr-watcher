@@ -66,7 +66,10 @@ func retryGuardDiagnosticsOutcome(ctx context.Context, content agentlib.TaskCont
 // status is ignored, so a running review keeps suppressing. The task identifier
 // is the Kafka message key (the sender writes EventObject.ID, which is
 // base.EventID(task.TaskIdentifier), there).
-func NewRetryGuardOutcomeMessageHandler(guard RetryGuard, ledger DispatchLedger) libkafka.MessageHandlerTx {
+func NewRetryGuardOutcomeMessageHandler(
+	guard RetryGuard,
+	ledger DispatchLedger,
+) libkafka.MessageHandlerTx {
 	return libkafka.MessageHandlerTxFunc(
 		func(ctx context.Context, tx libkv.Tx, msg *sarama.ConsumerMessage) error {
 			if len(msg.Value) == 0 {

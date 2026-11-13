@@ -58,10 +58,12 @@ type WebhookHandler = libhttp.WithError
 
 // NewWebhookHandler returns a handler that publishes a TriggerPRReviewCommand
 // for each signature-verified pull_request webhook delivery, unless the
-// coalescer holds the push for its trailing dispatch.
+// coalescer holds the push for its trailing dispatch, and the do-not-merge
+// gate's commands on every delivery that can change the label state.
 func NewWebhookHandler(
 	sender command.TriggerPRReviewCommandSender,
 	statusSender command.SetDoNotMergeStatusCommandSender,
+	reviewSender command.SetDoNotMergeReviewCommandSender,
 	coalescer coalesce.Coalescer,
 	secret string,
 	metrics WebhookMetrics,
@@ -70,6 +72,7 @@ func NewWebhookHandler(
 	return &webhookHandler{
 		sender:       sender,
 		statusSender: statusSender,
+		reviewSender: reviewSender,
 		coalescer:    coalescer,
 		secret:       secret,
 		metrics:      metrics,
@@ -80,6 +83,7 @@ func NewWebhookHandler(
 type webhookHandler struct {
 	sender       command.TriggerPRReviewCommandSender
 	statusSender command.SetDoNotMergeStatusCommandSender
+	reviewSender command.SetDoNotMergeReviewCommandSender
 	coalescer    coalesce.Coalescer
 	secret       string
 	metrics      WebhookMetrics
@@ -96,21 +100,21 @@ var dispatchActions = map[string]bool{
 	"ready_for_review": true, // draft → ready
 }
 
-// statusActions are the pull_request actions that can change the
-// `do-not-merge` commit status: the label itself, plus every action that
-// presents a head SHA the ruleset will evaluate.
+// gateActions are the pull_request actions that can change the do-not-merge
+// gate: the label itself, plus every action that presents a head SHA the
+// ruleset will evaluate.
 //
 // This set is deliberately SEPARATE from dispatchActions. Widening
 // dispatchActions instead would start a full review on every label event —
 // labelled/unlabelled never change the head, so there is nothing to review,
-// but the status must still be re-posted or the required context goes stale
-// the moment the label moves.
+// but the gate must still be re-evaluated or the hold goes stale the moment
+// the label moves.
 //
-// The status is published BEFORE shouldDispatch and never through the
+// Both gate commands are published BEFORE shouldDispatch and never through the
 // coalescer: coalescing collapses a burst of pushes into one trailing
 // dispatch, which would leave a superseded head SHA without a status and
 // block the merge on that SHA.
-var statusActions = map[string]bool{
+var gateActions = map[string]bool{
 	"opened":           true,
 	"reopened":         true,
 	"synchronize":      true,
@@ -166,10 +170,10 @@ func (h *webhookHandler) ServeHTTP(
 			http.StatusBadRequest,
 		)
 	}
-	// Post the do-not-merge commit status first, and outside the coalescer:
-	// the required context must have a reporter on every head SHA the ruleset
-	// evaluates, including a push the coalescer collapses.
-	if err := h.postDoNotMergeStatus(ctx, payload); err != nil {
+	// Post the do-not-merge gate commands first, and outside the coalescer:
+	// the gate must be re-evaluated on every head SHA the ruleset evaluates,
+	// including a push the coalescer collapses.
+	if err := h.postDoNotMergeGate(ctx, payload); err != nil {
 		return err
 	}
 	if !dispatchActions[payload.Action] {
@@ -209,19 +213,31 @@ func (h *webhookHandler) ServeHTTP(
 	return writeWebhookDispatched(resp)
 }
 
-// postDoNotMergeStatus publishes the status command for a delivery that can
-// change it, wrapping a send failure as a 502. A delivery outside statusActions
-// is a no-op, so ServeHTTP needs no second branch.
-func (h *webhookHandler) postDoNotMergeStatus(
+// postDoNotMergeGate publishes both gate commands for a delivery that can
+// change the gate, wrapping a send failure as a 502. A delivery outside
+// gateActions is a no-op, so ServeHTTP needs no second branch.
+//
+// The status command and the review command are independent: the status route
+// cannot work while the App declares no Commit statuses: Write, and the review
+// route is what actually holds the PR. Publishing both means the status
+// context keeps its reporter wherever the permission exists, without the
+// review route depending on it.
+func (h *webhookHandler) postDoNotMergeGate(
 	ctx context.Context,
 	payload webhookPullRequestEvent,
 ) error {
-	if !statusActions[payload.Action] {
+	if !gateActions[payload.Action] {
 		return nil
 	}
 	if err := h.sendDoNotMergeStatus(ctx, payload); err != nil {
 		return libhttp.WrapWithStatusCode(
 			errors.Wrap(ctx, err, "send SetDoNotMergeStatusCommand"),
+			http.StatusBadGateway,
+		)
+	}
+	if err := h.sendDoNotMergeReview(ctx, payload); err != nil {
+		return libhttp.WrapWithStatusCode(
+			errors.Wrap(ctx, err, "send SetDoNotMergeReviewCommand"),
 			http.StatusBadGateway,
 		)
 	}
@@ -244,10 +260,7 @@ func (h *webhookHandler) sendDoNotMergeStatus(
 			payload.Action,
 		)
 	}
-	labels := make([]string, 0, len(payload.PullRequest.Labels))
-	for _, label := range payload.PullRequest.Labels {
-		labels = append(labels, label.Name)
-	}
+	labels := payloadLabelNames(payload)
 	if err := h.statusSender.SendCommand(ctx, command.SetDoNotMergeStatusCommand{
 		URL:     payload.PullRequest.HTMLURL,
 		HeadSHA: payload.PullRequest.Head.SHA,
@@ -263,6 +276,49 @@ func (h *webhookHandler) sendDoNotMergeStatus(
 		len(labels),
 	)
 	return nil
+}
+
+// sendDoNotMergeReview publishes the review command for this delivery.
+//
+// Same payload, same label-set-from-the-delivery rule as the status command:
+// the executor derives block/release from these labels rather than re-reading
+// the PR, so a rapid label/unlabel cannot make the two states disagree.
+func (h *webhookHandler) sendDoNotMergeReview(
+	ctx context.Context,
+	payload webhookPullRequestEvent,
+) error {
+	if payload.PullRequest.HTMLURL == "" || payload.PullRequest.Head.SHA == "" {
+		return errors.Errorf(
+			ctx,
+			"pull_request payload missing html_url or head.sha for action=%s",
+			payload.Action,
+		)
+	}
+	labels := payloadLabelNames(payload)
+	if err := h.reviewSender.SendCommand(ctx, command.SetDoNotMergeReviewCommand{
+		URL:     payload.PullRequest.HTMLURL,
+		HeadSHA: payload.PullRequest.Head.SHA,
+		Labels:  labels,
+	}); err != nil {
+		return errors.Wrap(ctx, err, "send SetDoNotMergeReviewCommand")
+	}
+	glog.V(2).Infof(
+		"webhook review gate posted url=%s sha=%s action=%s labels=%d",
+		payload.PullRequest.HTMLURL,
+		payload.PullRequest.Head.SHA,
+		payload.Action,
+		len(labels),
+	)
+	return nil
+}
+
+// payloadLabelNames extracts the PR's label names from the delivery.
+func payloadLabelNames(payload webhookPullRequestEvent) []string {
+	labels := make([]string, 0, len(payload.PullRequest.Labels))
+	for _, label := range payload.PullRequest.Labels {
+		labels = append(labels, label.Name)
+	}
+	return labels
 }
 
 // coalescingActions are the deliveries that represent a new push to the head.

@@ -15,17 +15,27 @@ import (
 
 // CreateWebhookHandler wires the thin webhook receiver that publishes a
 // TriggerPRReviewCommand to Kafka for each signature-verified pull_request
-// delivery on /webhook/github-pr. Filter/trust work stays in the in-pod
-// command consumer (shared with /trigger).
+// delivery on /webhook/github-pr, plus the two do-not-merge gate commands.
+// Filter/trust work stays in the in-pod command consumer (shared with
+// /trigger).
 func CreateWebhookHandler(
 	sender command.TriggerPRReviewCommandSender,
 	statusSender command.SetDoNotMergeStatusCommandSender,
+	reviewSender command.SetDoNotMergeReviewCommandSender,
 	coalescer coalesce.Coalescer,
 	secret string,
 	metrics handler.WebhookMetrics,
 	clock libtime.CurrentDateTimeGetter,
 ) handler.WebhookHandler {
-	return handler.NewWebhookHandler(sender, statusSender, coalescer, secret, metrics, clock)
+	return handler.NewWebhookHandler(
+		sender,
+		statusSender,
+		reviewSender,
+		coalescer,
+		secret,
+		metrics,
+		clock,
+	)
 }
 
 // CreateWebhookDispatcher returns the coalescer's trailing-edge dispatcher. It
