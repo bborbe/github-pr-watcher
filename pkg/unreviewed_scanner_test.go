@@ -279,8 +279,18 @@ var _ = Describe("pkg.UnreviewedScanner", func() {
 	Describe("oversized PRs", func() {
 		oversizedScanner := func(maxAdditions int) pkg.UnreviewedScanner {
 			return pkg.NewUnreviewedScanner(
-				ghClient, publisher, pkg.NewDispatchLedger(), fakeMetrics, currentDateTime, "bborbe",
-				defaultFilter(), trustAlice(), "override-review", maxAdditions, 0, qualifying(),
+				ghClient,
+				publisher,
+				pkg.NewDispatchLedger(),
+				fakeMetrics,
+				currentDateTime,
+				"bborbe",
+				defaultFilter(),
+				trustAlice(),
+				"override-review",
+				maxAdditions,
+				0,
+				qualifying(),
 			)
 		}
 

@@ -336,7 +336,11 @@ func (s *unreviewedScanner) retry(
 		skipped := len(candidates) - published - suppressed
 		glog.Infof(
 			"unreviewed scan reconcile candidates=%d published=%d suppressed=%d skipped=%d undispatched=%d",
-			len(candidates), published, suppressed, skipped, undispatched,
+			len(candidates),
+			published,
+			suppressed,
+			skipped,
+			undispatched,
 		)
 	}()
 	for _, c := range candidates {
