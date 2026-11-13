@@ -51,7 +51,14 @@ type SetDoNotMergeStatusCommand struct {
 
 // Blocked reports whether the do-not-merge label is present.
 func (cmd SetDoNotMergeStatusCommand) Blocked() bool {
-	for _, label := range cmd.Labels {
+	return hasDoNotMergeLabel(cmd.Labels)
+}
+
+// hasDoNotMergeLabel is the label predicate both do-not-merge commands share.
+// It is one function so the status route and the review route can never
+// disagree about which label holds a PR.
+func hasDoNotMergeLabel(labels []string) bool {
+	for _, label := range labels {
 		if label == DoNotMergeLabel {
 			return true
 		}

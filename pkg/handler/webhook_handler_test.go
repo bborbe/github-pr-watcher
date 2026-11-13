@@ -50,6 +50,7 @@ var _ = Describe("WebhookHandler", func() {
 		ctx          context.Context
 		sender       *mocks.TriggerPRReviewCommandSender
 		statusSender *mocks.SetDoNotMergeStatusCommandSender
+		reviewSender *mocks.SetDoNotMergeReviewCommandSender
 		metrics      *mocks.Metrics
 		h            http.Handler
 	)
@@ -58,11 +59,13 @@ var _ = Describe("WebhookHandler", func() {
 		ctx = context.Background()
 		sender = new(mocks.TriggerPRReviewCommandSender)
 		statusSender = new(mocks.SetDoNotMergeStatusCommandSender)
+		reviewSender = new(mocks.SetDoNotMergeReviewCommandSender)
 		metrics = new(mocks.Metrics)
 		h = libhttp.NewErrorHandler(
 			handler.NewWebhookHandler(
 				sender,
 				statusSender,
+				reviewSender,
 				noOpCoalescer(),
 				webhookTestSecret,
 				metrics,
@@ -145,6 +148,7 @@ var _ = Describe("WebhookHandler", func() {
 				handler.NewWebhookHandler(
 					sender,
 					new(mocks.SetDoNotMergeStatusCommandSender),
+					new(mocks.SetDoNotMergeReviewCommandSender),
 					noOpCoalescer(),
 					"",
 					metrics,
@@ -271,6 +275,13 @@ var _ = Describe("WebhookHandler", func() {
 			Expect(statusCmd.HeadSHA).To(Equal(testHeadSHA))
 			Expect(statusCmd.Blocked()).To(BeFalse())
 			Expect(sender.SendCommandCallCount()).To(Equal(1))
+			// The review command is the one that actually holds the PR, so it
+			// must go out on exactly the same deliveries as the status.
+			Expect(reviewSender.SendCommandCallCount()).To(Equal(1))
+			_, reviewCmd := reviewSender.SendCommandArgsForCall(0)
+			Expect(reviewCmd.URL).To(Equal("https://github.com/bborbe/repo/pull/42"))
+			Expect(reviewCmd.HeadSHA).To(Equal(testHeadSHA))
+			Expect(reviewCmd.Blocked()).To(BeFalse())
 		})
 
 		It("posts failure and publishes no review on labeled", func() {
@@ -279,13 +290,16 @@ var _ = Describe("WebhookHandler", func() {
 			h.ServeHTTP(resp, req)
 
 			// Acknowledged, not dispatched: a label event carries no new head
-			// to review, so the receiver answers 200 while the status command
-			// still goes out.
+			// to review, so the receiver answers 200 while the gate commands
+			// still go out.
 			Expect(resp.Code).To(Equal(http.StatusOK))
 			Expect(statusSender.SendCommandCallCount()).To(Equal(1))
 			_, statusCmd := statusSender.SendCommandArgsForCall(0)
 			Expect(statusCmd.Blocked()).To(BeTrue())
 			Expect(sender.SendCommandCallCount()).To(Equal(0))
+			Expect(reviewSender.SendCommandCallCount()).To(Equal(1))
+			_, reviewCmd := reviewSender.SendCommandArgsForCall(0)
+			Expect(reviewCmd.Blocked()).To(BeTrue())
 		})
 
 		It("posts success and publishes no review on unlabeled", func() {
@@ -298,6 +312,10 @@ var _ = Describe("WebhookHandler", func() {
 			_, statusCmd := statusSender.SendCommandArgsForCall(0)
 			Expect(statusCmd.Blocked()).To(BeFalse())
 			Expect(sender.SendCommandCallCount()).To(Equal(0))
+			// The release half of the gate rides the same delivery.
+			Expect(reviewSender.SendCommandCallCount()).To(Equal(1))
+			_, reviewCmd := reviewSender.SendCommandArgsForCall(0)
+			Expect(reviewCmd.Blocked()).To(BeFalse())
 		})
 
 		It("returns 502 when the status send fails, and publishes no review", func() {
@@ -310,6 +328,15 @@ var _ = Describe("WebhookHandler", func() {
 			Expect(sender.SendCommandCallCount()).To(Equal(0))
 		})
 
+		It("returns 502 when the review send fails", func() {
+			reviewSender.SendCommandReturns(errors.Errorf(ctx, "kafka down"))
+			req := webhookRequest("pull_request", pullRequestPayload("opened"))
+			resp := httptest.NewRecorder()
+			h.ServeHTTP(resp, req)
+
+			Expect(resp.Code).To(Equal(http.StatusBadGateway))
+		})
+
 		It("does not post the status on a delivery that cannot change it", func() {
 			req := webhookRequest("pull_request", pullRequestPayload("closed"))
 			resp := httptest.NewRecorder()
@@ -317,6 +344,7 @@ var _ = Describe("WebhookHandler", func() {
 
 			Expect(resp.Code).To(Equal(http.StatusOK))
 			Expect(statusSender.SendCommandCallCount()).To(Equal(0))
+			Expect(reviewSender.SendCommandCallCount()).To(Equal(0))
 			Expect(sender.SendCommandCallCount()).To(Equal(0))
 		})
 	})
@@ -345,6 +373,7 @@ var _ = Describe("WebhookHandler", func() {
 				handler.NewWebhookHandler(
 					sender,
 					new(mocks.SetDoNotMergeStatusCommandSender),
+					new(mocks.SetDoNotMergeReviewCommandSender),
 					gate,
 					webhookTestSecret,
 					metrics,

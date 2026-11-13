@@ -254,6 +254,34 @@ type GitHubClient interface {
 		statusContext string,
 	) error
 
+	// SubmitReview posts a review on commitID. The do-not-merge gate uses it to
+	// submit a CHANGES_REQUESTED review, which blocks the merge on every
+	// ruleset that requires an approving review — the mechanism the fleet's
+	// held-PR route depends on, because the reviewer App declares no
+	// Commit statuses: Write and so cannot post the equivalent commit status.
+	// Requires Pull requests: Write.
+	SubmitReview(
+		ctx context.Context,
+		owner, repo string,
+		number int,
+		commitID, body string,
+		event ReviewState,
+	) error
+
+	// DismissReview dismisses one review by id, removing its standing verdict
+	// from the PR's review decision. The do-not-merge gate uses it to release
+	// its own CHANGES_REQUESTED review when the label is removed, which
+	// restores whatever verdict the reviewer held before the label appeared.
+	// Requires Pull requests: Write, and — where a ruleset restricts dismissals
+	// to authorized actors — membership of that list.
+	DismissReview(
+		ctx context.Context,
+		owner, repo string,
+		number int,
+		reviewID int64,
+		message string,
+	) error
+
 	// RateLimitRemaining returns the requests remaining in the current primary
 	// rate-limit window, as reported by the last API response's
 	// X-RateLimit-Remaining header. Zero until the first request populates it.
@@ -314,12 +342,21 @@ const (
 )
 
 // Review is a single PR review, reduced to the fields the unreviewed-PR scan
-// needs: who reviewed, and which commit they reviewed.
+// and the do-not-merge gate need: who reviewed, which commit they reviewed,
+// what verdict they left, and — for the gate's dismissal path — which review
+// to dismiss and whether this mechanism wrote it.
 type Review struct {
+	// ID is the review's GitHub id. Required to dismiss it; zero when the API
+	// reported none.
+	ID int64
 	// AuthorLogin is the reviewer's GitHub login; empty for a deleted account.
 	AuthorLogin string
 	// CommitID is the head SHA the review was posted against.
 	CommitID string
+	// Body is the review's body text. The do-not-merge gate reads its own
+	// marker here so it can tell its reviews from the bot's genuine verdicts
+	// and never dismiss a real finding.
+	Body string
 	// State is the review's verdict. Only a CHANGES_REQUESTED review on the
 	// current head SHA blocks the merge and escalates.
 	State ReviewState
@@ -928,8 +965,10 @@ func (c *githubClient) ListReviews(
 		}
 		for _, r := range page {
 			reviews = append(reviews, Review{
+				ID:          r.GetID(),
 				AuthorLogin: r.GetUser().GetLogin(),
 				CommitID:    r.GetCommitID(),
+				Body:        r.GetBody(),
 				State:       ReviewState(r.GetState()),
 			})
 		}
@@ -1105,6 +1144,110 @@ func (c *githubClient) PostCommitStatus(
 			sha,
 		)
 	}
+	return nil
+}
+
+// SubmitReview posts a review on commitID with the given event and body.
+//
+// A permanent failure (401/403/404) is wrapped with ErrPermanent for the same
+// reason PostCommitStatus does it: the command consumer must skip rather than
+// retry a delivery that can never succeed — most often the App missing
+// Pull requests: Write.
+func (c *githubClient) SubmitReview(
+	ctx context.Context,
+	owner, repo string,
+	number int,
+	commitID, body string,
+	event ReviewState,
+) error {
+	_, _, err := c.client.PullRequests.CreateReview(
+		ctx,
+		owner,
+		repo,
+		number,
+		&gogithub.PullRequestReviewRequest{
+			CommitID: gogithub.String(commitID),
+			Body:     gogithub.String(body),
+			Event:    gogithub.String(string(event)),
+		},
+	)
+	if err != nil {
+		if isPermanentGitHubError(err) {
+			return errors.Wrapf(
+				ctx,
+				ErrPermanent,
+				"submit %s review %s/%s#%d@%s: %v",
+				event,
+				owner,
+				repo,
+				number,
+				commitID,
+				err,
+			)
+		}
+		return errors.Wrapf(
+			ctx,
+			err,
+			"submit %s review %s/%s#%d@%s",
+			event,
+			owner,
+			repo,
+			number,
+			commitID,
+		)
+	}
+	glog.V(2).Infof(
+		"submitted %s review %s/%s#%d@%s",
+		event, owner, repo, number, commitID,
+	)
+	return nil
+}
+
+// DismissReview dismisses one review by id.
+//
+// Dismissing an already-dismissed review answers 404 or 422 — permanent, and
+// correctly so: a redelivery of the same label-removal event must not retry
+// forever. The caller treats the skip as success because the end state it
+// wanted is already true.
+func (c *githubClient) DismissReview(
+	ctx context.Context,
+	owner, repo string,
+	number int,
+	reviewID int64,
+	message string,
+) error {
+	_, _, err := c.client.PullRequests.DismissReview(
+		ctx,
+		owner,
+		repo,
+		number,
+		reviewID,
+		&gogithub.PullRequestReviewDismissalRequest{Message: gogithub.String(message)},
+	)
+	if err != nil {
+		if isPermanentGitHubError(err) {
+			return errors.Wrapf(
+				ctx,
+				ErrPermanent,
+				"dismiss review %d %s/%s#%d: %v",
+				reviewID,
+				owner,
+				repo,
+				number,
+				err,
+			)
+		}
+		return errors.Wrapf(
+			ctx,
+			err,
+			"dismiss review %d %s/%s#%d",
+			reviewID,
+			owner,
+			repo,
+			number,
+		)
+	}
+	glog.V(2).Infof("dismissed review %d %s/%s#%d", reviewID, owner, repo, number)
 	return nil
 }
 
