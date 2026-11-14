@@ -5,6 +5,10 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+- feat: add a `check-task-link` gate that fails a PR whose body carries no `Task: <task_identifier>` line, and install Trivy from the upstream script so `test` stops failing on the retired keyring helper
+
 ## v0.27.0
 
 - fix: submit the blocking review with `REQUEST_CHANGES`, not `CHANGES_REQUESTED`. The reviews API takes the event name `REQUEST_CHANGES` and reports the resulting *state* as `CHANGES_REQUESTED`; passing the state name is a 422 `Variable $event of type PullRequestReviewEvent was provided invalid value`, so the gate submitted nothing and a labelled PR stayed unheld. Caught by the first live dev deploy on `bborbe/go-skeleton#127`, 2026-11-13 — the unit tests could not see it, because a mock accepts any string. `SubmitReview` now takes a typed `ReviewEvent` so the two vocabularies cannot be confused again
