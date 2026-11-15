@@ -44,15 +44,27 @@ var _ = Describe("retryGuardDiagnosticsOutcome", func() {
 })
 
 var _ = Describe("isRetryGuardTerminalStatus", func() {
-	DescribeTable("classifies terminal statuses",
-		func(status domain.TaskStatus, want bool) {
-			Expect(isRetryGuardTerminalStatus(status)).To(Equal(want))
+	DescribeTable(
+		"classifies terminal statuses",
+		func(status domain.TaskStatus, runOutcome string, want bool) {
+			Expect(isRetryGuardTerminalStatus(status, runOutcome)).To(Equal(want))
 		},
-		Entry("completed", domain.TaskStatusCompleted, true),
-		Entry("aborted", domain.TaskStatusAborted, true),
-		Entry("in_progress", domain.TaskStatusInProgress, false),
-		Entry("next", domain.TaskStatusNext, false),
-		Entry("backlog", domain.TaskStatusBacklog, false),
-		Entry("hold", domain.TaskStatusHold, false),
+		Entry("completed", domain.TaskStatusCompleted, "", true),
+		Entry("aborted", domain.TaskStatusAborted, "", true),
+		Entry("in_progress", domain.TaskStatusInProgress, "", false),
+		Entry("next", domain.TaskStatusNext, "", false),
+		Entry("backlog", domain.TaskStatusBacklog, "", false),
+		Entry("hold", domain.TaskStatusHold, "", false),
+		// A run that ended without a status change still ended. This is the
+		// budget-cut-off shape: the controller writes run_outcome while the
+		// status stays in_progress, so the guard must stop treating it as live or
+		// every forced retry is suppressed for the full staleness window.
+		Entry(
+			"in_progress with a run outcome",
+			domain.TaskStatusInProgress,
+			"budget_expired",
+			true,
+		),
+		Entry("hold with a run outcome", domain.TaskStatusHold, "failed", true),
 	)
 })

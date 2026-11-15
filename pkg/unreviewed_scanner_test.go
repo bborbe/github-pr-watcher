@@ -172,6 +172,28 @@ var _ = Describe("pkg.UnreviewedScanner", func() {
 		Expect(prs).To(BeEmpty())
 	})
 
+	It("closes a superseded record once a verdict lands at its head SHA", func() {
+		// The close is gated on the verdict, never on the re-drive publish: a
+		// re-drive that never produced a review must leave its original open, or
+		// the queue reads clean while the review still never happened.
+		searchOpenReturns(openPR(42, "alice", now.Add(-libtime.Hour)))
+		ghClient.ListReviewsReturns([]pkg.Review{
+			{AuthorLogin: "octopus-pr-reviewer[bot]", CommitID: "sha-head"},
+		}, nil)
+		newScanner(qualifying(), defaultFilter(), trustAlice()).Scan(ctx)
+		Expect(publisher.CompleteRedrivenCallCount()).To(Equal(1))
+		_, calledPR, calledDetails := publisher.CompleteRedrivenArgsForCall(0)
+		Expect(calledPR.Number).To(Equal(42))
+		Expect(calledDetails.HeadSHA).To(Equal("sha-head"))
+	})
+
+	It("closes nothing while the head SHA still has no verdict", func() {
+		searchOpenReturns(openPR(42, "alice", now.Add(-libtime.Hour)))
+		ghClient.ListReviewsReturns(nil, nil)
+		newScanner(qualifying(), defaultFilter(), trustAlice()).Scan(ctx)
+		Expect(publisher.CompleteRedrivenCallCount()).To(Equal(0))
+	})
+
 	It("counts a PR when the reviewer-bot review is only on an older SHA", func() {
 		searchOpenReturns(openPR(42, "alice", now.Add(-libtime.Hour)))
 		ghClient.ListReviewsReturns([]pkg.Review{
@@ -553,8 +575,14 @@ var _ = Describe("pkg.UnreviewedScanner", func() {
 			s.Scan(ctx)
 			Expect(publisher.PublishCreateCallCount()).To(Equal(3))
 			Expect(publisher.PublishRedriveCallCount()).To(Equal(1))
-			_, _, redriveID, _ := publisher.PublishRedriveArgsForCall(0)
+			_, _, redriveID, supersededID, _ := publisher.PublishRedriveArgsForCall(0)
 			Expect(redriveID).NotTo(Equal(
+				pkg.DeriveTaskID("bborbe", "repo", 42, "sha-head").String(),
+			))
+			// The superseded id is the deterministic DeriveTaskID the spent run was
+			// published under — the record the re-drive has to clear, and NOT the
+			// salted sibling id this same call is publishing.
+			Expect(supersededID).To(Equal(
 				pkg.DeriveTaskID("bborbe", "repo", 42, "sha-head").String(),
 			))
 			Expect(redriveID).To(Equal(

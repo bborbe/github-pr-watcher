@@ -3572,7 +3572,7 @@ var _ = Describe("TaskPublisher.PublishRedrive", func() {
 		taskID := pkg.DeriveTaskIDForce(
 			"bborbe", "repo", 42, "abc123", "1700000000000000000",
 		).String()
-		Expect(publisher().PublishRedrive(ctx, pr, taskID, details)).To(BeTrue())
+		Expect(publisher().PublishRedrive(ctx, pr, taskID, "", details)).To(BeTrue())
 
 		Expect(createSender.SendCommandCallCount()).To(Equal(1))
 		_, cmd := createSender.SendCommandArgsForCall(0)
@@ -3583,7 +3583,7 @@ var _ = Describe("TaskPublisher.PublishRedrive", func() {
 	It("publishes a title distinct from the plain create for the same PR and head SHA", func() {
 		taskID := pkg.DeriveTaskID("bborbe", "repo", 42, "abc123").String()
 		Expect(publisher().PublishCreate(ctx, pr, taskID, details)).To(BeTrue())
-		Expect(publisher().PublishRedrive(ctx, pr, taskID, details)).To(BeTrue())
+		Expect(publisher().PublishRedrive(ctx, pr, taskID, "", details)).To(BeTrue())
 
 		Expect(createSender.SendCommandCallCount()).To(Equal(2))
 		_, plain := createSender.SendCommandArgsForCall(0)
@@ -3599,7 +3599,7 @@ var _ = Describe("TaskPublisher.PublishRedrive", func() {
 		Expect(pub.PublishCreate(ctx, pr, taskID, details)).To(BeTrue())
 		Expect(rec.calls).To(Equal(1))
 
-		Expect(pub.PublishRedrive(ctx, pr, taskID, details)).To(BeTrue())
+		Expect(pub.PublishRedrive(ctx, pr, taskID, "", details)).To(BeTrue())
 		Expect(rec.calls).To(Equal(1))
 	})
 })
@@ -3617,6 +3617,122 @@ func (r *recordingRecorder) RecordPublish(
 ) {
 	r.calls++
 }
+
+var _ = Describe("TaskPublisher redrive clear", func() {
+	var (
+		ctx            context.Context
+		createSender   *taskmocks.TaskCreateCommandSender
+		completeSender *taskmocks.TaskCompleteCommandSender
+		ghClient       *mocks.GitHubClient
+		fakeMetrics    *mocks.Metrics
+		ledger         pkg.RedriveLedger
+		pr             pkg.PullRequest
+		details        pkg.PRDetails
+		originalID     string
+		redriveID      string
+	)
+
+	BeforeEach(func() {
+		ctx = context.Background()
+		createSender = new(taskmocks.TaskCreateCommandSender)
+		completeSender = new(taskmocks.TaskCompleteCommandSender)
+		ghClient = new(mocks.GitHubClient)
+		fakeMetrics = new(mocks.Metrics)
+		ledger = pkg.NewRedriveLedger(pkg.NewMemDB(), libtime.NewCurrentDateTime())
+		pr = pkg.PullRequest{
+			Number:      42,
+			Owner:       "bborbe",
+			Repo:        "repo",
+			Title:       "feat: new feature",
+			HTMLURL:     "https://github.com/bborbe/repo/pull/42",
+			AuthorLogin: "alice",
+			UpdatedAt:   libtime.DateTime(time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC)),
+		}
+		details = pkg.PRDetails{
+			HeadSHA:  "abc123",
+			CloneURL: "https://github.com/bborbe/repo.git",
+			BaseRef:  "master",
+		}
+		originalID = pkg.DeriveTaskID("bborbe", "repo", 42, "abc123").String()
+		redriveID = pkg.DeriveTaskIDForce(
+			"bborbe", "repo", 42, "abc123", "1700000000000000000",
+		).String()
+	})
+
+	publisher := func() pkg.TaskPublisher {
+		return pkg.NewTaskPublisher(
+			createSender,
+			trust.NewAuthorAllowlist([]string{"alice"}),
+			fakeMetrics,
+			pkg.TaskConfig{
+				Stage:       "dev",
+				MaxSlugLen:  pkg.DefaultMaxSlugLen,
+				MaxTitleLen: pkg.DefaultMaxTitleLen,
+			},
+			ghClient,
+			pkg.WithRedriveLedger(ledger),
+			pkg.WithCompleteSender(completeSender),
+		)
+	}
+
+	It("records the superseded record but closes nothing at publish time", func() {
+		// The close is gated on a verdict, never on the publish: closing here
+		// would drain the queue whether or not the sibling ever produced a review.
+		Expect(publisher().PublishRedrive(ctx, pr, redriveID, originalID, details)).To(BeTrue())
+
+		pendingID, pending := ledger.Pending(ctx, pkg.RetryGuardPR{
+			Owner: "bborbe", Repo: "repo", Number: 42, HeadSHA: "abc123",
+		})
+		Expect(pending).To(BeTrue())
+		Expect(pendingID).To(Equal(originalID))
+		Expect(completeSender.SendCommandCallCount()).To(Equal(0))
+	})
+
+	It("closes the original with a CompleteCommand once a verdict exists", func() {
+		pub := publisher()
+		Expect(pub.PublishRedrive(ctx, pr, redriveID, originalID, details)).To(BeTrue())
+
+		Expect(pub.CompleteRedriven(ctx, pr, details)).To(BeTrue())
+		Expect(completeSender.SendCommandCallCount()).To(Equal(1))
+		_, cmd := completeSender.SendCommandArgsForCall(0)
+		Expect(string(cmd.TaskIdentifier)).To(Equal(originalID))
+	})
+
+	It("closes nothing when no re-drive is outstanding", func() {
+		// The negative control: a verdict on an ordinary review must not publish a
+		// CompleteCommand for a record that was never superseded.
+		Expect(publisher().CompleteRedriven(ctx, pr, details)).To(BeFalse())
+		Expect(completeSender.SendCommandCallCount()).To(Equal(0))
+	})
+
+	It("is idempotent — a second call closes nothing", func() {
+		pub := publisher()
+		Expect(pub.PublishRedrive(ctx, pr, redriveID, originalID, details)).To(BeTrue())
+		Expect(pub.CompleteRedriven(ctx, pr, details)).To(BeTrue())
+		Expect(pub.CompleteRedriven(ctx, pr, details)).To(BeFalse())
+		Expect(completeSender.SendCommandCallCount()).To(Equal(1))
+	})
+
+	It("keeps the entry when the close send fails, so the next cycle retries", func() {
+		completeSender.SendCommandReturns(errors.New("kafka down"))
+		pub := publisher()
+		Expect(pub.PublishRedrive(ctx, pr, redriveID, originalID, details)).To(BeTrue())
+
+		Expect(pub.CompleteRedriven(ctx, pr, details)).To(BeFalse())
+		_, pending := ledger.Pending(ctx, pkg.RetryGuardPR{
+			Owner: "bborbe", Repo: "repo", Number: 42, HeadSHA: "abc123",
+		})
+		Expect(pending).To(BeTrue())
+	})
+
+	It("records nothing when no superseded id is passed", func() {
+		Expect(publisher().PublishRedrive(ctx, pr, redriveID, "", details)).To(BeTrue())
+		_, pending := ledger.Pending(ctx, pkg.RetryGuardPR{
+			Owner: "bborbe", Repo: "repo", Number: 42, HeadSHA: "abc123",
+		})
+		Expect(pending).To(BeFalse())
+	})
+})
 
 var _ = Describe("oversized park predicate", func() {
 	makeDetails := func(additions, changedFiles int) pkg.PRDetails {

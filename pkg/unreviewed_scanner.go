@@ -499,7 +499,13 @@ func (s *unreviewedScanner) publishStaleRedrive(
 	// because the controller dedups on the title path — the redrive method is
 	// what puts the retry token in the title (and keeps the retry guard's
 	// ledger untouched so an operator's forced /trigger still works).
-	if !s.publisher.PublishRedrive(ctx, c.pr, redriveID, c.details) {
+	//
+	// taskID is passed as the superseded id: it is the deterministic
+	// DeriveTaskID the spent run was published under, and the record that would
+	// otherwise stay parked at human_review forever. The publisher records it and
+	// closes it later, once a verdict proves this re-drive actually ran — see
+	// CompleteRedriven.
+	if !s.publisher.PublishRedrive(ctx, c.pr, redriveID, taskID, c.details) {
 		glog.Infof("unreviewed suppress pr=%s/%s#%d sha=%s reason=publish_declined",
 			c.pr.Owner, c.pr.Repo, c.pr.Number, c.details.HeadSHA)
 		return retrySuppressed
@@ -653,6 +659,12 @@ func (s *unreviewedScanner) qualify(
 	for _, review := range reviews {
 		if review.CommitID == details.HeadSHA &&
 			matchesReviewerLogin(review.AuthorLogin, s.cfg.Logins) {
+			// A verdict at the head SHA is the only evidence that a review of this
+			// commit actually happened. If a re-drive superseded a record for this
+			// head SHA, that record is now safe to close: the review it was meant
+			// to produce exists. This runs BEFORE reviewedCache is set, so a failed
+			// close is retried on the next cycle rather than cached away.
+			s.publisher.CompleteRedriven(ctx, pr, details)
 			s.reviewedCache[prKey(pr)] = pr.UpdatedAt
 			return PRDetails{}, false, nil
 		}

@@ -54,6 +54,18 @@ func CreateKafkaSender(
 	return task.NewCreateCommandSender(sender, "")
 }
 
+// CreateCompleteSender constructs the typed complete-task command sender the
+// publisher uses to close a record a re-drive superseded. It shares the same
+// command-object sender shape as CreateKafkaSender — same topic trio, same
+// prefix — because CompleteCommand is another command on the same pipeline.
+func CreateCompleteSender(
+	syncProducer libkafka.SyncProducer,
+	topicPrefix base.TopicPrefix,
+) task.CompleteCommandSender {
+	sender := cdb.NewCommandObjectSender(syncProducer, topicPrefix, log.DefaultSamplerFactory)
+	return task.NewCompleteCommandSender(sender, "")
+}
+
 // CreateEscalator builds the auto-merge refusal escalator. It publishes
 // `agent-escalation` notifications through the shared notification core on the
 // same CQRS command topic the other producers use, so a refused PR reaches the
@@ -75,6 +87,8 @@ func CreateEscalator(
 func CreateWatcher(
 	ghClient pkg.GitHubClient,
 	createSender task.CreateCommandSender,
+	completeSender task.CompleteCommandSender,
+	redriveLedger pkg.RedriveLedger,
 	cursorPath string,
 	startTime libtime.DateTime,
 	scope string,
@@ -120,6 +134,8 @@ func CreateWatcher(
 		pkg.WithPublishRecorder(publishRecorder),
 		pkg.WithOverrideLedger(overrideLedger),
 		pkg.WithPublishTracker(publishTracker),
+		pkg.WithRedriveLedger(redriveLedger),
+		pkg.WithCompleteSender(completeSender),
 	)
 	unreviewedScanner := pkg.NewUnreviewedScanner(
 		ghClient, publisher, dispatchLedger, metrics, currentDateTime, scope,
