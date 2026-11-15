@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## Unreleased
+## v0.28.2
 
 - fix: **a re-drive now clears the record it replaced, and a finished run stops suppressing retries.** `PublishRedrive` re-drove a budget-expired review onto a salted sibling record and left the original parked at `human_review` with no verdict forever — the shape that keeps the unreviewed queue red even though a review is being produced. The publisher now records the superseded task id in a `RedriveLedger`, and closes it with a `CompleteCommand` once a reviewer verdict lands at the head SHA. The close is deliberately **not** done at publish time: closing on publish would drain the queue whether or not the sibling ever ran, so a re-drive that produced no pod would read as a cleared review. Separately, `isRetryGuardTerminalStatus` read only `status`, so a run that ended without a status change — a soft-time-budget cut-off writes `run_outcome: budget_expired` while the status stays `in_progress` — counted as live and suppressed every forced retry for the full `retryGuardStaleAfter` hour. It now also treats a non-empty `run_outcome` as terminal, and `retryGuardOutcomeToken` uses an unknown non-empty outcome verbatim rather than falling back to the status, so the ledger records `budget_expired` instead of `in_progress`. A failed close is never cached: the ledger entry survives a transient `CompleteCommand` send error, so the next scan retries it instead of stranding the original record.
 
