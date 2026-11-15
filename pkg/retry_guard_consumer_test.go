@@ -212,6 +212,26 @@ var _ = Describe("RetryGuardOutcome", func() {
 		Entry("aborted without diagnostics", "aborted", "", "aborted"),
 	)
 
+	It("clears a budget-expired record whose status is still in_progress", func() {
+		// The end-of-run marker lives in run_outcome, not in status: the controller
+		// writes the outcome and leaves status in_progress. This exercises the
+		// frontmatter→outcome-token→ClearByTaskID wiring end to end, which the
+		// predicate table alone cannot see.
+		fake := new(mocks.RetryGuard)
+		task := newTask("task-1", "in_progress", "")
+		task.Frontmatter["run_outcome"] = "budget_expired"
+		msg := newTaskEventMessage(ctx, task)
+
+		Expect(
+			consume(pkg.NewRetryGuardOutcomeMessageHandler(fake, pkg.NewDispatchLedger()), msg),
+		).To(Succeed())
+
+		Expect(fake.ClearByTaskIDCallCount()).To(Equal(1))
+		_, _, taskID, outcome := fake.ClearByTaskIDArgsForCall(0)
+		Expect(taskID).To(Equal(string(msg.Key)))
+		Expect(outcome).To(Equal("budget_expired"))
+	})
+
 	It("AC5: decodes a real event object back into a task", func() {
 		fake := new(mocks.RetryGuard)
 		msg := newTaskEventMessage(

@@ -69,7 +69,42 @@ type TaskPublisher interface {
 	//     an operator's forced /trigger on the same PR would then be suppressed
 	//     as in-flight for an hour after every re-drive, which is the manual
 	//     lever's whole purpose gone.
-	PublishRedrive(ctx context.Context, pr PullRequest, taskIDStr string, details PRDetails) bool
+	//
+	// supersededTaskID names the record this re-drive replaces — the
+	// deterministic DeriveTaskID the spent run was published under. Because the
+	// re-drive lands on a SIBLING record (the salted taskIDStr), the original
+	// would otherwise stay parked at human_review forever with no verdict, and
+	// that parked record is what keeps the unreviewed queue from draining. It is
+	// recorded in the RedriveLedger so CompleteRedriven can close it once a
+	// reviewer verdict at the head SHA proves the re-drive actually ran. An empty
+	// supersededTaskID records nothing, which is the pre-change behaviour.
+	PublishRedrive(
+		ctx context.Context,
+		pr PullRequest,
+		taskIDStr string,
+		supersededTaskID string,
+		details PRDetails,
+	) bool
+	// CompleteRedriven closes the original record a re-drive superseded, once a
+	// reviewer verdict at pr's head SHA proves the re-drive produced a review.
+	//
+	// The close is deliberately NOT done at publish time. Closing the original
+	// when its sibling is merely published would drain the queue whether or not
+	// the sibling ever ran, so a re-drive that produced no pod would read as a
+	// cleared review — the hollow-green shape this whole change exists to avoid.
+	// The verdict at the head SHA is the only evidence the review happened, and
+	// it is what the caller passes here.
+	//
+	// Returns nil when nothing was outstanding for the head SHA, or when the
+	// close succeeded; a non-nil error when a close WAS attempted and failed.
+	//
+	// The caller must not treat a failure as settled. The ledger entry is only
+	// cleared on success, so the next scan retries it — but only if the caller
+	// refrains from caching the PR as reviewed. A discarded error would strand
+	// the superseded record permanently on the first transient send failure.
+	// Idempotent: a second call after a successful close finds nothing
+	// outstanding and returns nil.
+	CompleteRedriven(ctx context.Context, pr PullRequest, details PRDetails) error
 	// PublishOverride publishes a `pr-override` task for a labeled PR. It is
 	// trusted-authors-only. Returns (handled, emitted):
 	//   - handled=true: this is a trusted-author override case; the caller must
@@ -134,6 +169,26 @@ func WithPublishTracker(tracker *PublishTracker) TaskPublisherOption {
 	}
 }
 
+// WithRedriveLedger makes the publisher record the original task id a re-drive
+// superseded, so CompleteRedriven can close that record once a verdict proves
+// the re-drive ran. Nil-tolerant: a publisher built without one records
+// nothing, so no original is ever closed — the pre-change behaviour.
+func WithRedriveLedger(ledger RedriveLedger) TaskPublisherOption {
+	return func(p *taskPublisher) {
+		p.redriveLedger = ledger
+	}
+}
+
+// WithCompleteSender gives the publisher a CompleteCommandSender, which is what
+// actually closes a superseded record. Nil-tolerant: a publisher built without
+// one publishes re-drives but closes no original, which is the pre-change
+// behaviour and is logged as such.
+func WithCompleteSender(sender task.CompleteCommandSender) TaskPublisherOption {
+	return func(p *taskPublisher) {
+		p.completeSender = sender
+	}
+}
+
 // NewTaskPublisher returns a TaskPublisher that performs trust evaluation
 // then publishes a CreateTaskCommand via the given CreateCommandSender.
 func NewTaskPublisher(
@@ -180,6 +235,15 @@ type taskPublisher struct {
 	// publish path from a stopped one. Nil-tolerant: a publisher built without
 	// one simply records nothing.
 	tracker *PublishTracker
+	// redriveLedger carries the original task id a re-drive superseded from the
+	// publish to the verdict that proves the re-drive ran. Nil-tolerant: a
+	// publisher built without one closes no original, the pre-change behaviour.
+	redriveLedger RedriveLedger
+	// completeSender publishes the CompleteCommand that closes a superseded
+	// record. Nil-tolerant: without one a re-drive still publishes its sibling
+	// and the original stays parked, which is exactly the defect this change
+	// fixes — so main.go always wires it.
+	completeSender task.CompleteCommandSender
 }
 
 // PublishCreate implements TaskPublisher.
@@ -193,14 +257,94 @@ func (p *taskPublisher) PublishCreate(
 }
 
 // PublishRedrive implements TaskPublisher — see the interface for why the title
-// must change and why the guard's ledger must not be refreshed.
+// must change, why the guard's ledger must not be refreshed, and why the
+// superseded record is recorded rather than closed here.
 func (p *taskPublisher) PublishRedrive(
 	ctx context.Context,
 	pr PullRequest,
 	taskIDStr string,
+	supersededTaskID string,
 	details PRDetails,
 ) bool {
-	return p.publishReview(ctx, pr, taskIDStr, details, publishMode{forced: true})
+	if !p.publishReview(ctx, pr, taskIDStr, details, publishMode{forced: true}) {
+		return false
+	}
+	if supersededTaskID != "" && p.redriveLedger != nil {
+		p.redriveLedger.Record(ctx, RetryGuardPR{
+			Owner:   pr.Owner,
+			Repo:    pr.Repo,
+			Number:  pr.Number,
+			HeadSHA: details.HeadSHA,
+		}, supersededTaskID)
+		glog.Infof(
+			"unreviewed redrive pending close pr=%s/%s#%d sha=%s superseded_task_id=%s"+
+				" redrive_task_id=%s",
+			pr.Owner, pr.Repo, pr.Number, details.HeadSHA, supersededTaskID, taskIDStr,
+		)
+	}
+	return true
+}
+
+// CompleteRedriven implements TaskPublisher — see the interface for why the
+// close is gated on a verdict rather than on the re-drive publish.
+func (p *taskPublisher) CompleteRedriven(
+	ctx context.Context,
+	pr PullRequest,
+	details PRDetails,
+) error {
+	guardPR := RetryGuardPR{
+		Owner:   pr.Owner,
+		Repo:    pr.Repo,
+		Number:  pr.Number,
+		HeadSHA: details.HeadSHA,
+	}
+	if p.redriveLedger == nil {
+		return nil
+	}
+	originalTaskID, pending := p.redriveLedger.Pending(ctx, guardPR)
+	if !pending {
+		return nil
+	}
+	if p.completeSender == nil {
+		glog.Errorf(
+			"unreviewed redrive clear skipped: no complete sender wired pr=%s/%s#%d"+
+				" sha=%s superseded_task_id=%s",
+			pr.Owner, pr.Repo, pr.Number, details.HeadSHA, originalTaskID,
+		)
+		return errors.Errorf(
+			ctx,
+			"unreviewed redrive clear skipped: no complete sender wired superseded_task_id=%s",
+			originalTaskID,
+		)
+	}
+	identifier := agentlib.TaskIdentifier(originalTaskID)
+	if err := identifier.Validate(ctx); err != nil {
+		glog.Errorf(
+			"unreviewed redrive clear failed: bad task id pr=%s/%s#%d sha=%s"+
+				" superseded_task_id=%s err=%v",
+			pr.Owner, pr.Repo, pr.Number, details.HeadSHA, originalTaskID, err,
+		)
+		return errors.Wrapf(ctx, err, "unreviewed redrive clear: bad task id %s", originalTaskID)
+	}
+	cmd := task.CompleteCommand{
+		TaskIdentifier: identifier,
+		TargetVault:    p.cfg.TargetVault,
+	}
+	if err := p.completeSender.SendCommand(ctx, cmd); err != nil {
+		glog.Errorf(
+			"unreviewed redrive clear failed: send pr=%s/%s#%d sha=%s"+
+				" superseded_task_id=%s err=%v",
+			pr.Owner, pr.Repo, pr.Number, details.HeadSHA, originalTaskID, err,
+		)
+		return errors.Wrapf(ctx, err, "unreviewed redrive clear: send %s", originalTaskID)
+	}
+	p.redriveLedger.Clear(ctx, guardPR)
+	glog.Infof(
+		"unreviewed redrive cleared original task_id=%s from=human_review to=done"+
+			" pr=%s/%s#%d sha=%s",
+		originalTaskID, pr.Owner, pr.Repo, pr.Number, details.HeadSHA,
+	)
+	return nil
 }
 
 // publishMode selects the two things a review publish can do differently: salt

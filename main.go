@@ -356,6 +356,16 @@ func (a *application) Run(ctx context.Context, _ libsentry.Client) error {
 	// in-pod command executor.
 	overrideLedger := pkg.NewOverrideLedger(db, currentDateTime)
 
+	// The re-drive ledger carries the original record a re-drive superseded from
+	// the publish to the reviewer verdict that proves the re-drive actually ran.
+	// The original is closed only on that verdict — closing it at publish time
+	// would drain the queue whether or not the sibling ever produced a review.
+	// In-memory, like the retry guard and the override ledger: a restart between
+	// the two leaves the original open, which is a stuck record rather than a
+	// false clean one.
+	redriveLedger := pkg.NewRedriveLedger(db, currentDateTime)
+	completeSender := factory.CreateCompleteSender(syncProducer, a.TopicPrefix)
+
 	// HTTP-side sender backs the /trigger handler.
 	triggerPRReviewSender := factory.CreateTriggerPRReviewCommandSender(
 		ctx,
@@ -386,6 +396,8 @@ func (a *application) Run(ctx context.Context, _ libsentry.Client) error {
 	w := factory.CreateWatcher(
 		ghClient,
 		createSender,
+		completeSender,
+		redriveLedger,
 		pkg.DefaultCursorPath,
 		startTime,
 		a.RepoScope,

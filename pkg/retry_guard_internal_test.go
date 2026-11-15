@@ -10,7 +10,8 @@ import (
 )
 
 var _ = Describe("retryGuardOutcomeToken", func() {
-	DescribeTable("derives the clear-line token from the diagnostics outcome",
+	DescribeTable(
+		"derives the clear-line token from the diagnostics outcome",
 		func(diagnosticsOutcome string, status string, want string) {
 			Expect(retryGuardOutcomeToken(diagnosticsOutcome, status)).To(Equal(want))
 		},
@@ -19,7 +20,23 @@ var _ = Describe("retryGuardOutcomeToken", func() {
 		Entry("skipped diagnostics stays skipped", "skipped", "completed", "skipped"),
 		Entry("absent diagnostics falls back to aborted", "", "aborted", "aborted"),
 		Entry("absent diagnostics falls back to completed", "", "completed", "completed"),
-		Entry("unexpected diagnostics falls back to status", "unexpected", "aborted", "aborted"),
+		// An unknown but non-empty outcome is the producer's own token and is used
+		// verbatim. The budget-expiry path is why: the agent controller writes
+		// `run_outcome: budget_expired` while the status stays in_progress, so
+		// falling back to the status would label a finished run as still running —
+		// the exact confusion this clear path exists to remove.
+		Entry(
+			"budget_expired outcome is used verbatim",
+			"budget_expired",
+			"in_progress",
+			"budget_expired",
+		),
+		Entry(
+			"any other non-empty outcome is used verbatim",
+			"unexpected",
+			"aborted",
+			"unexpected",
+		),
 	)
 })
 

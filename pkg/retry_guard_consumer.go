@@ -32,8 +32,31 @@ func retryGuardOutcomeTopic(prefix base.TopicPrefix) libkafka.Topic {
 // isRetryGuardTerminalStatus reports whether a task status ends the run.
 // completed and aborted are terminal; in_progress, next, backlog and hold are
 // not. hold is a pause with a scheduled resume, not an ending.
-func isRetryGuardTerminalStatus(status domain.TaskStatus) bool {
-	return status == domain.TaskStatusCompleted || status == domain.TaskStatusAborted
+//
+// Status alone is not enough, because a run that ends WITHOUT a status change
+// still ends. A review that exceeds its soft time budget is written to
+// `phase: human_review` while its status stays `in_progress`, so this predicate
+// called the run live and the guard suppressed every retry for the full
+// retryGuardStaleAfter window — an hour of an operator's forced retry being
+// dropped for a run that had already stopped. runOutcome is the agent
+// controller's end-of-run marker (`run_outcome: budget_expired` and friends);
+// a non-empty value means the run finished whatever its status says.
+func isRetryGuardTerminalStatus(status domain.TaskStatus, runOutcome string) bool {
+	return status == domain.TaskStatusCompleted ||
+		status == domain.TaskStatusAborted ||
+		runOutcome != ""
+}
+
+// retryGuardRunOutcome returns the task's run_outcome frontmatter value, or ""
+// when the controller has not written one. It is the end-of-run marker: the
+// field is absent while a run is live and set once it stops, so it answers
+// "has this run finished" independently of the status field.
+func retryGuardRunOutcome(task agentlib.Task) string {
+	outcome, ok := task.Frontmatter.String("run_outcome")
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(outcome)
 }
 
 // retryGuardDiagnosticsOutcome returns the value of the outcome: line in the
@@ -88,13 +111,19 @@ func NewRetryGuardOutcomeMessageHandler(
 				ledger.Mark(string(msg.Key))
 			}
 			status := task.Frontmatter.Status()
-			if !isRetryGuardTerminalStatus(status) {
+			runOutcome := retryGuardRunOutcome(task)
+			if !isRetryGuardTerminalStatus(status, runOutcome) {
 				return nil
 			}
-			outcome := retryGuardOutcomeToken(
-				retryGuardDiagnosticsOutcome(ctx, task.Content),
-				status.String(),
-			)
+			// The outcome token prefers the Diagnostics line the producer writes,
+			// then the controller's own run_outcome marker, and only then the raw
+			// status — so a budget-expired record clears as `budget_expired` rather
+			// than as the `in_progress` status it still carries.
+			diagnosticsOutcome := retryGuardDiagnosticsOutcome(ctx, task.Content)
+			if diagnosticsOutcome == "" {
+				diagnosticsOutcome = runOutcome
+			}
+			outcome := retryGuardOutcomeToken(diagnosticsOutcome, status.String())
 			if _, err := guard.ClearByTaskID(ctx, tx, string(msg.Key), outcome); err != nil {
 				return errors.Wrap(ctx, err, "clear retry guard record")
 			}

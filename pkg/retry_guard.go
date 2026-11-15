@@ -395,9 +395,16 @@ func retryGuardOutcomeToken(diagnosticsOutcome string, status string) string {
 		return "completed"
 	case "skipped":
 		return "skipped"
-	default:
-		return status
 	}
+	// Any other non-empty outcome is the producer's own token — the agent
+	// controller writes `run_outcome: budget_expired` for a review that exceeded
+	// its soft time budget, and that is the honest label for why the record was
+	// cleared. Only an empty outcome falls back to the status, which is what the
+	// pre-run_outcome producers emit.
+	if diagnosticsOutcome != "" {
+		return diagnosticsOutcome
+	}
+	return status
 }
 
 // splitRetryGuardKey splits a ledger key "<owner>/<repo>#<n>@<sha>" into the
