@@ -3692,7 +3692,7 @@ var _ = Describe("TaskPublisher redrive clear", func() {
 		pub := publisher()
 		Expect(pub.PublishRedrive(ctx, pr, redriveID, originalID, details)).To(BeTrue())
 
-		Expect(pub.CompleteRedriven(ctx, pr, details)).To(BeTrue())
+		Expect(pub.CompleteRedriven(ctx, pr, details)).To(BeNil())
 		Expect(completeSender.SendCommandCallCount()).To(Equal(1))
 		_, cmd := completeSender.SendCommandArgsForCall(0)
 		Expect(string(cmd.TaskIdentifier)).To(Equal(originalID))
@@ -3701,15 +3701,15 @@ var _ = Describe("TaskPublisher redrive clear", func() {
 	It("closes nothing when no re-drive is outstanding", func() {
 		// The negative control: a verdict on an ordinary review must not publish a
 		// CompleteCommand for a record that was never superseded.
-		Expect(publisher().CompleteRedriven(ctx, pr, details)).To(BeFalse())
+		Expect(publisher().CompleteRedriven(ctx, pr, details)).To(BeNil())
 		Expect(completeSender.SendCommandCallCount()).To(Equal(0))
 	})
 
 	It("is idempotent — a second call closes nothing", func() {
 		pub := publisher()
 		Expect(pub.PublishRedrive(ctx, pr, redriveID, originalID, details)).To(BeTrue())
-		Expect(pub.CompleteRedriven(ctx, pr, details)).To(BeTrue())
-		Expect(pub.CompleteRedriven(ctx, pr, details)).To(BeFalse())
+		Expect(pub.CompleteRedriven(ctx, pr, details)).To(BeNil())
+		Expect(pub.CompleteRedriven(ctx, pr, details)).To(BeNil())
 		Expect(completeSender.SendCommandCallCount()).To(Equal(1))
 	})
 
@@ -3718,7 +3718,7 @@ var _ = Describe("TaskPublisher redrive clear", func() {
 		pub := publisher()
 		Expect(pub.PublishRedrive(ctx, pr, redriveID, originalID, details)).To(BeTrue())
 
-		Expect(pub.CompleteRedriven(ctx, pr, details)).To(BeFalse())
+		Expect(pub.CompleteRedriven(ctx, pr, details)).ToNot(BeNil())
 		_, pending := ledger.Pending(ctx, pkg.RetryGuardPR{
 			Owner: "bborbe", Repo: "repo", Number: 42, HeadSHA: "abc123",
 		})

@@ -194,6 +194,38 @@ var _ = Describe("pkg.UnreviewedScanner", func() {
 		Expect(publisher.CompleteRedrivenCallCount()).To(Equal(0))
 	})
 
+	It("retries a failed close on the next scan instead of caching the PR as reviewed", func() {
+		// A discarded close error would strand the superseded record forever: the
+		// ledger entry survives the failure, so the retry only happens while the PR
+		// is still uncached.
+		searchOpenReturns(openPR(42, "alice", now.Add(-libtime.Hour)))
+		ghClient.ListReviewsReturns([]pkg.Review{
+			{AuthorLogin: "octopus-pr-reviewer[bot]", CommitID: "sha-head"},
+		}, nil)
+		publisher.CompleteRedrivenReturns(errors.New(ctx, "send failed"))
+
+		s := newScanner(qualifying(), defaultFilter(), trustAlice())
+		s.Scan(ctx)
+		s.Scan(ctx)
+
+		Expect(publisher.CompleteRedrivenCallCount()).To(Equal(2))
+	})
+
+	It("stops retrying the close once it succeeds", func() {
+		// The positive control for the retry above: a successful close caches the
+		// PR, so the second scan spends no further CompleteRedriven call.
+		searchOpenReturns(openPR(42, "alice", now.Add(-libtime.Hour)))
+		ghClient.ListReviewsReturns([]pkg.Review{
+			{AuthorLogin: "octopus-pr-reviewer[bot]", CommitID: "sha-head"},
+		}, nil)
+
+		s := newScanner(qualifying(), defaultFilter(), trustAlice())
+		s.Scan(ctx)
+		s.Scan(ctx)
+
+		Expect(publisher.CompleteRedrivenCallCount()).To(Equal(1))
+	})
+
 	It("counts a PR when the reviewer-bot review is only on an older SHA", func() {
 		searchOpenReturns(openPR(42, "alice", now.Add(-libtime.Hour)))
 		ghClient.ListReviewsReturns([]pkg.Review{

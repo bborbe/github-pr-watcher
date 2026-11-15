@@ -12,7 +12,7 @@ import (
 )
 
 type TaskPublisher struct {
-	CompleteRedrivenStub        func(context.Context, pkg.PullRequest, pkg.PRDetails) bool
+	CompleteRedrivenStub        func(context.Context, pkg.PullRequest, pkg.PRDetails) error
 	completeRedrivenMutex       sync.RWMutex
 	completeRedrivenArgsForCall []struct {
 		arg1 context.Context
@@ -20,10 +20,10 @@ type TaskPublisher struct {
 		arg3 pkg.PRDetails
 	}
 	completeRedrivenReturns struct {
-		result1 bool
+		result1 error
 	}
 	completeRedrivenReturnsOnCall map[int]struct {
-		result1 bool
+		result1 error
 	}
 	PublishCreateStub        func(context.Context, pkg.PullRequest, string, pkg.PRDetails) bool
 	publishCreateMutex       sync.RWMutex
@@ -88,7 +88,7 @@ type TaskPublisher struct {
 	invocationsMutex sync.RWMutex
 }
 
-func (fake *TaskPublisher) CompleteRedriven(arg1 context.Context, arg2 pkg.PullRequest, arg3 pkg.PRDetails) bool {
+func (fake *TaskPublisher) CompleteRedriven(arg1 context.Context, arg2 pkg.PullRequest, arg3 pkg.PRDetails) error {
 	fake.completeRedrivenMutex.Lock()
 	ret, specificReturn := fake.completeRedrivenReturnsOnCall[len(fake.completeRedrivenArgsForCall)]
 	fake.completeRedrivenArgsForCall = append(fake.completeRedrivenArgsForCall, struct {
@@ -115,7 +115,7 @@ func (fake *TaskPublisher) CompleteRedrivenCallCount() int {
 	return len(fake.completeRedrivenArgsForCall)
 }
 
-func (fake *TaskPublisher) CompleteRedrivenCalls(stub func(context.Context, pkg.PullRequest, pkg.PRDetails) bool) {
+func (fake *TaskPublisher) CompleteRedrivenCalls(stub func(context.Context, pkg.PullRequest, pkg.PRDetails) error) {
 	fake.completeRedrivenMutex.Lock()
 	defer fake.completeRedrivenMutex.Unlock()
 	fake.CompleteRedrivenStub = stub
@@ -128,26 +128,26 @@ func (fake *TaskPublisher) CompleteRedrivenArgsForCall(i int) (context.Context, 
 	return argsForCall.arg1, argsForCall.arg2, argsForCall.arg3
 }
 
-func (fake *TaskPublisher) CompleteRedrivenReturns(result1 bool) {
+func (fake *TaskPublisher) CompleteRedrivenReturns(result1 error) {
 	fake.completeRedrivenMutex.Lock()
 	defer fake.completeRedrivenMutex.Unlock()
 	fake.CompleteRedrivenStub = nil
 	fake.completeRedrivenReturns = struct {
-		result1 bool
+		result1 error
 	}{result1}
 }
 
-func (fake *TaskPublisher) CompleteRedrivenReturnsOnCall(i int, result1 bool) {
+func (fake *TaskPublisher) CompleteRedrivenReturnsOnCall(i int, result1 error) {
 	fake.completeRedrivenMutex.Lock()
 	defer fake.completeRedrivenMutex.Unlock()
 	fake.CompleteRedrivenStub = nil
 	if fake.completeRedrivenReturnsOnCall == nil {
 		fake.completeRedrivenReturnsOnCall = make(map[int]struct {
-			result1 bool
+			result1 error
 		})
 	}
 	fake.completeRedrivenReturnsOnCall[i] = struct {
-		result1 bool
+		result1 error
 	}{result1}
 }
 

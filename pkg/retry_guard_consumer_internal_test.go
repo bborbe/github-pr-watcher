@@ -43,6 +43,22 @@ var _ = Describe("retryGuardDiagnosticsOutcome", func() {
 	)
 })
 
+var _ = Describe("retryGuardRunOutcome", func() {
+	DescribeTable("reads the run_outcome end-of-run marker",
+		func(frontmatter agentlib.TaskFrontmatter, want string) {
+			Expect(retryGuardRunOutcome(agentlib.Task{Frontmatter: frontmatter})).To(Equal(want))
+		},
+		Entry("absent", agentlib.TaskFrontmatter{}, ""),
+		Entry("empty", agentlib.TaskFrontmatter{"run_outcome": ""}, ""),
+		Entry(
+			"budget_expired",
+			agentlib.TaskFrontmatter{"run_outcome": "budget_expired"},
+			"budget_expired",
+		),
+		Entry("padded", agentlib.TaskFrontmatter{"run_outcome": " failed "}, "failed"),
+	)
+})
+
 var _ = Describe("isRetryGuardTerminalStatus", func() {
 	DescribeTable(
 		"classifies terminal statuses",

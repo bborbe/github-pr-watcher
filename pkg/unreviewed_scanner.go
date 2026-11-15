@@ -662,9 +662,20 @@ func (s *unreviewedScanner) qualify(
 			// A verdict at the head SHA is the only evidence that a review of this
 			// commit actually happened. If a re-drive superseded a record for this
 			// head SHA, that record is now safe to close: the review it was meant
-			// to produce exists. This runs BEFORE reviewedCache is set, so a failed
-			// close is retried on the next cycle rather than cached away.
-			s.publisher.CompleteRedriven(ctx, pr, details)
+			// to produce exists.
+			//
+			// The cache is set only when the close reported no outstanding work.
+			// A failed close must NOT be cached away: the ledger entry survives
+			// the failure, so the next scan retries it, and caching the PR as
+			// reviewed would strand the superseded record permanently on the
+			// first transient send error.
+			if err := s.publisher.CompleteRedriven(ctx, pr, details); err != nil {
+				glog.Errorf(
+					"unreviewed scanner: redrive close failed, retrying next cycle pr=%s err=%v",
+					prKey(pr), err,
+				)
+				return PRDetails{}, false, nil
+			}
 			s.reviewedCache[prKey(pr)] = pr.UpdatedAt
 			return PRDetails{}, false, nil
 		}
