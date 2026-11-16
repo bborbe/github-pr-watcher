@@ -97,8 +97,10 @@ spec:
         # clone carries no vendor directory. The local arm regenerates it through
         # `check-go-mod` before `docker build`; the cluster arm must do the same
         # here, or `go build -mod=vendor` fails on an empty vendor/modules.txt.
+        # The image tag must track `go.mod`'s `go` directive — a stale tag fails
+        # this step with `go.mod requires go >= X (running go Y; GOTOOLCHAIN=local)`.
         - name: vendor
-          image: golang:1.27.3
+          image: golang:1.27.4
           command: ["/bin/sh", "-c"]
           args:
             - |
