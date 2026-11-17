@@ -242,11 +242,11 @@ type GitHubClient interface {
 	AddLabel(ctx context.Context, owner, repo string, number int, label string) error
 
 	// PostCommitStatus posts a commit status on sha under the given context.
-	// This is the reporter that replaces the per-repo `check-do-not-merge`
-	// bridge workflows: the `do-not-merge` context is a required status check
-	// in the master-protection ruleset of nine repos, so a missing reporter
-	// blocks every merge there. Requires the authenticating identity to hold
-	// Commit statuses: Write on the repo.
+	// This is the reporter that replaces the per-repo bridge workflows: the
+	// `do-not-merge` and `task-link` contexts are required status checks in
+	// the master-protection rulesets, so a missing reporter blocks every merge
+	// there. Requires the authenticating identity to hold Commit statuses:
+	// Write on the repo.
 	PostCommitStatus(
 		ctx context.Context,
 		owner, repo, sha string,
@@ -330,14 +330,14 @@ func isPermanentGitHubError(err error) bool {
 }
 
 // CommitState is a GitHub commit-status state. Only the two values the
-// do-not-merge gate uses are modelled; the API also accepts pending and
-// error, which this watcher never posts.
+// watcher's commit-status checks use are modelled; the API also accepts
+// pending and error, which this watcher never posts.
 type CommitState string
 
 const (
-	// CommitStateSuccess reports that the PR carries no blocking label.
+	// CommitStateSuccess reports that the check passes.
 	CommitStateSuccess CommitState = "success"
-	// CommitStateFailure reports that the PR carries the blocking label.
+	// CommitStateFailure reports that the check fails.
 	CommitStateFailure CommitState = "failure"
 )
 

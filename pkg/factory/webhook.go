@@ -15,13 +15,14 @@ import (
 
 // CreateWebhookHandler wires the thin webhook receiver that publishes a
 // TriggerPRReviewCommand to Kafka for each signature-verified pull_request
-// delivery on /webhook/github-pr, plus the two do-not-merge gate commands.
-// Filter/trust work stays in the in-pod command consumer (shared with
-// /trigger).
+// delivery on /webhook/github-pr, plus the two do-not-merge gate commands and
+// the task-link status command. Filter/trust work stays in the in-pod command
+// consumer (shared with /trigger).
 func CreateWebhookHandler(
 	sender command.TriggerPRReviewCommandSender,
 	statusSender command.SetDoNotMergeStatusCommandSender,
 	reviewSender command.SetDoNotMergeReviewCommandSender,
+	taskLinkSender command.SetTaskLinkStatusCommandSender,
 	coalescer coalesce.Coalescer,
 	secret string,
 	metrics handler.WebhookMetrics,
@@ -31,6 +32,7 @@ func CreateWebhookHandler(
 		sender,
 		statusSender,
 		reviewSender,
+		taskLinkSender,
 		coalescer,
 		secret,
 		metrics,

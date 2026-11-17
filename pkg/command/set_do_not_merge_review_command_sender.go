@@ -2,6 +2,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+//nolint:dupl // Parallel sender types share shape; the publish logic is in sendCommandObject.
 package command
 
 import (
@@ -12,8 +13,6 @@ import (
 	cqrsiam "github.com/bborbe/cqrs/iam"
 	"github.com/bborbe/errors"
 	"github.com/golang/glog"
-
-	lib "github.com/bborbe/maintainer"
 )
 
 //counterfeiter:generate -o ../../mocks/set_do_not_merge_review_command_sender.go --fake-name SetDoNotMergeReviewCommandSender . SetDoNotMergeReviewCommandSender
@@ -55,21 +54,16 @@ func (s *setDoNotMergeReviewCommandSender) SendCommand(
 	if err := cmd.Validate(ctx); err != nil {
 		return errors.Wrapf(ctx, err, "validate SetDoNotMergeReviewCommand")
 	}
-	event, err := base.ParseEvent(ctx, cmd)
-	if err != nil {
-		return errors.Wrapf(ctx, err, "parse SetDoNotMergeReviewCommand event")
-	}
-	commandObject := cdb.CommandObject{
-		Command: s.commandCreator.NewCommand(
-			SetDoNotMergeReviewCommandOperation,
-			s.initiator,
-			"",
-			event,
-		),
-		SchemaID: lib.GithubPRReviewV1SchemaID,
-	}
-	if err := s.commandObjectSender.SendCommandObject(ctx, commandObject); err != nil {
-		return errors.Wrapf(ctx, err, "send SetDoNotMergeReviewCommand to Kafka")
+	if err := sendCommandObject(
+		ctx,
+		s.commandCreator,
+		s.initiator,
+		s.commandObjectSender,
+		SetDoNotMergeReviewCommandOperation,
+		cmd,
+		"SetDoNotMergeReviewCommand",
+	); err != nil {
+		return err
 	}
 	glog.V(2).Infof(
 		"do-not-merge review sender: published op=%s url=%s sha=%s",

@@ -9,6 +9,7 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -47,12 +48,13 @@ func noOpCoalescer() coalesce.Coalescer {
 
 var _ = Describe("WebhookHandler", func() {
 	var (
-		ctx          context.Context
-		sender       *mocks.TriggerPRReviewCommandSender
-		statusSender *mocks.SetDoNotMergeStatusCommandSender
-		reviewSender *mocks.SetDoNotMergeReviewCommandSender
-		metrics      *mocks.Metrics
-		h            http.Handler
+		ctx            context.Context
+		sender         *mocks.TriggerPRReviewCommandSender
+		statusSender   *mocks.SetDoNotMergeStatusCommandSender
+		reviewSender   *mocks.SetDoNotMergeReviewCommandSender
+		taskLinkSender *mocks.SetTaskLinkStatusCommandSender
+		metrics        *mocks.Metrics
+		h              http.Handler
 	)
 
 	BeforeEach(func() {
@@ -60,12 +62,14 @@ var _ = Describe("WebhookHandler", func() {
 		sender = new(mocks.TriggerPRReviewCommandSender)
 		statusSender = new(mocks.SetDoNotMergeStatusCommandSender)
 		reviewSender = new(mocks.SetDoNotMergeReviewCommandSender)
+		taskLinkSender = new(mocks.SetTaskLinkStatusCommandSender)
 		metrics = new(mocks.Metrics)
 		h = libhttp.NewErrorHandler(
 			handler.NewWebhookHandler(
 				sender,
 				statusSender,
 				reviewSender,
+				taskLinkSender,
 				noOpCoalescer(),
 				webhookTestSecret,
 				metrics,
@@ -103,6 +107,27 @@ var _ = Describe("WebhookHandler", func() {
 			quoted,
 			",",
 		) + `]}}`
+	}
+
+	// bodyPayload builds a delivery whose PR carries the given body. It uses
+	// json.Marshal so bodies with \n / \r\n are escaped correctly.
+	bodyPayload := func(action string, body *string) string {
+		pullRequest := map[string]any{
+			"html_url": "https://github.com/bborbe/repo/pull/42",
+			"head":     map[string]any{"sha": testHeadSHA},
+		}
+		if body != nil {
+			pullRequest["body"] = *body
+		} else {
+			// GitHub sends "body": null for a PR with no description.
+			pullRequest["body"] = nil
+		}
+		payload, err := json.Marshal(map[string]any{
+			"action":       action,
+			"pull_request": pullRequest,
+		})
+		Expect(err).NotTo(HaveOccurred())
+		return string(payload)
 	}
 
 	Context("signature verification", func() {
@@ -149,6 +174,7 @@ var _ = Describe("WebhookHandler", func() {
 					sender,
 					new(mocks.SetDoNotMergeStatusCommandSender),
 					new(mocks.SetDoNotMergeReviewCommandSender),
+					new(mocks.SetTaskLinkStatusCommandSender),
 					noOpCoalescer(),
 					"",
 					metrics,
@@ -345,6 +371,82 @@ var _ = Describe("WebhookHandler", func() {
 			Expect(resp.Code).To(Equal(http.StatusOK))
 			Expect(statusSender.SendCommandCallCount()).To(Equal(0))
 			Expect(reviewSender.SendCommandCallCount()).To(Equal(0))
+			Expect(taskLinkSender.SendCommandCallCount()).To(Equal(0))
+			Expect(sender.SendCommandCallCount()).To(Equal(0))
+		})
+	})
+
+	Context("task-link commit status", func() {
+		const taskBody = "Summary\r\n\r\nTask: 0b1c2d3e-4f50-6172-8394-a5b6c7d8e9f0\r\n"
+
+		DescribeTable("publishes the command on body-changing actions",
+			func(action string) {
+				body := taskBody
+				req := webhookRequest("pull_request", bodyPayload(action, &body))
+				resp := httptest.NewRecorder()
+				h.ServeHTTP(resp, req)
+
+				Expect(taskLinkSender.SendCommandCallCount()).To(Equal(1))
+				_, cmd := taskLinkSender.SendCommandArgsForCall(0)
+				Expect(cmd.URL).To(Equal("https://github.com/bborbe/repo/pull/42"))
+				Expect(cmd.HeadSHA).To(Equal(testHeadSHA))
+				Expect(cmd.Body).To(Equal(taskBody))
+			},
+			Entry("opened", "opened"),
+			Entry("reopened", "reopened"),
+			Entry("synchronize", "synchronize"),
+			Entry("ready_for_review", "ready_for_review"),
+			Entry("edited", "edited"),
+		)
+
+		It("re-evaluates the check on edited without dispatching a review", func() {
+			body := taskBody
+			req := webhookRequest("pull_request", bodyPayload("edited", &body))
+			resp := httptest.NewRecorder()
+			h.ServeHTTP(resp, req)
+
+			Expect(resp.Code).To(Equal(http.StatusOK))
+			Expect(sender.SendCommandCallCount()).To(Equal(0))
+			Expect(statusSender.SendCommandCallCount()).To(Equal(0))
+			Expect(reviewSender.SendCommandCallCount()).To(Equal(0))
+			Expect(metrics.IncWebhookDeliveryArgsForCall(0)).To(Equal("skip"))
+			Expect(taskLinkSender.SendCommandCallCount()).To(Equal(1))
+		})
+
+		It("does not publish on labeled", func() {
+			req := webhookRequest("pull_request", labeledPayload("labeled", "do-not-merge"))
+			resp := httptest.NewRecorder()
+			h.ServeHTTP(resp, req)
+
+			Expect(taskLinkSender.SendCommandCallCount()).To(Equal(0))
+		})
+
+		It("does not publish on closed", func() {
+			req := webhookRequest("pull_request", pullRequestPayload("closed"))
+			resp := httptest.NewRecorder()
+			h.ServeHTTP(resp, req)
+
+			Expect(taskLinkSender.SendCommandCallCount()).To(Equal(0))
+		})
+
+		It("publishes an empty body when the PR has no description", func() {
+			req := webhookRequest("pull_request", bodyPayload("opened", nil))
+			resp := httptest.NewRecorder()
+			h.ServeHTTP(resp, req)
+
+			Expect(taskLinkSender.SendCommandCallCount()).To(Equal(1))
+			_, cmd := taskLinkSender.SendCommandArgsForCall(0)
+			Expect(cmd.Body).To(Equal(""))
+		})
+
+		It("returns 502 when the task-link send fails", func() {
+			taskLinkSender.SendCommandReturns(errors.Errorf(ctx, "kafka down"))
+			body := taskBody
+			req := webhookRequest("pull_request", bodyPayload("opened", &body))
+			resp := httptest.NewRecorder()
+			h.ServeHTTP(resp, req)
+
+			Expect(resp.Code).To(Equal(http.StatusBadGateway))
 			Expect(sender.SendCommandCallCount()).To(Equal(0))
 		})
 	})
@@ -374,6 +476,7 @@ var _ = Describe("WebhookHandler", func() {
 					sender,
 					new(mocks.SetDoNotMergeStatusCommandSender),
 					new(mocks.SetDoNotMergeReviewCommandSender),
+					new(mocks.SetTaskLinkStatusCommandSender),
 					gate,
 					webhookTestSecret,
 					metrics,

@@ -8,10 +8,6 @@ import (
 	"context"
 
 	"github.com/bborbe/cqrs/base"
-	"github.com/bborbe/errors"
-	"github.com/bborbe/validation"
-
-	"github.com/bborbe/maintainer/prurl"
 )
 
 // SetDoNotMergeReviewCommandOperation is the Kafka command operation for
@@ -75,29 +71,5 @@ func (cmd SetDoNotMergeReviewCommand) Blocked() bool {
 // must be non-empty — a review submitted against an empty commit is a 422 at
 // the API boundary, far from the cause.
 func (cmd SetDoNotMergeReviewCommand) Validate(ctx context.Context) error {
-	return validation.All{
-		validation.Name("URL", validation.HasValidationFunc(func(ctx context.Context) error {
-			if cmd.URL == "" {
-				return errors.Wrap(ctx, validation.Error, "url must not be empty")
-			}
-			prInfo, err := prurl.ParsePRURL(ctx, cmd.URL)
-			if err != nil {
-				return errors.Wrapf(ctx, err, "parse url %q", cmd.URL)
-			}
-			if prInfo.Platform != prurl.PlatformGitHub {
-				return errors.Errorf(
-					ctx,
-					"only github platform is supported, got %s",
-					prInfo.Platform,
-				)
-			}
-			return nil
-		})),
-		validation.Name("HeadSHA", validation.HasValidationFunc(func(ctx context.Context) error {
-			if cmd.HeadSHA == "" {
-				return errors.Wrap(ctx, validation.Error, "head_sha must not be empty")
-			}
-			return nil
-		})),
-	}.Validate(ctx)
+	return validatePRURLAndHeadSHA(ctx, cmd.URL, cmd.HeadSHA)
 }

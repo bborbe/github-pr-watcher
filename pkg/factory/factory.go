@@ -200,6 +200,22 @@ func CreateSetDoNotMergeStatusCommandSender(
 	)
 }
 
+// CreateSetTaskLinkStatusCommandSender constructs a typed
+// set-task-link-status command sender backed by the same Kafka sync producer
+// and topic trio as the trigger sender. The webhook receiver publishes through
+// it on every delivery that can change the PR body.
+func CreateSetTaskLinkStatusCommandSender(
+	ctx context.Context,
+	syncProducer libkafka.SyncProducer,
+	topicPrefix base.TopicPrefix,
+) command.SetTaskLinkStatusCommandSender {
+	return command.NewSetTaskLinkStatusCommandSender(
+		base.NewCommandCreator(base.RequestIDChannel(ctx)),
+		cqrsiam.Initiator("watcher-github-pr"),
+		cdb.NewCommandObjectSender(syncProducer, topicPrefix, log.DefaultSamplerFactory),
+	)
+}
+
 // CreateSetDoNotMergeReviewCommandSender constructs a typed
 // set-do-not-merge-review command sender backed by the same Kafka sync
 // producer and topic trio as the trigger sender. The webhook receiver
@@ -289,6 +305,11 @@ func CreateCommandConsumer(
 		// route the fleet actually uses, since the App cannot post the
 		// equivalent commit status. Same topic trio; dispatched by operation.
 		command.NewSetDoNotMergeReviewCommandExecutor(ghClient),
+		// Posts the task-link commit status the master-protection rulesets
+		// require, replacing the per-repo check-task-link workflows. Rides the
+		// same topic trio as the trigger command; the consumer dispatches by
+		// operation.
+		command.NewSetTaskLinkStatusCommandExecutor(ghClient),
 	}
 	return cdb.RunCommandConsumerTxDefault(
 		saramaClientProvider,
