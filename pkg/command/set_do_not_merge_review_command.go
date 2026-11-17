@@ -18,10 +18,10 @@ import (
 // commit-status commands: the in-pod command consumer dispatches by operation,
 // so no new schema ID and no `bborbe/maintainer` change are needed.
 //
-// This is the route the fleet actually uses to hold a PR. The commit-status
-// route (SetDoNotMergeStatusCommandOperation) cannot work: the reviewer App
-// declares no Commit statuses: Write, and an installation cannot grant a
-// permission the App does not declare. A CHANGES_REQUESTED review blocks the
+// This is the route the fleet actually uses to hold a PR. It was introduced
+// when the reviewer App declared no Commit statuses: Write; the App holds that
+// permission now (observed 2026-11-17), so the commit-status route
+// (SetDoNotMergeStatusCommandOperation) posts as well. A CHANGES_REQUESTED review blocks the
 // merge on every ruleset that sets required_approving_review_count: 1, and
 // Pull requests: Write is already held.
 const SetDoNotMergeReviewCommandOperation base.CommandOperation = "set-do-not-merge-review"

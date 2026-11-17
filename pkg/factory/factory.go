@@ -223,8 +223,11 @@ func CreateSetTaskLinkStatusCommandSender(
 //
 // This is the route that actually holds a PR: a CHANGES_REQUESTED review
 // blocks the merge wherever the ruleset requires an approving review, and the
-// reviewer App holds Pull requests: Write. The status route cannot work —
-// the App declares no Commit statuses: Write.
+// reviewer App holds Pull requests: Write. The status route runs alongside
+// it: the App now holds Commit statuses: Write (observed 2026-11-17 —
+// `do-not-merge` statuses created by ben-s-pull-request-reviewer[bot] on
+// bborbe/nuke and bborbe/github-pr-watcher PR heads), which the task-link
+// status depends on as well.
 func CreateSetDoNotMergeReviewCommandSender(
 	ctx context.Context,
 	syncProducer libkafka.SyncProducer,

@@ -257,9 +257,9 @@ type GitHubClient interface {
 	// SubmitReview posts a review on commitID. The do-not-merge gate uses it to
 	// submit a CHANGES_REQUESTED review, which blocks the merge on every
 	// ruleset that requires an approving review — the mechanism the fleet's
-	// held-PR route depends on, because the reviewer App declares no
-	// Commit statuses: Write and so cannot post the equivalent commit status.
-	// Requires Pull requests: Write.
+	// held-PR route depends on. It was added while the reviewer App lacked
+	// Commit statuses: Write; the App holds it now, and the commit-status
+	// route posts alongside. Requires Pull requests: Write.
 	SubmitReview(
 		ctx context.Context,
 		owner, repo string,
