@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## Unreleased
+## v0.29.0
 
 - feat: post the `task-link` commit status from the watcher on opened, reopened, synchronize, ready_for_review and edited deliveries, using the same predicate as the `check-task-link` workflow, so repos can drop that per-PR Actions run
 
