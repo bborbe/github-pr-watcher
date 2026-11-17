@@ -59,40 +59,46 @@ type WebhookHandler = libhttp.WithError
 // NewWebhookHandler returns a handler that publishes a TriggerPRReviewCommand
 // for each signature-verified pull_request webhook delivery, unless the
 // coalescer holds the push for its trailing dispatch, and the do-not-merge
-// gate's commands on every delivery that can change the label state.
+// gate's commands on every delivery that can change the label state, plus the
+// task-link status on every delivery that can change the PR body.
 func NewWebhookHandler(
 	sender command.TriggerPRReviewCommandSender,
 	statusSender command.SetDoNotMergeStatusCommandSender,
 	reviewSender command.SetDoNotMergeReviewCommandSender,
+	taskLinkSender command.SetTaskLinkStatusCommandSender,
 	coalescer coalesce.Coalescer,
 	secret string,
 	metrics WebhookMetrics,
 	clock libtime.CurrentDateTimeGetter,
 ) WebhookHandler {
 	return &webhookHandler{
-		sender:       sender,
-		statusSender: statusSender,
-		reviewSender: reviewSender,
-		coalescer:    coalescer,
-		secret:       secret,
-		metrics:      metrics,
-		clock:        clock,
+		sender:         sender,
+		statusSender:   statusSender,
+		reviewSender:   reviewSender,
+		taskLinkSender: taskLinkSender,
+		coalescer:      coalescer,
+		secret:         secret,
+		metrics:        metrics,
+		clock:          clock,
 	}
 }
 
 type webhookHandler struct {
-	sender       command.TriggerPRReviewCommandSender
-	statusSender command.SetDoNotMergeStatusCommandSender
-	reviewSender command.SetDoNotMergeReviewCommandSender
-	coalescer    coalesce.Coalescer
-	secret       string
-	metrics      WebhookMetrics
-	clock        libtime.CurrentDateTimeGetter
+	sender         command.TriggerPRReviewCommandSender
+	statusSender   command.SetDoNotMergeStatusCommandSender
+	reviewSender   command.SetDoNotMergeReviewCommandSender
+	taskLinkSender command.SetTaskLinkStatusCommandSender
+	coalescer      coalesce.Coalescer
+	secret         string
+	metrics        WebhookMetrics
+	clock          libtime.CurrentDateTimeGetter
 }
 
 // dispatchActions are the pull_request actions worth triggering a review for.
-// Everything else (labeled, closed, edited, ...) is acknowledged but dropped —
-// the poll loop remains the backfill for anything this filter misses.
+// Everything else (labeled, closed, edited, ...) is acknowledged but dropped
+// for review dispatch — the poll loop remains the backfill for anything this
+// filter misses. An `edited` delivery is still re-evaluated for the task-link
+// status (see taskLinkActions); it just does not start a review.
 var dispatchActions = map[string]bool{
 	"opened":           true,
 	"reopened":         true,
@@ -121,6 +127,24 @@ var gateActions = map[string]bool{
 	"ready_for_review": true,
 	"labeled":          true,
 	"unlabeled":        true,
+}
+
+// taskLinkActions are the pull_request actions that can change the task-link
+// check. The PR body is the check's only input, so `edited` is load-bearing:
+// without it a body fix never re-evaluates and a body broken after passing
+// stays green.
+//
+// This set is deliberately SEPARATE from dispatchActions (an edit must not
+// trigger a full review) and from gateActions (an edit cannot change labels,
+// and adding `edited` there would publish a needless do-not-merge status and
+// CHANGES_REQUESTED review on every title/body edit). labelled/unlabelled are
+// absent because they cannot change the body.
+var taskLinkActions = map[string]bool{
+	"opened":           true,
+	"reopened":         true,
+	"synchronize":      true,
+	"ready_for_review": true,
+	"edited":           true,
 }
 
 func (h *webhookHandler) ServeHTTP(
@@ -155,25 +179,19 @@ func (h *webhookHandler) ServeHTTP(
 		return writeWebhookAck(resp)
 	}
 
-	var payload webhookPullRequestEvent
-	if err := json.Unmarshal(body, &payload); err != nil {
-		return libhttp.WrapWithStatusCode(
-			errors.Wrap(ctx, err, "parse webhook payload"),
-			http.StatusBadRequest,
-		)
-	}
-	// Validate before either send: a malformed payload is a 400 on every
-	// action, not only on the ones that dispatch a review.
-	if payload.PullRequest.HTMLURL == "" {
-		return libhttp.WrapWithStatusCode(
-			errors.Errorf(ctx, "webhook payload missing pull_request.html_url"),
-			http.StatusBadRequest,
-		)
+	payload, err := parseWebhookPullRequestEvent(ctx, body)
+	if err != nil {
+		return err
 	}
 	// Post the do-not-merge gate commands first, and outside the coalescer:
 	// the gate must be re-evaluated on every head SHA the ruleset evaluates,
 	// including a push the coalescer collapses.
 	if err := h.postDoNotMergeGate(ctx, payload); err != nil {
+		return err
+	}
+	// The task-link status is published outside the coalescer for the same
+	// reason: every head SHA the ruleset evaluates needs its own status.
+	if err := h.postTaskLinkGate(ctx, payload); err != nil {
 		return err
 	}
 	if !dispatchActions[payload.Action] {
@@ -241,6 +259,83 @@ func (h *webhookHandler) postDoNotMergeGate(
 			http.StatusBadGateway,
 		)
 	}
+	return nil
+}
+
+// parseWebhookPullRequestEvent decodes a pull_request delivery and validates
+// the fields every path depends on. Validate before either send: a malformed
+// payload is a 400 on every action, not only on the ones that dispatch a
+// review.
+func parseWebhookPullRequestEvent(
+	ctx context.Context,
+	body []byte,
+) (webhookPullRequestEvent, error) {
+	var payload webhookPullRequestEvent
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return webhookPullRequestEvent{}, libhttp.WrapWithStatusCode(
+			errors.Wrap(ctx, err, "parse webhook payload"),
+			http.StatusBadRequest,
+		)
+	}
+	if payload.PullRequest.HTMLURL == "" {
+		return webhookPullRequestEvent{}, libhttp.WrapWithStatusCode(
+			errors.Errorf(ctx, "webhook payload missing pull_request.html_url"),
+			http.StatusBadRequest,
+		)
+	}
+	return payload, nil
+}
+
+// postTaskLinkGate publishes the task-link status command for a delivery that
+// can change the PR body, wrapping a send failure as a 502. A delivery outside
+// taskLinkActions is a no-op, so ServeHTTP needs no second branch.
+func (h *webhookHandler) postTaskLinkGate(
+	ctx context.Context,
+	payload webhookPullRequestEvent,
+) error {
+	if !taskLinkActions[payload.Action] {
+		return nil
+	}
+	if err := h.sendTaskLinkStatus(ctx, payload); err != nil {
+		return libhttp.WrapWithStatusCode(
+			errors.Wrap(ctx, err, "send SetTaskLinkStatusCommand"),
+			http.StatusBadGateway,
+		)
+	}
+	return nil
+}
+
+// sendTaskLinkStatus publishes the task-link commit-status command for this
+// delivery.
+//
+// The body comes from the payload, not a second API read: a read issued here
+// would race a rapid edit and could publish the state the PR had a moment
+// ago. The executor derives success/failure from this body.
+func (h *webhookHandler) sendTaskLinkStatus(
+	ctx context.Context,
+	payload webhookPullRequestEvent,
+) error {
+	if payload.PullRequest.HTMLURL == "" || payload.PullRequest.Head.SHA == "" {
+		return errors.Errorf(
+			ctx,
+			"pull_request payload missing html_url or head.sha for action=%s",
+			payload.Action,
+		)
+	}
+	if err := h.taskLinkSender.SendCommand(ctx, command.SetTaskLinkStatusCommand{
+		URL:     payload.PullRequest.HTMLURL,
+		HeadSHA: payload.PullRequest.Head.SHA,
+		Body:    payload.PullRequest.Body,
+	}); err != nil {
+		return errors.Wrap(ctx, err, "send SetTaskLinkStatusCommand")
+	}
+	glog.V(2).Infof(
+		"webhook task-link status posted url=%s sha=%s action=%s bodyLen=%d",
+		payload.PullRequest.HTMLURL,
+		payload.PullRequest.Head.SHA,
+		payload.Action,
+		len(payload.PullRequest.Body),
+	)
 	return nil
 }
 
@@ -369,8 +464,12 @@ func (h *webhookHandler) shouldDispatch(
 }
 
 // webhookPullRequestEvent is the subset of a GitHub pull_request event the
-// handler reads: the action, the PR's html_url, its head SHA, and its labels.
-// Labels are read only to derive the do-not-merge commit status.
+// handler reads: the action, the PR's html_url, its head SHA, its labels, and
+// its body. Labels are read only to derive the do-not-merge commit status;
+// body is read only to derive the task-link status.
+//
+// GitHub sends "body": null for a PR with no description. encoding/json
+// leaves a string field at "" for null, so no pointer type is needed.
 type webhookPullRequestEvent struct {
 	Action      string `json:"action"`
 	PullRequest struct {
@@ -378,6 +477,7 @@ type webhookPullRequestEvent struct {
 		Head    struct {
 			SHA string `json:"sha"`
 		} `json:"head"`
+		Body   string `json:"body"`
 		Labels []struct {
 			Name string `json:"name"`
 		} `json:"labels"`

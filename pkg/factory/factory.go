@@ -200,6 +200,22 @@ func CreateSetDoNotMergeStatusCommandSender(
 	)
 }
 
+// CreateSetTaskLinkStatusCommandSender constructs a typed
+// set-task-link-status command sender backed by the same Kafka sync producer
+// and topic trio as the trigger sender. The webhook receiver publishes through
+// it on every delivery that can change the PR body.
+func CreateSetTaskLinkStatusCommandSender(
+	ctx context.Context,
+	syncProducer libkafka.SyncProducer,
+	topicPrefix base.TopicPrefix,
+) command.SetTaskLinkStatusCommandSender {
+	return command.NewSetTaskLinkStatusCommandSender(
+		base.NewCommandCreator(base.RequestIDChannel(ctx)),
+		cqrsiam.Initiator("watcher-github-pr"),
+		cdb.NewCommandObjectSender(syncProducer, topicPrefix, log.DefaultSamplerFactory),
+	)
+}
+
 // CreateSetDoNotMergeReviewCommandSender constructs a typed
 // set-do-not-merge-review command sender backed by the same Kafka sync
 // producer and topic trio as the trigger sender. The webhook receiver
@@ -207,8 +223,11 @@ func CreateSetDoNotMergeStatusCommandSender(
 //
 // This is the route that actually holds a PR: a CHANGES_REQUESTED review
 // blocks the merge wherever the ruleset requires an approving review, and the
-// reviewer App holds Pull requests: Write. The status route cannot work —
-// the App declares no Commit statuses: Write.
+// reviewer App holds Pull requests: Write. The status route runs alongside
+// it: the App now holds Commit statuses: Write (observed 2026-11-17 —
+// `do-not-merge` statuses created by ben-s-pull-request-reviewer[bot] on
+// bborbe/nuke and bborbe/github-pr-watcher PR heads), which the task-link
+// status depends on as well.
 func CreateSetDoNotMergeReviewCommandSender(
 	ctx context.Context,
 	syncProducer libkafka.SyncProducer,
@@ -289,6 +308,11 @@ func CreateCommandConsumer(
 		// route the fleet actually uses, since the App cannot post the
 		// equivalent commit status. Same topic trio; dispatched by operation.
 		command.NewSetDoNotMergeReviewCommandExecutor(ghClient),
+		// Posts the task-link commit status the master-protection rulesets
+		// require, replacing the per-repo check-task-link workflows. Rides the
+		// same topic trio as the trigger command; the consumer dispatches by
+		// operation.
+		command.NewSetTaskLinkStatusCommandExecutor(ghClient),
 	}
 	return cdb.RunCommandConsumerTxDefault(
 		saramaClientProvider,

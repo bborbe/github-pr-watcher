@@ -428,13 +428,15 @@ func (a *application) Run(ctx context.Context, _ libsentry.Client) error {
 	// Webhook receiver reuses the same sender: every signature-verified
 	// pull_request delivery publishes a TriggerPRReviewCommand, so the in-pod
 	// consumer (fetch → filter → trust → CreateTaskCommand) applies unchanged.
-	// The two gate senders are further commands on the same topic trio: the
-	// receiver posts the do-not-merge commit status where the App holds the
-	// permission, and the CHANGES_REQUESTED review that actually holds the PR.
+	// The gate and status senders are further commands on the same topic trio:
+	// the receiver posts the do-not-merge commit status where the App holds
+	// the permission, the CHANGES_REQUESTED review that actually holds the PR,
+	// and the task-link commit status the rulesets require.
 	webhookHandler := factory.CreateWebhookHandler(
 		triggerPRReviewSender,
 		factory.CreateSetDoNotMergeStatusCommandSender(ctx, syncProducer, a.TopicPrefix),
 		factory.CreateSetDoNotMergeReviewCommandSender(ctx, syncProducer, a.TopicPrefix),
+		factory.CreateSetTaskLinkStatusCommandSender(ctx, syncProducer, a.TopicPrefix),
 		coalescer,
 		a.WebhookSecret,
 		metrics,
