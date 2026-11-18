@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## Unreleased
+## v0.29.1
 
 - fix: stamp the PR URL on its own line in the oversized-park body. `buildParkedBody` recommended a forced `/trigger?url=…` re-review while forbidding the record to carry the URL, so the remedy could not be built from the record that recommended it and the parked record failed with `no GitHub PR URL in task`. The body now carries `pr.HTMLURL` and the two sentences that contradicted it are gone. Stamping the URL cannot un-park the record: the park is enforced by frontmatter (`phase: human_review`, no assignee), not by the body's contents.
 
