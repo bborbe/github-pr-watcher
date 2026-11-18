@@ -3826,10 +3826,11 @@ var _ = Describe("BuildCreateCommand oversized PR park", func() {
 		Expect(cmd.Body).To(ContainSubstring("2 changed files"))
 	})
 
-	// The park body carries no PR URL, so the reviewer fails any record that
-	// is un-parked by editing its frontmatter. The body must name the lever
-	// that works (a forced /trigger) and must not offer the frontmatter edit.
-	It("oversized park body names the forced-trigger lever, not a frontmatter edit", func() {
+	// The park body stamps the PR URL on its own line, so the forced /trigger
+	// it recommends can be built from the record alone. The park is enforced by
+	// frontmatter (human_review, no assignee), not by withholding the URL, so
+	// carrying it cannot un-park the record.
+	It("oversized park body stamps the PR URL and names the forced-trigger lever", func() {
 		cmd := pkg.BuildCreateCommand(
 			makePR("trusted-user"), makeOversized(), "00000000-0000-0000-0000-000000000017",
 			"dev", 80, 60, "pr-reviewer", "agent",
@@ -3838,14 +3839,19 @@ var _ = Describe("BuildCreateCommand oversized PR park", func() {
 		)
 		Expect(cmd.Body).To(ContainSubstring("/trigger?url="))
 		Expect(cmd.Body).To(ContainSubstring("force=true"))
-		Expect(cmd.Body).To(ContainSubstring("Do not paste the URL into this record"))
 		// A forced run is suppressed by the retry guard for an hour after the
 		// parked publish, so the body must not present it as immediately
 		// effective: it names the wait and the restart that clears the ledger.
 		Expect(cmd.Body).To(ContainSubstring("suppressed for up to an hour"))
 		Expect(cmd.Body).To(ContainSubstring("restart the watcher"))
 		Expect(cmd.Body).NotTo(ContainSubstring("edit the frontmatter:"))
-		Expect(cmd.Body).NotTo(ContainSubstring("https://github.com/owner/repo/pull/1"))
+		// The URL is present exactly once, as a standalone line: the remedy
+		// points at that line instead of repeating the URL.
+		Expect(strings.Count(cmd.Body, "https://github.com/owner/repo/pull/1")).To(Equal(1))
+		Expect(cmd.Body).To(MatchRegexp(`(?m)^https://github\.com/owner/repo/pull/1$`))
+		// The two sentences that made the remedy unconstructible are gone.
+		Expect(cmd.Body).NotTo(ContainSubstring("Do not paste the URL into this record"))
+		Expect(cmd.Body).NotTo(ContainSubstring("carries no PR URL"))
 	})
 
 	It("untrusted body names TRUSTED_AUTHORS, not a frontmatter edit", func() {

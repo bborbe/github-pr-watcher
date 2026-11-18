@@ -2179,7 +2179,8 @@ func BuildCreateCommand(
 				TargetVault:    targetVault,
 				TaskIdentifier: agentlib.TaskIdentifier(taskIDStr),
 				Frontmatter:    buildHumanReviewFrontmatter(pr, taskIDStr, stage, details),
-				Body:           buildParkedBody(details, exclusion, maxAdditions, maxChangedFiles),
+				Body: buildParkedBody(pr, details, exclusion,
+					maxAdditions, maxChangedFiles),
 			}
 		}
 		return task.CreateCommand{
@@ -2449,7 +2450,15 @@ func effectiveSize(details PRDetails, exclusion Exclusion) (int, int) {
 // buildParkedBody explains why a PR was parked at human_review and how the
 // operator proceeds. Only dimensions with an enabled threshold are listed,
 // so a disabled dimension never appears as a confusing "limit 0".
+//
+// The PR URL is stamped on its own line because the remedy this body
+// recommends — a forced `/trigger?url=…` re-review — needs exactly that URL.
+// Withholding it made the remedy unconstructible from the record that
+// recommends it. Stamping it is safe: the park is enforced by frontmatter
+// (phase human_review, no assignee), not by the body's contents, so the
+// record is never dispatched to a review pod.
 func buildParkedBody(
+	pr PullRequest,
 	details PRDetails,
 	exclusion Exclusion,
 	maxAdditions, maxChangedFiles int,
@@ -2469,7 +2478,8 @@ func buildParkedBody(
 		)
 	}
 	return fmt.Sprintf(
-		"## Oversized PR — parked for human review\n\nThis PR has %s, which exceeds the auto-reviewer's context budget. Spawning a review pod would overflow its context window (`claude CLI failed: Prompt is too long`) and die before posting a verdict.\n%s\nTo review anyway, request a forced re-review on github-pr-watcher: `/trigger?url=<this PR's GitHub URL>&force=true` (the endpoint needs no token). Build the URL from this record's `clone_url` frontmatter with the trailing `.git` replaced by `/pull/<number>`, where `<number>` is the PR number in this record's title (`PR Review github - <owner>-<repo> - <number> - …`). Do not paste the URL into this record. The forced run skips only the oversized park and composes a fresh, reviewable record — but it is suppressed for up to an hour after this record was composed: the parked publish counts as an in-flight review and this SHA carries no verdict, so the retry guard skips the forced run after the endpoint has already answered 202, and no record appears. Wait out that hour, or restart the watcher (the retry-guard ledger is in memory, and a restart clears it), then retry.\n\nEditing this record's frontmatter does not work: this body carries no PR URL, so the reviewer fails the record.\n\nTo dismiss, set `status: aborted`.\n",
+		"## Oversized PR — parked for human review\n\n%s\n\nThis PR has %s, which exceeds the auto-reviewer's context budget. Spawning a review pod would overflow its context window (`claude CLI failed: Prompt is too long`) and die before posting a verdict.\n%s\nTo review anyway, request a forced re-review on github-pr-watcher: `/trigger?url=<the PR URL on the line above>&force=true` (the endpoint needs no token). The forced run skips only the oversized park and composes a fresh, reviewable record — but it is suppressed for up to an hour after this record was composed: the parked publish counts as an in-flight review and this SHA carries no verdict, so the retry guard skips the forced run after the endpoint has already answered 202, and no record appears. Wait out that hour, or restart the watcher (the retry-guard ledger is in memory, and a restart clears it), then retry.\n\nTo dismiss, set `status: aborted`.\n",
+		pr.HTMLURL,
 		strings.Join(reasons, " and "),
 		buildExclusionNote(exclusion),
 	)
