@@ -420,7 +420,10 @@ type PRFile struct {
 // call into the per-caller github_api_* counters via apiMetrics; a nil
 // apiMetrics disables that counting.
 func NewGitHubClient(httpClient *http.Client, apiMetrics GitHubAPIMetrics) GitHubClient {
-	c := &githubClient{}
+	c := &githubClient{
+		repoFiles: map[repoFileKey]repoFileEntry{},
+		now:       time.Now,
+	}
 	inner := httpClient.Transport
 	if inner == nil {
 		inner = http.DefaultTransport
@@ -439,7 +442,32 @@ type githubClient struct {
 	client        *gogithub.Client
 	mu            sync.Mutex
 	rateRemaining int
+
+	// repoFiles caches each repo's opt-in files (`.maintainer.yaml`,
+	// `.reviewignore`) for repoFileTTL. The watcher reads `.maintainer.yaml`
+	// once per OPEN PR, so a repo with N open PRs costs N identical calls per
+	// cycle; the TTL collapses them to one per repo per window. A repo's config
+	// change takes at most repoFileTTL to take effect.
+	repoFilesMu sync.Mutex
+	repoFiles   map[repoFileKey]repoFileEntry
+	now         func() time.Time
 }
+
+type repoFileKey struct {
+	owner, repo, path string
+}
+
+// repoFileEntry is one cached file read: raw content, or absent for a 404.
+type repoFileEntry struct {
+	raw     []byte
+	absent  bool
+	expires time.Time
+}
+
+// repoFileTTL bounds how stale an opt-in file may be. Five minutes is far
+// shorter than the poll interval's consequences and long enough to collapse a
+// burst of per-PR reads in one cycle.
+const repoFileTTL = 5 * time.Minute
 
 func (c *githubClient) setRateRemaining(n int) {
 	c.mu.Lock()
@@ -833,40 +861,78 @@ func (c *githubClient) ClosePR(
 // GetMaintainerConfig fetches and parses the repo's `.maintainer.yaml` trust
 // file. A 404 (file absent) returns the zero-value config with nil error —
 // the repo simply has not opted in. Any other failure is wrapped.
+func (c *githubClient) cachedRepoFile(key repoFileKey) (repoFileEntry, bool) {
+	c.repoFilesMu.Lock()
+	defer c.repoFilesMu.Unlock()
+	if c.repoFiles == nil {
+		return repoFileEntry{}, false
+	}
+	entry, ok := c.repoFiles[key]
+	if !ok || c.clock().After(entry.expires) {
+		return repoFileEntry{}, false
+	}
+	return entry, true
+}
+
+func (c *githubClient) storeRepoFile(key repoFileKey, entry repoFileEntry) {
+	entry.expires = c.clock().Add(repoFileTTL)
+	c.repoFilesMu.Lock()
+	defer c.repoFilesMu.Unlock()
+	if c.repoFiles == nil {
+		c.repoFiles = map[repoFileKey]repoFileEntry{}
+	}
+	c.repoFiles[key] = entry
+}
+
+// clock returns the injected time source, defaulting to time.Now for clients
+// built outside NewGitHubClient (NewForTest).
+func (c *githubClient) clock() time.Time {
+	if c.now != nil {
+		return c.now()
+	}
+	return time.Now()
+}
+
+// repoFileContent returns a repo's opt-in file bytes, serving a cached read
+// while the entry is younger than repoFileTTL. absent reports a 404 — the repo
+// has not opted in — and raw is nil in that case. Only successful and 404
+// answers are cached; a transient error is retried on the next call.
+func (c *githubClient) repoFileContent(
+	ctx context.Context,
+	owner, repo, path string,
+) (raw []byte, absent bool, err error) {
+	key := repoFileKey{owner: owner, repo: repo, path: path}
+	if entry, ok := c.cachedRepoFile(key); ok {
+		return entry.raw, entry.absent, nil
+	}
+	content, _, resp, err := c.client.Repositories.GetContents(ctx, owner, repo, path, nil)
+	if err != nil {
+		if resp != nil && resp.StatusCode == http.StatusNotFound {
+			c.storeRepoFile(key, repoFileEntry{absent: true})
+			return nil, true, nil
+		}
+		return nil, false, errors.Wrapf(ctx, err, "get %s %s/%s", path, owner, repo)
+	}
+	decoded, err := content.GetContent()
+	if err != nil {
+		return nil, false, errors.Wrapf(ctx, err, "decode %s %s/%s", path, owner, repo)
+	}
+	c.storeRepoFile(key, repoFileEntry{raw: []byte(decoded)})
+	return []byte(decoded), false, nil
+}
+
 func (c *githubClient) GetMaintainerConfig(
 	ctx context.Context,
 	owner, repo string,
 ) (maintainerconfig.MaintainerConfig, error) {
-	content, _, resp, err := c.client.Repositories.GetContents(
-		ctx,
-		owner,
-		repo,
-		".maintainer.yaml",
-		nil,
-	)
+	raw, absent, err := c.repoFileContent(ctx, owner, repo, ".maintainer.yaml")
 	if err != nil {
-		if resp != nil && resp.StatusCode == http.StatusNotFound {
-			return maintainerconfig.MaintainerConfig{}, nil
-		}
-		return maintainerconfig.MaintainerConfig{}, errors.Wrapf(
-			ctx,
-			err,
-			"get .maintainer.yaml %s/%s",
-			owner,
-			repo,
-		)
+		return maintainerconfig.MaintainerConfig{}, err
 	}
-	raw, err := content.GetContent()
-	if err != nil {
-		return maintainerconfig.MaintainerConfig{}, errors.Wrapf(
-			ctx,
-			err,
-			"decode .maintainer.yaml %s/%s",
-			owner,
-			repo,
-		)
+	if absent {
+		return maintainerconfig.MaintainerConfig{}, nil
 	}
-	cfg, err := maintainerconfig.Parse(ctx, []byte(raw))
+	cfg, err := maintainerconfig.Parse(ctx, raw)
 	if err != nil {
 		return maintainerconfig.MaintainerConfig{}, errors.Wrapf(
 			ctx,
@@ -886,38 +952,14 @@ func (c *githubClient) GetReviewIgnore(
 	ctx context.Context,
 	owner, repo string,
 ) (reviewignore.Matcher, error) {
-	content, _, resp, err := c.client.Repositories.GetContents(
-		ctx,
-		owner,
-		repo,
-		reviewignore.Filename,
-		nil,
-	)
+	raw, absent, err := c.repoFileContent(ctx, owner, repo, reviewignore.Filename)
 	if err != nil {
-		if resp != nil && resp.StatusCode == http.StatusNotFound {
-			return reviewignore.Parse(nil), nil
-		}
-		return nil, errors.Wrapf(
-			ctx,
-			err,
-			"get %s %s/%s",
-			reviewignore.Filename,
-			owner,
-			repo,
-		)
+		return nil, err
 	}
-	raw, err := content.GetContent()
-	if err != nil {
-		return nil, errors.Wrapf(
-			ctx,
-			err,
-			"decode %s %s/%s",
-			reviewignore.Filename,
-			owner,
-			repo,
-		)
+	if absent {
+		return reviewignore.Parse(nil), nil
 	}
-	return reviewignore.Parse([]byte(raw)), nil
+	return reviewignore.Parse(raw), nil
 }
 
 // ListPRFiles pages through the PR's changed files. Pagination is followed to
