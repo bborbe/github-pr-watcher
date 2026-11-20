@@ -561,4 +561,31 @@ var _ = Describe("pkg.GitHubClient", func() {
 			Expect(errors.Is(err, pkg.ErrPermanent)).To(BeFalse())
 		})
 	})
+
+	Describe("repo file cache", func() {
+		It("serves a repeated .reviewignore read from cache", func() {
+			calls := 0
+			server := httptest.NewServer(
+				http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					Expect(r.URL.Path).To(Equal("/repos/bborbe/cached/contents/.reviewignore"))
+					calls++
+					w.Header().Set("Content-Type", "application/json")
+					fmt.Fprintf(
+						w,
+						`{"name":".reviewignore","path":".reviewignore","size":5,"encoding":"base64","content":"Ki5tZAo="}`,
+					)
+				}),
+			)
+			defer server.Close()
+
+			client := buildClient(server)
+
+			_, err := client.GetReviewIgnore(ctx, "bborbe", "cached")
+			Expect(err).NotTo(HaveOccurred())
+			_, err = client.GetReviewIgnore(ctx, "bborbe", "cached")
+			Expect(err).NotTo(HaveOccurred())
+
+			Expect(calls).To(Equal(1))
+		})
+	})
 })
