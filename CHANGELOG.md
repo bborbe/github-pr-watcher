@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## Unreleased
+## v0.29.2
 
 - fix: cache each repo's `.maintainer.yaml` and `.reviewignore` for 5 minutes. The watcher read `.maintainer.yaml` once per **open PR**, so a repo with N open PRs cost N identical calls every cycle; the TTL collapses them to one per repo per window and cuts the watcher's share of the GitHub App `core` pool it shares with the release watcher
 
