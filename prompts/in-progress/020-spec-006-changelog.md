@@ -1,7 +1,8 @@
 ---
-status: draft
+status: approved
 spec: [006-park-age-metric]
 created: "2026-11-22T15:48:00Z"
+queued: "2026-11-22T15:03:11Z"
 branch: dark-factory/park-age-metric
 ---
 

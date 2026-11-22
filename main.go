@@ -147,6 +147,7 @@ type application struct {
 	ReviewerBotLogins         string           `required:"false" arg:"reviewer-bot-logins"         env:"REVIEWER_BOT_LOGINS"         usage:"Comma-separated GitHub logins of the reviewer bots; a publishable PR whose head SHA has no review from one of them is reported on the github_pr_watcher_unreviewed_prs gauge. Required: the retry guard's verdict check shares it, so an empty value fails startup."`
 	UnreviewedThreshold       string           `required:"false" arg:"unreviewed-threshold"        env:"UNREVIEWED_THRESHOLD"        usage:"How long a PR must wait without a reviewer-bot review before it is reported (Go duration; must be positive). Ignored (and not validated) when REVIEWER_BOT_LOGINS is empty"                                                                                                                                            default:"30m"`
 	UnreviewedRetryMax        int              `required:"false" arg:"unreviewed-retry-max"        env:"UNREVIEWED_RETRY_MAX"        usage:"How many times the scan re-publishes the original review task for a still-unreviewed PR, one threshold apart, before marking it retries_exhausted; 0 disables retrying"                                                                                                                                                default:"3"`
+	ParkLedgerPath            string           `required:"false" arg:"park-ledger-path"            env:"PARK_LEDGER_PATH"            usage:"Path to the JSON ledger the watcher writes parked-PR start times to (mounted on a PersistentVolumeClaim at /data)"                                                                                                                                                                                                     default:"/data/park-ledger.json"`
 
 	// TopicPrefix selects the Kafka topic prefix used for CQRS topic construction
 	// (e.g. "develop" / "master"); independent of Stage, which remains the
@@ -393,6 +394,8 @@ func (a *application) Run(ctx context.Context, _ libsentry.Client) error {
 	// scanner counts the publishes it never saw dispatched.
 	dispatchLedger := pkg.NewDispatchLedger()
 
+	parkLedger := pkg.NewParkLedger(a.ParkLedgerPath)
+
 	w := factory.CreateWatcher(
 		ghClient,
 		createSender,
@@ -406,6 +409,7 @@ func (a *application) Run(ctx context.Context, _ libsentry.Client) error {
 		a.Stage,
 		metrics,
 		dispatchLedger,
+		parkLedger,
 		trustDecision,
 		a.MaxSlugLen,
 		a.MaxTitleLen,

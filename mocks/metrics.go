@@ -47,6 +47,11 @@ type Metrics struct {
 	observeWebhookDispatchLatencyArgsForCall []struct {
 		arg1 float64
 	}
+	SetParkedPRsStub        func([]pkg.ParkedPR)
+	setParkedPRsMutex       sync.RWMutex
+	setParkedPRsArgsForCall []struct {
+		arg1 []pkg.ParkedPR
+	}
 	SetRateLimitRemainingStub        func(int)
 	setRateLimitRemainingMutex       sync.RWMutex
 	setRateLimitRemainingArgsForCall []struct {
@@ -276,6 +281,43 @@ func (fake *Metrics) ObserveWebhookDispatchLatencyArgsForCall(i int) float64 {
 	fake.observeWebhookDispatchLatencyMutex.RLock()
 	defer fake.observeWebhookDispatchLatencyMutex.RUnlock()
 	argsForCall := fake.observeWebhookDispatchLatencyArgsForCall[i]
+	return argsForCall.arg1
+}
+
+func (fake *Metrics) SetParkedPRs(arg1 []pkg.ParkedPR) {
+	var arg1Copy []pkg.ParkedPR
+	if arg1 != nil {
+		arg1Copy = make([]pkg.ParkedPR, len(arg1))
+		copy(arg1Copy, arg1)
+	}
+	fake.setParkedPRsMutex.Lock()
+	fake.setParkedPRsArgsForCall = append(fake.setParkedPRsArgsForCall, struct {
+		arg1 []pkg.ParkedPR
+	}{arg1Copy})
+	stub := fake.SetParkedPRsStub
+	fake.recordInvocation("SetParkedPRs", []interface{}{arg1Copy})
+	fake.setParkedPRsMutex.Unlock()
+	if stub != nil {
+		fake.SetParkedPRsStub(arg1)
+	}
+}
+
+func (fake *Metrics) SetParkedPRsCallCount() int {
+	fake.setParkedPRsMutex.RLock()
+	defer fake.setParkedPRsMutex.RUnlock()
+	return len(fake.setParkedPRsArgsForCall)
+}
+
+func (fake *Metrics) SetParkedPRsCalls(stub func([]pkg.ParkedPR)) {
+	fake.setParkedPRsMutex.Lock()
+	defer fake.setParkedPRsMutex.Unlock()
+	fake.SetParkedPRsStub = stub
+}
+
+func (fake *Metrics) SetParkedPRsArgsForCall(i int) []pkg.ParkedPR {
+	fake.setParkedPRsMutex.RLock()
+	defer fake.setParkedPRsMutex.RUnlock()
+	argsForCall := fake.setParkedPRsArgsForCall[i]
 	return argsForCall.arg1
 }
 

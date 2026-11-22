@@ -1,8 +1,13 @@
 ---
-status: approved
+status: completed
 spec: [006-park-age-metric]
+summary: Published parked oversized PR ages on github_pr_watcher_parked_prs via the ParkLedger wired from PARK_LEDGER_PATH through CreateWatcher into UnreviewedScanner.Scan, with metric/scanner tests and CHANGELOG updated.
+execution_id: 3546659f-32d3-562a-a7c7-870cb565441e-exec-018-spec-006-scan-metric
+dark-factory-version: dev
 created: "2026-11-22T15:46:00Z"
 queued: "2026-11-22T14:57:22Z"
+started: "2026-11-22T15:01:54Z"
+completed: "2026-11-22T15:08:43Z"
 branch: dark-factory/park-age-metric
 ---
 

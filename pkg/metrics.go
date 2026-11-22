@@ -40,6 +40,10 @@ type Metrics interface {
 	// last-successful-scan timestamp gauge. The slice is the complete result
 	// of one scan, so an empty slice clears the gauge.
 	SetUnreviewedPRs(prs []UnreviewedPR, scannedAt libtime.DateTime)
+	// SetParkedPRs replaces the set of oversized PRs reported on the
+	// github_pr_watcher_parked_prs gauge. The slice is the complete result of
+	// one scan, so an empty slice clears the gauge.
+	SetParkedPRs(prs []ParkedPR)
 	// IncUnreviewedRetry increments the retry counter with the given repo label.
 	// repo: `owner/repo`
 	IncUnreviewedRetry(repo string)
@@ -62,6 +66,14 @@ type UnreviewedPR struct {
 	// through those re-drives rather than flapping every threshold. Rendered
 	// as the gauge's retries_exhausted label.
 	RetriesExhausted bool
+}
+
+// ParkedPR identifies one oversized PR parked at human_review, with how
+// long it has been parked.
+type ParkedPR struct {
+	Repo       string
+	Number     int
+	AgeSeconds float64
 }
 
 var (
@@ -101,6 +113,11 @@ var (
 		Help: "Open pull requests the watcher would hand to the reviewer whose current head SHA has no review from a configured reviewer bot after waiting longer than the unreviewed threshold. Value 1 per such PR; retries_exhausted is true once the bounded re-publish budget is spent, and stays true through the hourly stale re-drive.",
 	}, []string{"repo", "pr", "retries_exhausted"})
 
+	parkedPRs = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "github_pr_watcher_parked_prs",
+		Help: "Seconds each open, trusted-author, oversized pull request has been continuously parked at human_review, by repo and PR number. Seeded from the PR's updated-at on the first scan that observes it parked and held in a ledger until its head SHA changes; a complete scan replaces the whole set, so a park that ends disappears within one scan. Untrusted-author parks are not covered. Single replica only.",
+	}, []string{"repo", "pr"})
+
 	unreviewedRetriesTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "github_pr_watcher_unreviewed_retries_total",
 		Help: "Total number of review tasks re-published by the unreviewed-PR retry pass, by repo. Bounded by UNREVIEWED_RETRY_MAX per (PR, head SHA) per process lifetime, plus one stale re-drive per hour once that budget is spent.",
@@ -139,6 +156,7 @@ func init() {
 		webhookDispatchLatencySeconds,
 		rateLimitRemaining,
 		unreviewedPRs,
+		parkedPRs,
 		unreviewedScanLastSuccess,
 		unreviewedRetriesTotal,
 		escalationsTotal,
@@ -220,6 +238,15 @@ func (m *prometheusMetrics) SetUnreviewedPRs(prs []UnreviewedPR, scannedAt libti
 		).Set(1)
 	}
 	unreviewedScanLastSuccess.Set(float64(scannedAt.Unix()))
+}
+
+func (m *prometheusMetrics) SetParkedPRs(prs []ParkedPR) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	parkedPRs.Reset()
+	for _, pr := range prs {
+		parkedPRs.WithLabelValues(pr.Repo, strconv.Itoa(pr.Number)).Set(pr.AgeSeconds)
+	}
 }
 
 func (m *prometheusMetrics) IncUnreviewedRetry(repo string) {
