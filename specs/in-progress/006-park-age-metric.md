@@ -1,6 +1,8 @@
 ---
-status: approved
+status: prompted
 approved: "2026-11-22T14:31:35Z"
+generating: "2026-11-22T14:33:04Z"
+prompted: "2026-11-22T14:46:46Z"
 branch: dark-factory/park-age-metric
 ---
 
