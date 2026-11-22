@@ -112,6 +112,16 @@ type UnreviewedScanner interface {
 	LastCandidates() int
 }
 
+// UnreviewedScannerOption configures optional scanner dependencies.
+type UnreviewedScannerOption func(*unreviewedScanner)
+
+// WithParkLedger wires the park ledger the scan records parked oversized PRs
+// into and reads their start times from. Without it the parked-PR metric is
+// not published, which is the pre-change behaviour.
+func WithParkLedger(ledger ParkLedger) UnreviewedScannerOption {
+	return func(s *unreviewedScanner) { s.parkLedger = ledger }
+}
+
 // NewUnreviewedScanner returns an UnreviewedScanner backed by the shared
 // GitHub client, publisher, metrics and decision chains the watcher already
 // holds, so the scan applies exactly the same filters, trust check and park
@@ -129,8 +139,9 @@ func NewUnreviewedScanner(
 	overrideLabel string,
 	maxAdditions, maxChangedFiles int,
 	cfg UnreviewedConfig,
+	opts ...UnreviewedScannerOption,
 ) UnreviewedScanner {
-	return &unreviewedScanner{
+	scanner := &unreviewedScanner{
 		ghClient:           ghClient,
 		publisher:          publisher,
 		dispatchLedger:     dispatchLedger,
@@ -146,6 +157,10 @@ func NewUnreviewedScanner(
 		retryState:         make(map[string]unreviewedRetry),
 		reviewedCache:      make(map[string]libtime.DateTime),
 	}
+	for _, opt := range opts {
+		opt(scanner)
+	}
+	return scanner
 }
 
 // unreviewedRetry is the bounded re-publish budget for one (PR, head SHA) task
@@ -183,6 +198,7 @@ type unreviewedScanner struct {
 	ghClient           GitHubClient
 	publisher          TaskPublisher
 	dispatchLedger     DispatchLedger
+	parkLedger         ParkLedger
 	metrics            Metrics
 	currentDateTime    libtime.CurrentDateTimeGetter
 	scope              string
@@ -225,12 +241,17 @@ func (s *unreviewedScanner) Scan(ctx context.Context) {
 	}
 	defer s.mu.Unlock()
 
+	if s.parkLedger != nil {
+		s.parkLedger.Read(ctx)
+	}
+
 	prs, ok := s.fetchAllOpenPRs(ctx)
 	if !ok {
 		return
 	}
 	now := s.currentDateTime.Now()
 	candidates := make([]unreviewedCandidate, 0, len(prs))
+	observations := make([]ParkObservation, 0)
 	for _, pr := range prs {
 		select {
 		case <-ctx.Done():
@@ -238,10 +259,20 @@ func (s *unreviewedScanner) Scan(ctx context.Context) {
 			return
 		default:
 		}
-		details, counted, err := s.qualify(ctx, pr, now)
+		ledgered := s.parkLedger != nil && s.parkLedger.Has(prKey(pr))
+		details, counted, parked, err := s.qualify(ctx, pr, now, ledgered)
 		if err != nil {
 			glog.Warningf("unreviewed scan aborted err=%v", err)
 			return
+		}
+		if parked {
+			observations = append(observations, ParkObservation{
+				Repo:      pr.Owner + "/" + pr.Repo,
+				Number:    pr.Number,
+				SHA:       details.HeadSHA,
+				UpdatedAt: pr.UpdatedAt,
+			})
+			continue
 		}
 		if !counted {
 			continue
@@ -273,6 +304,18 @@ func (s *unreviewedScanner) Scan(ctx context.Context) {
 	// empty SHA, park, a review arriving — must NOT reset the budget, or the
 	// at-most-RetryMax-per-(PR, head SHA) bound breaks.
 	s.pruneState(prs)
+	if s.parkLedger != nil {
+		starts := s.parkLedger.Reconcile(ctx, observations)
+		parkedPRs := make([]ParkedPR, 0, len(starts))
+		for _, st := range starts {
+			parkedPRs = append(parkedPRs, ParkedPR{
+				Repo:       st.Repo,
+				Number:     st.Number,
+				AgeSeconds: AgeSeconds(now, st.Start),
+			})
+		}
+		s.metrics.SetParkedPRs(parkedPRs)
+	}
 	if len(unreviewed) > 0 {
 		glog.V(2).Infof("unreviewed scan found %d prs: %s",
 			len(unreviewed), formatUnreviewedPRs(unreviewed))
@@ -592,69 +635,45 @@ func (s *unreviewedScanner) fetchAllOpenPRs(ctx context.Context) ([]PullRequest,
 // returning the fetched details so the retry pass can re-publish unchanged.
 // counted is true only when the PR is one PublishCreate would hand to the
 // reviewer AND no review by a configured reviewer login targets its current
-// head SHA. A non-nil error — a trust check, GetPRDetails or ListReviews
-// failure — aborts the whole scan; a false counted with a nil error means
-// "not counted" and the scan continues.
+// head SHA. parked is true when PublishCreate would park the PR at
+// human_review instead. A non-nil error — a trust check, GetPRDetails or
+// ListReviews failure — aborts the whole scan; a false counted with a nil
+// error means "not counted" and the scan continues.
+//
+// ledgered marks a PR already in the park ledger. Such a PR is re-evaluated
+// even inside the unreviewed threshold, because the ledger entry is
+// authoritative until its head SHA changes and a push under the limit must
+// clear the series within one scan; its unreviewed counting is preserved by
+// the post-park threshold and cache guards below.
 func (s *unreviewedScanner) qualify(
 	ctx context.Context,
 	pr PullRequest,
 	now libtime.DateTime,
-) (PRDetails, bool, error) {
-	if s.taskCreationFilter.Skip(filter.PR{
-		AuthorLogin: pr.AuthorLogin,
-		IsDraft:     pr.IsDraft,
-		Title:       pr.Title,
-		UpdatedAt:   pr.UpdatedAt,
-		RepoKey:     "github.com/" + pr.Owner + "/" + pr.Repo,
-	}) {
-		return PRDetails{}, false, nil
+	ledgered bool,
+) (PRDetails, bool, bool, error) {
+	if !s.precheck(pr, now, ledgered) {
+		return PRDetails{}, false, false, nil
 	}
-	// A PR carrying the override label gets a `pr-override` task instead of a
-	// bot review, so it is never expected to be reviewed by the bot.
-	if s.overrideLabel != "" && slices.Contains(pr.Labels, s.overrideLabel) {
-		return PRDetails{}, false, nil
-	}
-	// UpdatedAt is the reviewable-since clock: it moves on open, on a new push
-	// and on draft→ready, each of which restarts the wait.
-	if now.Sub(pr.UpdatedAt) < s.cfg.Threshold {
-		return PRDetails{}, false, nil
-	}
-	// A settled review costs no GitHub calls until the PR changes.
-	if s.cachedReviewed(pr) {
-		return PRDetails{}, false, nil
-	}
-	details, err := s.ghClient.GetPRDetails(ctx, pr.Owner, pr.Repo, pr.Number)
+	details, ok, err := s.trustedDetails(ctx, pr)
 	if err != nil {
-		return PRDetails{}, false, err
+		return PRDetails{}, false, false, err
 	}
-	// The trust check runs after the details fetch because the head repo only
-	// arrives with the details. For a trusted author this costs no extra GitHub
-	// call — GetPRDetails was already made for every PR reaching this point. For
-	// an untrusted author it costs one fetch per scan (cachedReviewed never
-	// caches an untrusted PR) and a fetch error aborts the scan; both are
-	// accepted costs of knowing the head repo. Do not move the fetch back above
-	// this check.
-	trustResult, err := s.trustDecision.IsTrusted(ctx, trust.PR{
-		AuthorLogin:      pr.AuthorLogin,
-		HeadRepoFullName: details.HeadRepoFullName,
-		BaseRepoFullName: details.BaseRepoFullName,
-	})
-	if err != nil {
-		return PRDetails{}, false, errors.Wrapf(ctx, err, "trust check %s", prKey(pr))
-	}
-	if !trustResult.Success() {
-		return PRDetails{}, false, nil
-	}
-	// Fail-closed, mirroring processPR: no head SHA means no reviewable commit.
-	if details.HeadSHA == "" {
-		return PRDetails{}, false, nil
+	if !ok {
+		return PRDetails{}, false, false, nil
 	}
 	if s.parked(ctx, pr, details) {
-		return PRDetails{}, false, nil
+		return details, false, true, nil
+	}
+	// A ledgered PR skipped the threshold and cache gates in precheck so parking
+	// could be re-evaluated. Now that it is not parked, apply them again before
+	// counting it as unreviewed, so the ledger bypass does not change the
+	// unreviewed set.
+	if ledgered && !s.reviewableNow(pr, now) {
+		return PRDetails{}, false, false, nil
 	}
 	reviews, err := s.ghClient.ListReviews(ctx, pr.Owner, pr.Repo, pr.Number)
 	if err != nil {
-		return PRDetails{}, false, err
+		return PRDetails{}, false, false, err
 	}
 	for _, review := range reviews {
 		if review.CommitID == details.HeadSHA &&
@@ -674,11 +693,92 @@ func (s *unreviewedScanner) qualify(
 					"unreviewed scanner: redrive close failed, retrying next cycle pr=%s err=%v",
 					prKey(pr), err,
 				)
-				return PRDetails{}, false, nil
+				return PRDetails{}, false, false, nil
 			}
 			s.reviewedCache[prKey(pr)] = pr.UpdatedAt
-			return PRDetails{}, false, nil
+			return PRDetails{}, false, false, nil
 		}
+	}
+	return details, true, false, nil
+}
+
+// precheck reports whether a PR reaches the review/park decision at all: it
+// passes the task-creation filter, carries no override label, and — unless it
+// is already in the park ledger — has waited past the unreviewed threshold and
+// is not already cached as reviewed. A ledgered PR skips the threshold and
+// cache gates so parking can be re-evaluated even inside the threshold.
+func (s *unreviewedScanner) precheck(
+	pr PullRequest,
+	now libtime.DateTime,
+	ledgered bool,
+) bool {
+	if s.taskCreationFilter.Skip(filter.PR{
+		AuthorLogin: pr.AuthorLogin,
+		IsDraft:     pr.IsDraft,
+		Title:       pr.Title,
+		UpdatedAt:   pr.UpdatedAt,
+		RepoKey:     "github.com/" + pr.Owner + "/" + pr.Repo,
+	}) {
+		return false
+	}
+	// A PR carrying the override label gets a `pr-override` task instead of a
+	// bot review, so it is never expected to be reviewed by the bot.
+	if s.overrideLabel != "" && slices.Contains(pr.Labels, s.overrideLabel) {
+		return false
+	}
+	if ledgered {
+		return true
+	}
+	return s.reviewableNow(pr, now)
+}
+
+// reviewableNow reports whether the PR is past the unreviewed threshold and
+// not already cached as reviewed. UpdatedAt is the reviewable-since clock: it
+// moves on open, on a new push and on draft→ready, each of which restarts the
+// wait.
+func (s *unreviewedScanner) reviewableNow(pr PullRequest, now libtime.DateTime) bool {
+	if now.Sub(pr.UpdatedAt) < s.cfg.Threshold {
+		return false
+	}
+	// A settled review costs no GitHub calls until the PR changes.
+	if s.cachedReviewed(pr) {
+		return false
+	}
+	return true
+}
+
+// trustedDetails fetches the PR details and reports whether the author is
+// trusted and the PR carries a head SHA. ok is false when the PR must be
+// skipped (untrusted author or no head SHA); a non-nil error aborts the scan.
+//
+// The trust check runs after the details fetch because the head repo only
+// arrives with the details. For a trusted author this costs no extra GitHub
+// call — GetPRDetails was already made for every PR reaching this point. For
+// an untrusted author it costs one fetch per scan (cachedReviewed never caches
+// an untrusted PR) and a fetch error aborts the scan; both are accepted costs
+// of knowing the head repo. Do not move the fetch back above this check.
+func (s *unreviewedScanner) trustedDetails(
+	ctx context.Context,
+	pr PullRequest,
+) (PRDetails, bool, error) {
+	details, err := s.ghClient.GetPRDetails(ctx, pr.Owner, pr.Repo, pr.Number)
+	if err != nil {
+		return PRDetails{}, false, err
+	}
+	trustResult, err := s.trustDecision.IsTrusted(ctx, trust.PR{
+		AuthorLogin:      pr.AuthorLogin,
+		HeadRepoFullName: details.HeadRepoFullName,
+		BaseRepoFullName: details.BaseRepoFullName,
+	})
+	if err != nil {
+		return PRDetails{}, false, errors.Wrapf(ctx, err, "trust check %s", prKey(pr))
+	}
+	if !trustResult.Success() {
+		return PRDetails{}, false, nil
+	}
+	// Fail-closed, mirroring processPR: no head SHA means no reviewable commit.
+	if details.HeadSHA == "" {
+		return PRDetails{}, false, nil
 	}
 	return details, true, nil
 }

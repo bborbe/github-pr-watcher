@@ -97,6 +97,7 @@ func CreateWatcher(
 	stage string,
 	metrics pkg.Metrics,
 	dispatchLedger pkg.DispatchLedger,
+	parkLedger pkg.ParkLedger,
 	trustDecision trust.Trust,
 	maxSlugLen int,
 	maxTitleLen int,
@@ -141,6 +142,7 @@ func CreateWatcher(
 		ghClient, publisher, dispatchLedger, metrics, currentDateTime, scope,
 		taskCreationFilter, trustDecision, overrideLabel,
 		maxAdditions, maxChangedFiles, unreviewedConfig,
+		pkg.WithParkLedger(parkLedger),
 	)
 	return pkg.NewWatcher(
 		ghClient,
