@@ -1,8 +1,13 @@
 ---
-status: approved
+status: completed
 spec: [006-park-age-metric]
+summary: 'Added the parked-PR age metric feat bullet to the existing ## Unreleased section of CHANGELOG.md, above ## v0.29.2.'
+execution_id: 3546659f-32d3-562a-a7c7-870cb565441e-exec-020-spec-006-changelog
+dark-factory-version: dev
 created: "2026-11-22T15:48:00Z"
 queued: "2026-11-22T15:03:11Z"
+started: "2026-11-22T15:10:37Z"
+completed: "2026-11-22T15:13:06Z"
 branch: dark-factory/park-age-metric
 ---
 
