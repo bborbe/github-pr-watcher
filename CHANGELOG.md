@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - feat: publish the age of every parked oversized PR on `github_pr_watcher_parked_prs{repo,pr}` (seconds). The unreviewed scan records each park in the `ParkLedger` at the point it already drops the PR, replaces the whole series per complete scan (so a park that ends disappears within one scan), and leaves the previous values when a scan aborts. The ledger path is configurable via `PARK_LEDGER_PATH` (default `/data/park-ledger.json`) and wired from `main.go` through `factory.CreateWatcher` into the scanner
 - feat: add a durable `ParkLedger` that records when each oversized PR parked, keyed by head SHA, so a park's age survives a watcher restart while a comment leaves it untouched and a push restarts it
+- docs: document the `github_pr_watcher_parked_prs` gauge (oversized-parked PRs, seed/staleness/single-replica caveats) and the `PARK_LEDGER_PATH` env var in the README, and point the "Un-parking a Parked Record" section at the gauge
 
 ## v0.29.2
 

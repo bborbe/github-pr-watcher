@@ -1,8 +1,13 @@
 ---
-status: approved
+status: completed
 spec: [006-park-age-metric]
+summary: Documented the github_pr_watcher_parked_prs gauge and PARK_LEDGER_PATH env var in README.md with seed/staleness/single-replica caveats, pointed the un-parking section at the gauge, and added a docs bullet to CHANGELOG.md; make precommit passed.
+execution_id: 3546659f-32d3-562a-a7c7-870cb565441e-exec-019-spec-006-docs
+dark-factory-version: dev
 created: "2026-11-22T15:47:00Z"
 queued: "2026-11-22T14:59:40Z"
+started: "2026-11-22T15:08:45Z"
+completed: "2026-11-22T15:10:36Z"
 branch: dark-factory/park-age-metric
 ---
 
