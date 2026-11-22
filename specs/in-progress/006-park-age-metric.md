@@ -1,5 +1,7 @@
 ---
-status: draft
+status: approved
+approved: "2026-11-22T14:31:35Z"
+branch: dark-factory/park-age-metric
 ---
 
 ## Summary
