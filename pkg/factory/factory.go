@@ -8,6 +8,7 @@ package factory
 import (
 	"context"
 	"net/http"
+	"os"
 
 	task "github.com/bborbe/agent/command/task"
 	"github.com/bborbe/cqrs/base"
@@ -19,6 +20,7 @@ import (
 	"github.com/bborbe/github-pr-watcher/pkg/escalate"
 	"github.com/bborbe/github-pr-watcher/pkg/filter"
 	"github.com/bborbe/github-pr-watcher/pkg/trust"
+	libhttp "github.com/bborbe/http"
 	libkafka "github.com/bborbe/kafka"
 	libkv "github.com/bborbe/kv"
 	"github.com/bborbe/log"
@@ -30,7 +32,22 @@ import (
 	"github.com/bborbe/maintainer/githubapp"
 )
 
-// CreateGitHubAppClient creates an HTTP client authenticated as a GitHub App installation.
+// githubAPIInflightBound caps the concurrent GitHub API requests this watcher
+// issues. GitHub's secondary rate limit is a concurrency heuristic, so a retry
+// that fires more requests in parallel makes it worse; four keeps the poll
+// fan-out under the heuristic while leaving room to make progress.
+const githubAPIInflightBound = 4
+
+// CreateGitHubAppClient creates an HTTP client authenticated as a GitHub App
+// installation.
+//
+// The client's transport is wrapped twice: an inner limiter bounds concurrent
+// requests, and an outer retry round-tripper turns a rate-limit response into a
+// bounded wait-and-retry instead of a failed request. The retry sits outside the
+// limiter so a retry re-acquires a slot rather than holding one across the wait.
+//
+// GITHUB_API_BASE_URL overrides the API base URL; it is empty in production and
+// exists so a test or probe can point the watcher at a stub.
 func CreateGitHubAppClient(
 	ctx context.Context,
 	appID int64,
@@ -41,8 +58,25 @@ func CreateGitHubAppClient(
 		AppID:          appID,
 		InstallationID: installationID,
 		PEM:            pemKey,
+		BaseURL:        os.Getenv("GITHUB_API_BASE_URL"),
 	}
-	return githubapp.NewClient(ctx, cfg)
+	client, err := githubapp.NewClient(ctx, cfg)
+	if err != nil {
+		return nil, err
+	}
+	transport := client.Transport
+	if transport == nil {
+		transport = http.DefaultTransport
+	}
+	client.Transport = libhttp.NewRoundTripperRetryWithBackoff(
+		libhttp.NewRoundTripperLimitConcurrency(
+			transport,
+			githubAPIInflightBound,
+			nil,
+		),
+		libhttp.RetryBackoffOptions{},
+	)
+	return client, nil
 }
 
 // CreateKafkaSender constructs a typed create-task command sender backed by a Kafka sync producer.

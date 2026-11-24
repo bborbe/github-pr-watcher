@@ -7,7 +7,7 @@ require (
 	github.com/bborbe/agent v0.141.0
 	github.com/bborbe/cqrs v0.6.15
 	github.com/bborbe/errors v1.6.6
-	github.com/bborbe/http v1.26.33
+	github.com/bborbe/http v1.28.0
 	github.com/bborbe/kafka v1.29.13
 	github.com/bborbe/kv v1.21.29
 	github.com/bborbe/log v1.7.8
@@ -36,7 +36,7 @@ require (
 	github.com/bborbe/argument/v2 v2.13.10 // indirect
 	github.com/bborbe/collection v1.21.7 // indirect
 	github.com/bborbe/k8s v1.14.33 // indirect
-	github.com/bborbe/math v1.4.19 // indirect
+	github.com/bborbe/math v1.4.20 // indirect
 	github.com/bborbe/strimzi v1.8.24 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/bradleyfalzon/ghinstallation/v2 v2.19.0 // indirect
