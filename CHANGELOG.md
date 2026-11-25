@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## Unreleased
+## v0.31.1
 
 - fix: the rate-capturing transport now sits **inside** the retry round-tripper (retry → capture → limit → network), matching the other five watchers. Previously it wrapped the whole chain, so it saw only the final response of a retried request: a healthy 429→200 logged `retry attempt=` with no matching `github non-2xx` line, making the regression metric's `rate_limited − retry` go negative and cancel a real stop elsewhere in the window. `RetryHosts` is derived from `GITHUB_API_BASE_URL` so an overridden host is retried rather than silently skipped.
 
