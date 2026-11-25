@@ -5,6 +5,10 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+- fix: the rate-capturing transport now sits **inside** the retry round-tripper (retry → capture → limit → network), matching the other five watchers. Previously it wrapped the whole chain, so it saw only the final response of a retried request: a healthy 429→200 logged `retry attempt=` with no matching `github non-2xx` line, making the regression metric's `rate_limited − retry` go negative and cancel a real stop elsewhere in the window. `RetryHosts` is derived from `GITHUB_API_BASE_URL` so an overridden host is retried rather than silently skipped.
+
 ## v0.31.0
 
 - fix: a GitHub rate-limit response is now retried with a bounded, header-aware wait (`Retry-After`, then `X-RateLimit-Reset`) instead of failing the request, and a wait longer than five minutes is deferred to the next poll cycle rather than slept. Concurrent GitHub requests are capped at four, so a secondary limit is answered by pacing instead of by firing more requests. `GITHUB_API_BASE_URL` overrides the API base URL for a stub probe.
