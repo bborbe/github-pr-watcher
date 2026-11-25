@@ -20,7 +20,6 @@ import (
 	"github.com/bborbe/github-pr-watcher/pkg/escalate"
 	"github.com/bborbe/github-pr-watcher/pkg/filter"
 	"github.com/bborbe/github-pr-watcher/pkg/trust"
-	libhttp "github.com/bborbe/http"
 	libkafka "github.com/bborbe/kafka"
 	libkv "github.com/bborbe/kv"
 	"github.com/bborbe/log"
@@ -31,12 +30,6 @@ import (
 	lib "github.com/bborbe/maintainer"
 	"github.com/bborbe/maintainer/githubapp"
 )
-
-// githubAPIInflightBound caps the concurrent GitHub API requests this watcher
-// issues. GitHub's secondary rate limit is a concurrency heuristic, so a retry
-// that fires more requests in parallel makes it worse; four keeps the poll
-// fan-out under the heuristic while leaving room to make progress.
-const githubAPIInflightBound = 4
 
 // CreateGitHubAppClient creates an HTTP client authenticated as a GitHub App
 // installation.
@@ -64,18 +57,11 @@ func CreateGitHubAppClient(
 	if err != nil {
 		return nil, err
 	}
-	transport := client.Transport
-	if transport == nil {
-		transport = http.DefaultTransport
-	}
-	client.Transport = libhttp.NewRoundTripperRetryWithBackoff(
-		libhttp.NewRoundTripperLimitConcurrency(
-			transport,
-			githubAPIInflightBound,
-			nil,
-		),
-		libhttp.RetryBackoffOptions{},
-	)
+	// The transport chain is built in pkg.NewGitHubClient, not here: the
+	// rate-capturing transport needs the githubClient's setter, so capture must
+	// sit inside the retry round-tripper and the whole chain has to be assembled
+	// where both are available. Wrapping here would put capture outside retry and
+	// make one capture line per request instead of per attempt.
 	return client, nil
 }
 

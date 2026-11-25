@@ -9,6 +9,8 @@ import (
 	stderrors "errors"
 	"fmt"
 	"net/http"
+	"net/url"
+	"os"
 	"path"
 	"strconv"
 	"sync"
@@ -16,12 +18,33 @@ import (
 
 	"github.com/bborbe/errors"
 	"github.com/bborbe/github-pr-watcher/pkg/reviewignore"
+	libhttp "github.com/bborbe/http"
 	libtime "github.com/bborbe/time"
 	"github.com/golang/glog"
 	gogithub "github.com/google/go-github/v62/github"
 
 	"github.com/bborbe/maintainer/maintainerconfig"
 )
+
+// githubAPIInflightBound caps the concurrent GitHub API requests this watcher
+// issues. GitHub's secondary rate limit is a concurrency heuristic, so a retry
+// that fires more requests in parallel makes it worse.
+const githubAPIInflightBound = 4
+
+// retryHostsForBaseURL derives the retry allowlist from GITHUB_API_BASE_URL.
+// Nil means the library default (api.github.com); a base URL override must be
+// added explicitly or the round-tripper silently never retries that host.
+func retryHostsForBaseURL() []string {
+	base := os.Getenv("GITHUB_API_BASE_URL")
+	if base == "" {
+		return nil
+	}
+	u, err := url.Parse(base)
+	if err != nil || u.Hostname() == "" {
+		return nil
+	}
+	return []string{u.Hostname()}
+}
 
 // PullRequest holds the fields the watcher needs from a GitHub PR.
 type PullRequest struct {
@@ -428,12 +451,24 @@ func NewGitHubClient(httpClient *http.Client, apiMetrics GitHubAPIMetrics) GitHu
 	if inner == nil {
 		inner = http.DefaultTransport
 	}
-	httpClient.Transport = &rateCapturingTransport{
-		inner:   inner,
-		set:     c.setRateRemaining,
-		log:     logNon2xxV2,
-		metrics: apiMetrics,
-	}
+	// Chain, outermost first: retry → capture → limit → network. The capture
+	// must sit INSIDE the retry so it records one line per attempt, not one per
+	// request — otherwise a healthy retry logs `retry attempt=` with no matching
+	// capture line and the regression metric's `rate_limited − retry` reads
+	// negative, cancelling a real stop elsewhere in the window.
+	httpClient.Transport = libhttp.NewRoundTripperRetryWithBackoff(
+		&rateCapturingTransport{
+			inner: libhttp.NewRoundTripperLimitConcurrency(
+				inner,
+				githubAPIInflightBound,
+				nil,
+			),
+			set:     c.setRateRemaining,
+			log:     logNon2xxV2,
+			metrics: apiMetrics,
+		},
+		libhttp.RetryBackoffOptions{RetryHosts: retryHostsForBaseURL()},
+	)
 	c.client = gogithub.NewClient(httpClient)
 	return c
 }
